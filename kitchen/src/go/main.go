@@ -1802,6 +1802,7 @@ func runWindowOmittedPositionCentersDisplayTest() error {
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(os.Stderr, "[kitchen go] centering pre-create display=%+v\n", display)
 
 	options := electrobun.NewWindowOptions("Go Centered Window Test", electrobun.NewRect(0, 0, 480, 320))
 	options.Hidden = true
@@ -1819,6 +1820,8 @@ func runWindowOmittedPositionCentersDisplayTest() error {
 		}
 		actualCenterX := frame.X + frame.Width/2
 		actualCenterY := frame.Y + frame.Height/2
+		afterDisplay, afterErr := state.core.GetPrimaryDisplay()
+		fmt.Fprintf(os.Stderr, "[kitchen go] centering post-create frame=%+v before=%+v after=%+v afterError=%v\n", frame, display, afterDisplay, afterErr)
 		expectedCenterX := display.WorkArea.X + display.WorkArea.Width/2
 		expectedCenterY := display.WorkArea.Y + display.WorkArea.Height/2
 		const tolerance = 24.0

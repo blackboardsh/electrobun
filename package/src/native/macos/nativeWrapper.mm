@@ -1164,7 +1164,7 @@ static void traceFullscreenState(const char *event, WindowDelegate *delegate,
   NSLog(@"[electrobun fullscreen] t=%.6f event=%s id=%u window=%p "
         @"delegate=%p attached=%p target=%d style=0x%lx fullscreen=%d "
         @"transitioning=%d pending=%d pendingTarget=%d main=%d mode=%@ "
-        @"visible=%d key=%d active=%d",
+        @"visible=%d key=%d active=%d frame=%@ workArea=%@",
         NSProcessInfo.processInfo.systemUptime, event, delegate.windowId,
         (__bridge void *)window, (__bridge void *)delegate,
         (__bridge void *)window.delegate, target,
@@ -1174,7 +1174,9 @@ static void traceFullscreenState(const char *event, WindowDelegate *delegate,
         (int)delegate.hasPendingFullscreenTarget,
         (int)delegate.pendingFullscreenTarget, (int)NSThread.isMainThread,
         NSRunLoop.currentRunLoop.currentMode ?: @"none",
-        (int)window.visible, (int)window.keyWindow, (int)NSApp.active);
+        (int)window.visible, (int)window.keyWindow, (int)NSApp.active,
+        NSStringFromRect(window.frame),
+        NSStringFromRect((window.screen ?: NSScreen.mainScreen).visibleFrame));
 }
 
 @interface StatusItemTarget : NSObject
@@ -9814,11 +9816,28 @@ extern "C" void centerWindow(NSWindow *window) {
 
     const NSRect workArea = primaryScreen.visibleFrame;
     NSRect frame = window.frame;
+    if (fullscreenDebugEnabled()) {
+      NSLog(@"[electrobun placement] t=%.6f event=center-before main=%d "
+            @"window=%p display=%u screen=%@ usedWorkArea=%@ frame=%@",
+            NSProcessInfo.processInfo.systemUptime, (int)NSThread.isMainThread,
+            (__bridge void *)window, primaryDisplayId,
+            NSStringFromRect(primaryScreen.frame), NSStringFromRect(workArea),
+            NSStringFromRect(frame));
+    }
     frame.origin.x =
         NSMinX(workArea) + (NSWidth(workArea) - NSWidth(frame)) / 2.0;
     frame.origin.y =
         NSMinY(workArea) + (NSHeight(workArea) - NSHeight(frame)) / 2.0;
     [window setFrameOrigin:frame.origin];
+    if (fullscreenDebugEnabled()) {
+      NSLog(@"[electrobun placement] t=%.6f event=center-after main=%d "
+            @"window=%p display=%u usedWorkArea=%@ currentWorkArea=%@ "
+            @"requestedFrame=%@ actualFrame=%@",
+            NSProcessInfo.processInfo.systemUptime, (int)NSThread.isMainThread,
+            (__bridge void *)window, primaryDisplayId, NSStringFromRect(workArea),
+            NSStringFromRect(primaryScreen.visibleFrame), NSStringFromRect(frame),
+            NSStringFromRect(window.frame));
+    }
   });
 }
 
@@ -11119,6 +11138,14 @@ extern "C" const char *getPrimaryDisplay(void) {
           @"scaleFactor" : @(scaleFactor),
           @"isPrimary" : @YES
         };
+
+        if (fullscreenDebugEnabled()) {
+          NSLog(@"[electrobun placement] t=%.6f event=primary-display main=%d "
+                @"display=%u screen=%@ usedWorkArea=%@ apiWorkArea=%@",
+                NSProcessInfo.processInfo.systemUptime, (int)NSThread.isMainThread,
+                displayId, NSStringFromRect(frame), NSStringFromRect(visibleFrame),
+                displayInfo[@"workArea"]);
+        }
 
         NSError *error = nil;
         NSData *jsonData = [NSJSONSerialization dataWithJSONObject:displayInfo

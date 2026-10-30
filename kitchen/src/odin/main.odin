@@ -3042,6 +3042,7 @@ runWindowOmittedPositionCentersOnPrimaryDisplayTest :: proc(state: ^AppState) ->
 	if display_err != .None {
 		return errName(display_err)
 	}
+	fmt.eprintf("[kitchen odin] centering pre-create display=%v\n", display)
 
 	window_options := electrobun.defaultWindowOptions("Centered Window Test")
 	window_options.frame = {0, 0, 480, 320}
@@ -3062,6 +3063,8 @@ runWindowOmittedPositionCentersOnPrimaryDisplayTest :: proc(state: ^AppState) ->
 
 	expected_x := display.workArea.x + (display.workArea.width - frame.width) / 2
 	expected_y := display.workArea.y + (display.workArea.height - frame.height) / 2
+	after_display, after_err := electrobun.getPrimaryDisplay(state.core)
+	fmt.eprintf("[kitchen odin] centering post-create frame=%v before=%v after=%v afterError=%v\n", frame, display, after_display, after_err)
 	center_tolerance: f64 = 8
 	if !approxEq(frame.x, expected_x, center_tolerance) ||
 	   !approxEq(frame.y, expected_y, center_tolerance) {

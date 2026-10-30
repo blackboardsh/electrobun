@@ -1,93 +1,77 @@
-name: VM test matrix
+name: Intel beta.8 centering diagnostic
 
 on:
-  workflow_call:
-    inputs:
-      ref:
-        description: Exact release tag or commit to build and test
-        type: string
-        required: true
   workflow_dispatch:
     inputs:
-      macos_intel_only:
-        description: Run only native Intel macOS when verifying a platform-specific fix
-        type: boolean
-        default: false
-      windows_arm_only:
-        description: Run only Windows ARM when verifying a platform-specific fix
-        type: boolean
-        default: false
-  push:
-    branches: [ci/test-vm-matrix]
-    paths:
-      - '.github/workflows/test-vm.yml'
-      - '.github/actions/**'
-      - 'package/**'
-      - 'kitchen/**'
+      rounds:
+        description: Fresh full-suite launches per variant (1 to 20; stop at first failure)
+        type: number
+        default: 10
 
 permissions:
   contents: read
 
 concurrency:
-  group: test-vm-${{ github.ref }}
-  # Preserve diagnostics from every started matrix while iterating on failures.
+  group: centering-diagnostic-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  test:
-    name: test:vm (${{ matrix.runner }})
+  diagnose:
+    name: Centering (${{ matrix.variant }})
+    runs-on: macos-15-intel
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        # Intel desktop validation uses macOS 15 because stock Cocoa fullscreen
-        # also fails on the hosted macOS 26 Intel image (IconServices).
-        # Related runner graphics issue:
-        # https://github.com/actions/runner-images/issues/14751
-        include: ${{ fromJSON(inputs.macos_intel_only && '[{"runner":"macos-15-intel","arch":"x64"}]' || inputs.windows_arm_only && '[{"runner":"windows-11-arm","arch":"arm64"}]' || '[{"runner":"macos-14","arch":"arm64"},{"runner":"macos-15-intel","arch":"x64"},{"runner":"ubuntu-24.04","arch":"x64"},{"runner":"ubuntu-24.04-arm","arch":"arm64"},{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]') }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 330
+        include:
+          - variant: odin:system
+            bundle: odin-native
+          - variant: go:cef
+            bundle: go-cef
     env:
-      ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
-      # Exercise navigation during asynchronous browser creation repeatedly.
-      # A failed deadline stays a failure; the Rust tests retain event history.
-      ELECTROBUN_NAVIGATION_STRESS_ROUNDS: ${{ startsWith(matrix.runner, 'ubuntu-') && '30' || '1' }}
-      ELECTROBUN_TRACE_CEF_NAVIGATION: ${{ startsWith(matrix.runner, 'ubuntu-') && '1' || '0' }}
-      # Windows hosted VMs can take longer to relaunch after an update.
-      ELECTROBUN_UPDATER_E2E_RELAUNCH_TIMEOUT_MS: ${{ startsWith(matrix.runner, 'windows-') && '900000' || '300000' }}
+      ELECTROBUN_BUILD_ARCH: x64
+      ELECTROBUN_DEBUG_FULLSCREEN: '1'
+      HUTCH_NO_UPDATE_CHECK: '1'
+      HUTCH_ELECTROBUN_DEVKIT_ROOT: ${{ github.workspace }}/package/dist
+      PROBE_VARIANT: ${{ matrix.variant }}
+      PROBE_BUNDLE: ${{ matrix.bundle }}
+      PROBE_ROUNDS: ${{ inputs.rounds }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: '24.22.1'
           cache: npm
           cache-dependency-path: package/package-lock.json
-      - name: Verify native macOS runner architecture
-        if: runner.os == 'macOS'
+      - name: Verify native Intel runner and beta.8 diagnostic source
         shell: bash
-        env:
-          EXPECTED_ARCH: ${{ matrix.arch }}
         run: |
-          expected_machine=x86_64
-          if [[ "$EXPECTED_ARCH" == arm64 ]]; then expected_machine=arm64; fi
-          test "$(uname -m)" = "$expected_machine"
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
           test "$(sysctl -in sysctl.proc_translated 2>/dev/null || true)" != 1
-          node -e 'if (process.arch !== process.env.EXPECTED_ARCH) throw new Error(`Expected native ${process.env.EXPECTED_ARCH} Node, got ${process.arch}`)'
-      - name: Preserve scheduled-task user temporary directory (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # Scheduled helpers validate against the original user TEMP spelling.
-          if ([string]::IsNullOrWhiteSpace($env:TEMP)) {
-            throw 'The Windows runner must provide its default user TEMP'
-          }
-          "ELECTROBUN_UPDATER_E2E_WINDOWS_TEMP=$env:TEMP" >> $env:GITHUB_ENV
-      - name: Set diagnostics temporary directory
-        shell: bash
-        run: |
+          node -e 'if (process.platform !== "darwin" || process.arch !== "x64") throw new Error("Expected native Intel macOS Node")'
+          case "$PROBE_ROUNDS" in
+            ''|*[!0-9]*) echo 'rounds must be an integer from 1 to 20' >&2; exit 1 ;;
+          esac
+          test "$PROBE_ROUNDS" -ge 1
+          test "$PROBE_ROUNDS" -le 20
+          git merge-base --is-ancestor 3c4b81a8eaaa141029a1c273f2522e77a59ac5ac HEAD
+          node -e 'if (require("./package/package.json").version !== "2.0.6-beta.8") throw new Error("Expected beta.8 diagnostic source")'
+          probe_root="$RUNNER_TEMP/macos-centering-probe"
+          mkdir -p "$probe_root"
+          touch "$probe_root/started"
+          git diff v2.0.6-beta.8 HEAD -- package kitchen > "$probe_root/source-diff.patch"
+          {
+            date -u '+%Y-%m-%dT%H:%M:%SZ'
+            git rev-parse HEAD
+            git diff --name-only v2.0.6-beta.8 HEAD
+            sw_vers
+            uname -a
+          } | tee "$probe_root/environment.log"
           echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
           echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
           echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
@@ -95,168 +79,134 @@ jobs:
       - uses: ./.github/actions/install-hutch
         with:
           channel: canary
-      - uses: ilammy/msvc-dev-cmd@v1
-        if: runner.os == 'Windows'
-        with:
-          arch: ${{ matrix.arch }}
-      - name: Free disk space (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          echo "Disk space before cleanup:"
-          df -h /
-          # Remove large preinstalled software we don't need
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          echo "Disk space after cleanup:"
-          df -h /
-
-      - name: Free disk space (macOS)
-        if: runner.os == 'macOS'
+      - name: Free macOS build disk space
         shell: bash
         run: |
-          echo "Disk space before cleanup:"
+          set -euo pipefail
           df -h /
-          # Keep the selected Xcode, but remove the other full Xcode installs
-          # preloaded on GitHub's macOS image. Kitchen only needs the selected
-          # macOS SDK and its multiple signed bundles otherwise exhaust the
-          # runner disk while hdiutil creates the final image.
           selected_xcode_root="$(cd "$(xcode-select -p)/../.." && pwd -P)"
           case "$selected_xcode_root" in
             /Applications/Xcode*.app) ;;
-            *)
-              echo "Refusing to remove Xcode installs: unexpected selected Xcode root: $selected_xcode_root" >&2
-              exit 1
-              ;;
+            *) echo "Unexpected selected Xcode root: $selected_xcode_root" >&2; exit 1 ;;
           esac
-          echo "Preserving selected Xcode: $selected_xcode_root"
           for xcode_root in /Applications/Xcode_*.app; do
             [[ -d "$xcode_root" && ! -L "$xcode_root" ]] || continue
             resolved_xcode_root="$(cd "$xcode_root" && pwd -P)"
             case "$resolved_xcode_root" in
               /Applications/Xcode_*.app) ;;
-              *)
-                echo "Refusing to remove unexpected Xcode root: $resolved_xcode_root" >&2
-                exit 1
-                ;;
+              *) echo "Unexpected Xcode root: $resolved_xcode_root" >&2; exit 1 ;;
             esac
             if [[ "$resolved_xcode_root" != "$selected_xcode_root" ]]; then
-              echo "Removing unused Xcode: $resolved_xcode_root"
               sudo rm -rf "$resolved_xcode_root"
             fi
           done
-          # Remove Xcode caches and simulators to free space.
-          rm -rf "$HOME/Library/Developer/Xcode/DerivedData" || true
-          rm -rf "$HOME/Library/Developer/Xcode/Archives" || true
-          rm -rf "$HOME/Library/Developer/Xcode/iOS DeviceSupport" || true
-          sudo rm -rf /Library/Developer/CoreSimulator/Caches || true
-          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes || true
-          # Clear common caches.
-          rm -rf "$HOME/Library/Caches" || true
-          rm -rf "$HOME/Library/Logs" || true
-          echo "Disk space after cleanup:"
+          rm -rf "$HOME/Library/Developer/Xcode/DerivedData"
+          rm -rf "$HOME/Library/Developer/Xcode/Archives"
+          rm -rf "$HOME/Library/Developer/Xcode/iOS DeviceSupport"
+          sudo rm -rf /Library/Developer/CoreSimulator/Caches
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes
           df -h /
-
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            libpipewire-0.3-dev \
-            build-essential \
-            cmake \
-            pkg-config \
-            xvfb xauth openbox dbus-x11 mesa-utils mesa-vulkan-drivers vulkan-tools
-
-      - name: Install dependencies
+      - name: Install package dependencies
         working-directory: package
         run: hutch run install
-
-      - name: Run full VM suite (Linux desktop)
-        timeout-minutes: 300
-        if: runner.os == 'Linux'
+      - name: Build instrumented beta.8 and the selected Kitchen variant
+        timeout-minutes: 45
         working-directory: package
         shell: bash
+        run: |
+          set -euo pipefail
+          probe_root="$RUNNER_TEMP/macos-centering-probe"
+          hutch --version | tee -a "$probe_root/environment.log"
+          hutch build:dev 2>&1 | tee "$probe_root/package-build.log"
+          cd ../kitchen
+          npm ci 2>&1 | tee "$probe_root/kitchen-install.log"
+          hutch scripts/kitchen-matrix.ts --build-only --with="$PROBE_VARIANT" --jobs=1 2>&1 | tee "$probe_root/kitchen-build.log"
+      - name: Verify packaged Intel binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          node package/scripts/verify-macho-deployment-target.js --arch=x64 "kitchen/build/matrix/$PROBE_BUNDLE" 2>&1 | tee "$RUNNER_TEMP/macos-centering-probe/mach-o.log"
+      - name: Repeat the full fullscreen-to-centering test sequence
+        timeout-minutes: 35
+        working-directory: kitchen
+        shell: bash
         env:
-          # Match the release template acceptance environment on virtual displays.
-          LIBGL_ALWAYS_SOFTWARE: '1'
-          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          AUTO_RUN: '1'
         run: |
-          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' bash -e -c '
-            openbox > "$RUNNER_TEMP/openbox.log" 2>&1 &
-            vulkaninfo --summary
-            hutch test:vm
-          '
-
-      - name: Prepare Windows desktop shell
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          # Windows ARM images can leave first-sign-in privacy setup covering
-          # all app windows and blocking Shell_NotifyIcon, even with Explorer
-          # running. Suppress that experience on this disposable CI machine.
-          # https://learn.microsoft.com/windows/client-management/mdm/policy-csp-privacy#disableprivacyexperience
-          foreach ($root in @('HKLM:', 'HKCU:')) {
-            $policy = "$root\SOFTWARE\Policies\Microsoft\Windows\OOBE"
-            New-Item -Path $policy -Force | Out-Null
-            New-ItemProperty -Path $policy -Name DisablePrivacyExperience -Value 1 -PropertyType DWord -Force | Out-Null
-          }
-          $runnerSession = (Get-Process -Id $PID).SessionId
-          $setupProcesses = Get-Process -Name UserOOBEBroker,CloudExperienceHostBroker,WWAHost -ErrorAction SilentlyContinue | Where-Object SessionId -eq $runnerSession
-          if ($setupProcesses) {
-            $setupProcesses | Stop-Process -Force
-            Start-Sleep -Seconds 3
-          }
-          # First-login setup can leave a Start menu flyout covering the apps.
-          Add-Type -AssemblyName System.Windows.Forms
-          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
-          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
-          Start-Sleep -Seconds 1
-          Add-Type @'
-          using System;
-          using System.Runtime.InteropServices;
-          public static class DesktopShell {
-            [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-            public static extern IntPtr FindWindow(string className, string title);
-          }
-          '@
-          Write-Host "Runner session: $((Get-Process -Id $PID).SessionId)"
-          if ([DesktopShell]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
-            Write-Host 'Starting Explorer for notification-area tests.'
-            Start-Process "$env:WINDIR\explorer.exe"
-          }
-          $deadline = (Get-Date).AddSeconds(30)
-          while ([DesktopShell]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
-            if ((Get-Date) -gt $deadline) {
-              throw 'Windows shell notification area is unavailable in the runner session.'
-            }
-            Start-Sleep -Milliseconds 500
-          }
-          Write-Host 'Windows shell notification area is ready.'
-
-      - name: Run full VM suite (macOS and Windows desktop)
-        timeout-minutes: 300
-        if: runner.os != 'Linux'
-        working-directory: package
-        run: hutch test:vm
-
-      - name: Upload test diagnostics
+          set -euo pipefail
+          unset AUTO_RUN_TEST_NAME AUTO_RUN_CATEGORY
+          probe_root="$RUNNER_TEMP/macos-centering-probe"
+          printf 'variant\tround\tstarted_utc\texit_status\telapsed_seconds\n' > "$probe_root/summary.tsv"
+          for ((probe_iteration=1; probe_iteration<=PROBE_ROUNDS; probe_iteration++)); do
+            probe_log="$probe_root/$PROBE_BUNDLE-$(printf '%02d' "$probe_iteration").log"
+            probe_started_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            probe_started_at="$(date +%s)"
+            printf 'Starting %s full suite %s/%s at %s\n' "$PROBE_VARIANT" "$probe_iteration" "$PROBE_ROUNDS" "$probe_started_utc"
+            # Existing filters select one exact test. A full suite preserves the
+            # original fullscreen/centering order and all original assertions.
+            if hutch scripts/kitchen-matrix.ts --launch-only --with="$PROBE_VARIANT" --timeout=1200 2>&1 | tee "$probe_log"; then
+              probe_status=0
+            else
+              probe_status=$?
+            fi
+            printf '%s\t%s\t%s\t%s\t%s\n' "$PROBE_VARIANT" "$probe_iteration" "$probe_started_utc" "$probe_status" "$(( $(date +%s) - probe_started_at ))" | tee -a "$probe_root/summary.tsv"
+            if [[ "$probe_status" -ne 0 ]]; then
+              printf 'Preserving the first failed %s suite; no retry of that result.\n' "$PROBE_VARIANT"
+              exit "$probe_status"
+            fi
+          done
+      - name: Collect fresh macOS crash reports
         if: always()
-        timeout-minutes: 10
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          # ReportCrash writes asynchronously; this delay is only for artifact collection.
+          sleep 5
+          python3 - <<'PYTHON'
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+
+          probe_root = Path(os.environ["RUNNER_TEMP"]) / "macos-centering-probe"
+          destination = probe_root / "crash-reports"
+          destination.mkdir(parents=True, exist_ok=True)
+          started = probe_root / "started"
+          if not started.exists():
+              print("Probe never started; no crash reports selected")
+              raise SystemExit(0)
+          cutoff = started.stat().st_mtime
+          roots = [("user", Path.home() / "Library/Logs/DiagnosticReports"),
+                   ("system", Path("/Library/Logs/DiagnosticReports"))]
+          selected = []
+          for label, root in roots:
+              if not root.exists():
+                  continue
+              for report in root.rglob("*"):
+                  try:
+                      if not report.is_file() or report.stat().st_mtime < cutoff:
+                          continue
+                      if report.suffix not in (".ips", ".crash"):
+                          continue
+                      # Preserve fresh WindowServer/Dock reports as well as app crashes.
+                      target = destination / (label + "-" + "--".join(report.relative_to(root).parts))
+                      shutil.copy2(report, target)
+                      selected.append({"source": str(report), "saved": target.name,
+                                       "modified": report.stat().st_mtime})
+                  except (OSError, PermissionError) as error:
+                      print(f"Could not inspect crash report {report}: {error}")
+          (destination / "index.json").write_text(json.dumps({"started": cutoff, "reports": selected}, indent=2))
+          print(f"Collected {len(selected)} fresh macOS crash reports")
+          PYTHON
+      - name: Upload centering diagnostics
+        if: always()
+        timeout-minutes: 5
         uses: actions/upload-artifact@v6
         with:
-          name: test-vm-${{ matrix.runner }}
+          name: beta8-centering-${{ matrix.bundle }}-${{ github.run_id }}
           retention-days: 14
           if-no-files-found: warn
           path: |
-            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-test-vm-*/**
-            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-check-release-*/**
-            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-core-sync-*/**
-            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-kitchen-hang-*/**
-            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/updater-lifecycle-e2e-*/signals/**
-            ${{ runner.temp }}/openbox.log
+            ${{ runner.temp }}/macos-centering-probe/**
+            ${{ runner.temp }}/electrobun-kitchen-hang-*/**
             kitchen/test-results/**
