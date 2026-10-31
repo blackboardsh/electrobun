@@ -6049,6 +6049,47 @@ static gboolean onWindowDeleteEvent(GtkWidget* widget, GdkEvent* event, gpointer
 
 // Tray implementation using AppIndicator
 #ifndef NO_APPINDICATOR
+// AppIndicator is loaded when the first tray is made, not linked: many
+// distributions (Fedora, Arch) don't install it by default, and a missing
+// tray library shouldn't keep the whole app from starting. Without it,
+// createTray returns no tray, as in a NO_APPINDICATOR build.
+struct AppIndicatorApi {
+    decltype(&::app_indicator_new) indicatorNew;
+    decltype(&::app_indicator_set_status) setStatus;
+    decltype(&::app_indicator_set_title) setTitle;
+    decltype(&::app_indicator_set_icon_full) setIconFull;
+    decltype(&::app_indicator_set_menu) setMenu;
+};
+
+static const AppIndicatorApi* appIndicatorApi() {
+    static const AppIndicatorApi* api = []() -> const AppIndicatorApi* {
+        void* lib = dlopen("libayatana-appindicator3.so.1", RTLD_NOW | RTLD_LOCAL);
+        if (!lib) {
+            fprintf(stderr, "Tray: no tray icon, libayatana-appindicator3.so.1 couldn't be loaded: %s\n", dlerror());
+            return nullptr;
+        }
+        static AppIndicatorApi loaded = {
+            reinterpret_cast<decltype(&::app_indicator_new)>(dlsym(lib, "app_indicator_new")),
+            reinterpret_cast<decltype(&::app_indicator_set_status)>(dlsym(lib, "app_indicator_set_status")),
+            reinterpret_cast<decltype(&::app_indicator_set_title)>(dlsym(lib, "app_indicator_set_title")),
+            reinterpret_cast<decltype(&::app_indicator_set_icon_full)>(dlsym(lib, "app_indicator_set_icon_full")),
+            reinterpret_cast<decltype(&::app_indicator_set_menu)>(dlsym(lib, "app_indicator_set_menu")),
+        };
+        if (!loaded.indicatorNew || !loaded.setStatus || !loaded.setTitle || !loaded.setIconFull || !loaded.setMenu) {
+            fprintf(stderr, "Tray: no tray icon, libayatana-appindicator3.so.1 lacks the functions it needs\n");
+            return nullptr;
+        }
+        return &loaded;
+    }();
+    return api;
+}
+
+#define app_indicator_new appIndicatorApi()->indicatorNew
+#define app_indicator_set_status appIndicatorApi()->setStatus
+#define app_indicator_set_title appIndicatorApi()->setTitle
+#define app_indicator_set_icon_full appIndicatorApi()->setIconFull
+#define app_indicator_set_menu appIndicatorApi()->setMenu
+
 class TrayItem {
 public:
     uint32_t trayId;
@@ -11534,7 +11575,11 @@ ELECTROBUN_EXPORT void* createTray(uint32_t trayId, const char* title, const cha
     
     // Wait for GTK initialization to complete
     waitForGTKInit();
-    
+
+    if (!appIndicatorApi()) {
+        return nullptr;
+    }
+
     return dispatch_sync_main([&]() -> void* {
         // Create the TrayItem on main thread
         try {
