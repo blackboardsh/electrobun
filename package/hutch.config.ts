@@ -69,6 +69,7 @@ export default {
 			"scripts/test-webview2-permissions.ts",
 		],
 		"test:macos-inspector-layout": "scripts/test-macos-inspector-layout.sh",
+		"test:macos-frame-policy": "scripts/test-macos-frame-policy.sh",
 		"test:templates": ["hutch", "scripts/check-release.ts", "templates"],
 		"test:odin-templates": "node scripts/test-odin-templates.mjs",
 		"test:template-publisher": "node --test ../scripts/publish-templates.test.mjs",

@@ -113,6 +113,11 @@ webview.setNavigationRules([
 
 An empty rules array restores the default allow behavior.
 
+On macOS with the native WKWebView renderer, navigation rules apply to the
+webview's main document. Child iframes can load under their own browser origin
+and sandbox restrictions. They cannot call the webview's native bridge; use
+`postMessage` to communicate with the parent document.
+
 ## Visibility And Input
 
 The toggle methods accept an explicit state. Omit it to invert the current
