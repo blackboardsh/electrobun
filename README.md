@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://framework.blackboard.sh/electrobun/"><img src="https://github.com/blackboardsh/electrobun/assets/75102186/8799b522-0507-45e9-86e3-c3cfded1aa7c" alt="Logo" height=170></a>
+  <a href="https://electrobun.dev/electrobun/"><img src="https://github.com/blackboardsh/electrobun/assets/75102186/8799b522-0507-45e9-86e3-c3cfded1aa7c" alt="Logo" height=170></a>
 </p>
 
 <h1 align="center">Electrobun</h1>
@@ -12,13 +12,13 @@ or Odin.
 Install Hutch on **macOS or Linux**:
 
 ```sh
-curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+curl -fsSL https://artifacts.electrobun.dev/hutch/install.sh | sh
 ```
 
 Or on **Windows PowerShell**:
 
 ```powershell
-& ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
+& ([scriptblock]::Create((irm https://artifacts.electrobun.dev/hutch/install.ps1)))
 ```
 
 Then open the template picker. Restart your terminal first if `hutch` isn't found.
@@ -36,7 +36,7 @@ npx electrobun init
 ```
 
 Choose a template, then follow the
-[Quick Start](https://framework.blackboard.sh/electrobun/guides/quick-start/#run-the-app)
+[Quick Start](https://docs.electrobun.dev/electrobun/guides/quick-start/#run-the-app)
 to run your app.
 
 ## What is Electrobun?
@@ -44,11 +44,13 @@ to run your app.
 Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping fast, compact, cross-platform desktop applications written in TypeScript.
 Hutch is the native build and workspace CLI. Bun is Electrobun's default JavaScript runtime. Cottontail is an experimental JSC-based alternative. Electrobun's platform layer combines Zig, Objective-C, and C++.
 
-Visit <a href="https://framework.blackboard.sh/electrobun/">https://framework.blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
+Explore [Electrobun](https://electrobun.dev/electrobun/) and read the
+[documentation](https://docs.electrobun.dev/electrobun/) for API references,
+guides, and examples.
 
 Published templates include the Electrobun version they were tested with. Hutch
 manages the SDKs and toolchains needed to build them. See the
-[Hutch guide](https://framework.blackboard.sh/electrobun/guides/hutch/) for
+[Hutch guide](https://docs.electrobun.dev/electrobun/guides/hutch/) for
 project configuration and version management.
 
 Hutch's built-in npm-compatible resolver installs JavaScript dependencies by
@@ -75,9 +77,16 @@ Don't miss our:
 - Small updates that use binary patches before falling back to a compressed full download
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
+## Develop with Dash
+
+[Dash](https://electrobun.dev/dash/) is our general-purpose IDE for building any
+kind of software, with a workflow designed for Electrobun apps. Keep code,
+terminals, Git, scripts, and coding agents together, and build and test on your
+connected Mac, Windows, and Linux machines. Dash itself is built with Electrobun.
+
 ## Apps Built with Electrobun
 
-- [Dash](https://blackboard.sh/dash/) - desktop workspace for files, terminals, scripts, models, and agents across your machines
+- [Dash](https://electrobun.dev/dash/) - desktop workspace for files, terminals, scripts, models, and agents across your machines
 - [24agents](https://github.com/jhsu/24agents) - Hyperprompter
 - [act-track-ai](https://github.com/IrdanGu/act-track-ai) - personal desktop productivity tracker
 - [Agents Council](https://github.com/MrLesk/agents-council) - agent-to-agent MCP communication tool for feedback requests
@@ -146,7 +155,7 @@ Electrobun is one piece of a vision I'm building. I'm optimizing for focus and e
 Ways to get involved:
 
 - Read the [Contribution guidelines](./CONTRIBUTING.md)
-- Follow us on X for updates <a href="https://twitter.com/BlackboardTech">@BlackboardTech</a> and <a href="https://twitter.com/YoavCodes">@YoavCodes</a> or on bluesky <a href="https://bsky.app/profile/yoav.codes">@yoav.codes</a>
+- Follow us on X for updates <a href="https://twitter.com/GetElectrobun">@GetElectrobun</a> and <a href="https://twitter.com/YoavCodes">@YoavCodes</a> or on bluesky <a href="https://bsky.app/profile/yoav.codes">@yoav.codes</a>
 - Join the conversation on <a href="https://discord.gg/ueKE4tjaCE">Discord</a>
 - Create and participate in Github issues and discussions
 - Let me know what you're building with Electrobun
@@ -161,13 +170,13 @@ Building apps with Electrobun is as easy as installing Hutch and running `hutch 
 Install Hutch globally before building Electrobun:
 
 ```bash
-curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+curl -fsSL https://artifacts.electrobun.dev/hutch/install.sh | sh
 ```
 
 On Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
+& ([scriptblock]::Create((irm https://artifacts.electrobun.dev/hutch/install.ps1)))
 ```
 
 **macOS:**

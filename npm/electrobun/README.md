@@ -46,9 +46,14 @@ release and managed toolchain they require is already installed. The flag does
 not put Hutch's built-in dependency resolver or an external project package
 manager into offline mode.
 
-You can install Hutch directly from <https://hutch.blackboard.sh> and run the
-same commands without npm:
+You can [install Hutch directly](https://docs.electrobun.dev/electrobun/guides/hutch/)
+and run the same commands without npm:
 
 ```sh
 hutch electrobun init
 ```
+
+Read the [Electrobun documentation](https://docs.electrobun.dev/electrobun/) for
+guides and API references. [Dash](https://electrobun.dev/dash/) is our
+general-purpose IDE and connected workspace for developing software, including
+Electrobun apps, across your machines.
