@@ -1110,7 +1110,11 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews =
              allowAppDataProtocol:(bool)allowAppDataProtocol;
 @end
 
+typedef void (*UIViewDestroyCallback)(void *);
+
 @interface WGPUViewImpl : AbstractView
+@property(nonatomic, assign) void *uiDestroyCtx;
+@property(nonatomic, assign) UIViewDestroyCallback uiDestroy;
 - (instancetype)initWithWebviewId:(uint32_t)webviewId
                            window:(NSWindow *)window
                             frame:(NSRect)frame
@@ -4374,21 +4378,30 @@ typedef void (*UIViewA11yActionCallback)(void *ctx, uint32_t nodeId,
 }
 
 - (void)remove {
-  if (!self.nsView) {
+  if (self.isRemoved) {
     return;
   }
+  self.isRemoved = YES;
+
+  // Native window closure does not wait for a threadsafe JS close callback.
+  // Retire the UI attachment while its view and Metal layer are still alive.
+  UIViewDestroyCallback destroy = self.uiDestroy;
+  void *destroyCtx = self.uiDestroyCtx;
+  self.uiDestroy = nullptr;
+  self.uiDestroyCtx = nullptr;
+  if (destroy)
+    destroy(destroyCtx);
 
   uint32_t webviewIdForLogging = self.webviewId;
   NSView *viewToRemove = self.nsView;
-
-  dispatch_async(dispatch_get_main_queue(), ^{
-    if (viewToRemove.superview &&
-        [viewToRemove.superview isKindOfClass:[ContainerView class]]) {
-      ContainerView *containerView = (ContainerView *)viewToRemove.superview;
-      [containerView removeAbstractViewWithId:webviewIdForLogging];
-    }
-    [viewToRemove removeFromSuperview];
-  });
+  self.nsView = nil;
+  g_pendingResizeQueue.remove((__bridge void *)self);
+  if (viewToRemove.superview &&
+      [viewToRemove.superview isKindOfClass:[ContainerView class]]) {
+    ContainerView *containerView = (ContainerView *)viewToRemove.superview;
+    [containerView removeAbstractViewWithId:webviewIdForLogging];
+  }
+  [viewToRemove removeFromSuperview];
 
   if (globalAbstractViews) {
     [globalAbstractViews removeObjectForKey:@(self.webviewId)];
@@ -8958,6 +8971,16 @@ extern "C" void uiRunOnMainThread(void (*callback)(void *), void *ctx) {
 
 // Route a WGPU view's input and frames to the native UI core. The UI host
 // installs/removes these handlers outside its lock.
+// Lifecycle operations run as one transaction on the native event thread.
+extern "C" void wgpuViewSetUIDestroyHandler(AbstractView *abstractView, void *ctx,
+                                            UIViewDestroyCallback destroy) {
+  if (![abstractView isKindOfClass:[WGPUViewImpl class]])
+    return;
+  WGPUViewImpl *view = (WGPUViewImpl *)abstractView;
+  view.uiDestroyCtx = ctx;
+  view.uiDestroy = destroy;
+}
+
 extern "C" void wgpuViewSetUIHandlers(AbstractView *abstractView, void *ctx,
                                       UIViewPointerCallback pointer,
                                       UIViewKeyCallback key,

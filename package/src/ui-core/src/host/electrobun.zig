@@ -19,6 +19,7 @@ const PointerCb = *const fn (?*anyopaque, u32, f64, f64, f64, f64, u32) callconv
 const KeyCb = *const fn (?*anyopaque, u32, u32, u32, u32, [*:0]const u8, [*:0]const u8) callconv(.c) u32;
 const TextCb = *const fn (?*anyopaque, u32, [*:0]const u8, u32) callconv(.c) void;
 const FrameCb = *const fn (?*anyopaque, f64) callconv(.c) void;
+const DestroyCb = *const fn (?*anyopaque) callconv(.c) void;
 const A11yRequestCb = *const fn (?*anyopaque) callconv(.c) void;
 const A11yActionCb = *const fn (?*anyopaque, u32, u32, [*:0]const u8) callconv(.c) void;
 
@@ -26,6 +27,7 @@ const Native = struct {
     /// Synthetic input can call native clipboard/window-drag APIs. Dispatch
     /// input before acquiring capi.lock, just like real native input.
     runOnMainThread: ?capi.ThreadDispatch,
+    setUIDestroyHandler: *const fn (?*anyopaque, ?*anyopaque, ?DestroyCb) callconv(.c) void,
     setUIHandlers: *const fn (?*anyopaque, ?*anyopaque, ?PointerCb, ?KeyCb, ?TextCb, ?FrameCb) callconv(.c) void,
     requestFrame: *const fn (?*anyopaque) callconv(.c) void,
     setImeRect: *const fn (?*anyopaque, f64, f64, f64, f64) callconv(.c) void,
@@ -86,6 +88,7 @@ fn loadNative() ?Native {
     if (native) |n| return n;
     native = .{
         .runOnMainThread = sym(capi.ThreadDispatch, "uiRunOnMainThread") orelse return null,
+        .setUIDestroyHandler = sym(@FieldType(Native, "setUIDestroyHandler"), "wgpuViewSetUIDestroyHandler") orelse return null,
         .setUIHandlers = sym(@FieldType(Native, "setUIHandlers"), "wgpuViewSetUIHandlers") orelse return null,
         .requestFrame = sym(@FieldType(Native, "requestFrame"), "wgpuViewRequestFrame") orelse return null,
         .setImeRect = sym(@FieldType(Native, "setImeRect"), "wgpuViewSetImeRect") orelse return null,
@@ -233,6 +236,26 @@ pub export fn ebui_attach_wgpu_view(ui_id: u32, view: ?*anyopaque, dawn_path: ?[
         return false;
     };
     const v = view orelse return false;
+    const Attach = struct {
+        ui_id: u32,
+        view: *anyopaque,
+        dawn_path: ?[*:0]const u8,
+        native: Native,
+        attached: bool = false,
+
+        fn run(ctx: ?*anyopaque) callconv(.c) void {
+            const op: *@This() = @ptrCast(@alignCast(ctx.?));
+            op.attached = attachOnMain(op.ui_id, op.view, op.dawn_path, op.native);
+        }
+    };
+    var op = Attach{ .ui_id = ui_id, .view = v, .dawn_path = dawn_path, .native = n };
+    // Resolve handles and publish all handlers in one event-thread operation.
+    // Native removal must not interleave with a partially attached UI.
+    n.runOnMainThread.?(Attach.run, &op);
+    return op.attached;
+}
+
+fn attachOnMain(ui_id: u32, v: *anyopaque, dawn_path: ?[*:0]const u8, n: Native) bool {
     const handles = SurfaceHandles.resolve(n, v) orelse return false;
     capi.lock();
     const hv = attachLocked(ui_id, v, dawn_path, n, handles);
@@ -242,6 +265,7 @@ pub export fn ebui_attach_wgpu_view(ui_id: u32, view: ?*anyopaque, dawn_path: ?[
     // waits for main, whose existing frame callbacks may need the UI lock.
     n.setUIHandlers(attached.view, callbackContext(attached), onPointer, onKey, onText, onFrame);
     if (n.setA11yHandlers) |f| f(attached.view, callbackContext(attached), onA11yRequest, onA11yAction);
+    n.setUIDestroyHandler(attached.view, callbackContext(attached), onNativeViewDestroyed);
     n.requestFrame(attached.view);
     return true;
 }
@@ -300,6 +324,40 @@ pub export fn ebui_detach_view(ui_id: u32) void {
 
 fn detachView(ui_id: u32, comptime release: fn (*View) void) void {
     capi.lock();
+    const n = native;
+    capi.unlock();
+    const Detach = struct {
+        fn run(ctx: ?*anyopaque) callconv(.c) void {
+            const id: *const u32 = @ptrCast(@alignCast(ctx.?));
+            detachOnMain(id.*, release);
+        }
+    };
+    var id = ui_id;
+    if (n) |api| {
+        // Dispatch before taking the UI lock, and keep retirement, handler
+        // removal and GPU release together. A queued JS close listener may
+        // run after native removal; it then finds an already retired UI.
+        api.runOnMainThread.?(Detach.run, &id);
+    } else {
+        detachOnMain(ui_id, release);
+    }
+}
+
+fn onNativeViewDestroyed(ctx: ?*anyopaque) callconv(.c) void {
+    nativeViewDestroyed(ctx, releaseView);
+}
+
+fn nativeViewDestroyed(ctx: ?*anyopaque, comptime release: fn (*View) void) void {
+    capi.lock();
+    const id = if (liveView(ctx)) |hv| hv.ui_id else null;
+    capi.unlock();
+    // The wrapper invokes this on its event thread, before destroying the
+    // native view. The monotonic callback token also rejects stale delivery.
+    if (id) |ui_id| detachOnMain(ui_id, release);
+}
+
+fn detachOnMain(ui_id: u32, comptime release: fn (*View) void) void {
+    capi.lock();
     const hv = retireView(ui_id);
     const n = native;
     capi.unlock();
@@ -309,6 +367,7 @@ fn detachView(ui_id: u32, comptime release: fn (*View) void) void {
     // liveView; it cannot mistake this address for a subsequently attached UI.
     // Never wait for main while holding capi.lock (main may be in onFrame).
     if (n) |api| {
+        api.setUIDestroyHandler(retired.view, null, null);
         api.setUIHandlers(retired.view, null, null, null, null, null);
         if (api.setA11yHandlers) |f| f(retired.view, null, null, null);
         if (retired.present_path == .composition) if (api.composition) |c| c.release(retired.view);
@@ -713,9 +772,21 @@ fn beginDrag(ctx: ?*anyopaque) bool {
 
 test "host attach resolves native handles without holding the UI lock" {
     const Harness = struct {
+        var dispatching = false;
         callback_done: std.atomic.Value(bool) = .init(false),
         completed_during_lookup: bool = false,
         worker: ?std.Thread = null,
+
+        fn dispatch(callback_fn: capi.ThreadCallback, ctx: ?*anyopaque) callconv(.c) void {
+            std.debug.assert(!dispatching);
+            dispatching = true;
+            defer dispatching = false;
+            callback_fn(ctx);
+        }
+
+        fn setDestroy(_: ?*anyopaque, _: ?*anyopaque, _: ?DestroyCb) callconv(.c) void {
+            @panic("missing UI must not register native handlers");
+        }
 
         fn callback(h: *@This()) void {
             // Models another UI's frame callback already running on main
@@ -726,6 +797,7 @@ test "host attach resolves native handles without holding the UI lock" {
         }
 
         fn getHandle(view: ?*anyopaque) callconv(.c) ?*anyopaque {
+            std.debug.assert(dispatching);
             const h: *@This() = @ptrCast(@alignCast(view.?));
             h.worker = std.Thread.spawn(.{}, callback, .{h}) catch @panic("cannot start attach test callback");
             const start = std.Io.Clock.awake.now(std.testing.io);
@@ -746,6 +818,8 @@ test "host attach resolves native handles without holding the UI lock" {
     const saved_native = native;
     defer native = saved_native;
     var fixture: Native = undefined;
+    fixture.runOnMainThread = Harness.dispatch;
+    fixture.setUIDestroyHandler = Harness.setDestroy;
     fixture.getNativeHandle = Harness.getHandle;
     fixture.getNativeDisplay = Harness.getDisplay;
     native = fixture;
@@ -759,13 +833,48 @@ test "host attach resolves native handles without holding the UI lock" {
 
 test "host detach retires callbacks before native unregister without holding the UI lock" {
     const Harness = struct {
+        var current: *@This() = undefined;
         ctx: ?*anyopaque = null,
+        dispatch_done: std.atomic.Value(bool) = .init(false),
+        dispatched_without_lock: bool = false,
+        dispatches: usize = 0,
+        dispatching: bool = false,
         callback_done: std.atomic.Value(bool) = .init(false),
         callback_saw_retired: bool = false,
         completed_during_unregister: bool = false,
         released: bool = false,
+        destroy_cleared: bool = false,
         a11y_cleared: bool = false,
+        composition_released: bool = false,
+        dispatch_worker: ?std.Thread = null,
         worker: ?std.Thread = null,
+
+        fn dispatchProbe(h: *@This()) void {
+            capi.lock();
+            capi.unlock();
+            h.dispatch_done.store(true, .release);
+        }
+
+        fn dispatch(callback_fn: capi.ThreadCallback, ctx: ?*anyopaque) callconv(.c) void {
+            const h = current;
+            std.debug.assert(!h.dispatching);
+            h.dispatches += 1;
+            h.dispatch_worker = std.Thread.spawn(.{}, dispatchProbe, .{h}) catch @panic("cannot start dispatch lock probe");
+            const start = std.Io.Clock.awake.now(std.testing.io);
+            while (!h.dispatch_done.load(.acquire) and start.durationTo(std.Io.Clock.awake.now(std.testing.io)).toMilliseconds() < 5_000) {
+                std.Thread.yield() catch {};
+            }
+            h.dispatched_without_lock = h.dispatch_done.load(.acquire);
+            h.dispatching = true;
+            defer h.dispatching = false;
+            callback_fn(ctx);
+        }
+
+        fn unregisterDestroy(view: ?*anyopaque, ctx: ?*anyopaque, handler: ?DestroyCb) callconv(.c) void {
+            const h: *@This() = @ptrCast(@alignCast(view.?));
+            std.debug.assert(h.dispatching and ctx == null and handler == null);
+            h.destroy_cleared = true;
+        }
 
         fn callback(h: *@This()) void {
             capi.lock();
@@ -781,6 +890,7 @@ test "host detach retires callbacks before native unregister without holding the
         fn unregister(view: ?*anyopaque, ctx: ?*anyopaque, pointer: ?PointerCb, key: ?KeyCb, text: ?TextCb, frame: ?FrameCb) callconv(.c) void {
             std.debug.assert(ctx == null and pointer == null and key == null and text == null and frame == null);
             const h: *@This() = @ptrCast(@alignCast(view.?));
+            std.debug.assert(h.dispatching and h.destroy_cleared);
             h.worker = std.Thread.spawn(.{}, callback, .{h}) catch @panic("cannot start lifecycle test callback");
             const start = std.Io.Clock.awake.now(std.testing.io);
             // Models unregister dispatch_sync waiting for an in-flight native
@@ -795,29 +905,45 @@ test "host detach retires callbacks before native unregister without holding the
 
         fn unregisterA11y(view: ?*anyopaque, ctx: ?*anyopaque, request: ?A11yRequestCb, action: ?A11yActionCb) callconv(.c) void {
             const h: *@This() = @ptrCast(@alignCast(view.?));
+            std.debug.assert(h.dispatching);
             h.a11y_cleared = ctx == null and request == null and action == null;
+        }
+
+        fn releaseComposition(view: ?*anyopaque) callconv(.c) void {
+            const h: *@This() = @ptrCast(@alignCast(view.?));
+            std.debug.assert(h.dispatching and h.destroy_cleared and h.a11y_cleared);
+            h.composition_released = true;
         }
 
         fn release(hv: *View) void {
             const h: *@This() = @ptrCast(@alignCast(hv.view));
+            std.debug.assert(h.dispatching and h.composition_released);
             h.released = true;
         }
     };
     var h: Harness = .{};
-    var hv = View{ .callback_id = std.math.maxInt(usize) - 2, .ui_id = std.math.maxInt(u32), .view = &h, .surface = undefined, .renderer = undefined };
+    Harness.current = &h;
+    var hv = View{ .callback_id = std.math.maxInt(usize) - 2, .ui_id = std.math.maxInt(u32), .view = &h, .surface = undefined, .renderer = undefined, .present_path = .composition };
     h.ctx = callbackContext(&hv);
     const saved_native = native;
     defer native = saved_native;
     // Only these native methods participate in detach. No GPU or OS window is
     // needed to exercise its real registry, synchronization and release order.
     var fixture: Native = undefined;
+    fixture.runOnMainThread = Harness.dispatch;
+    fixture.setUIDestroyHandler = Harness.unregisterDestroy;
     fixture.setUIHandlers = Harness.unregister;
     fixture.setA11yHandlers = Harness.unregisterA11y;
-    fixture.composition = null;
+    var composition: Composition = undefined;
+    composition.release = Harness.releaseComposition;
+    fixture.composition = composition;
     native = fixture;
     try views.append(gpa, &hv);
     detachView(hv.ui_id, Harness.release);
+    h.dispatch_worker.?.join();
     h.worker.?.join();
+    try std.testing.expect(h.dispatched_without_lock);
+    try std.testing.expectEqual(@as(usize, 1), h.dispatches);
     try std.testing.expect(h.completed_during_unregister);
     try std.testing.expect(h.callback_saw_retired);
     try std.testing.expect(h.a11y_cleared);
@@ -831,4 +957,113 @@ test "host detach retires callbacks before native unregister without holding the
     try std.testing.expect(liveView(h.ctx) == null);
     try std.testing.expect(liveView(callbackContext(&hv)) == &hv);
     onFrame(h.ctx, 0);
+}
+
+test "native view destruction retires UI before free and makes later detach harmless" {
+    const Harness = struct {
+        var current: *@This() = undefined;
+        native_alive: bool = true,
+        on_event_thread: bool = false,
+        dispatches: usize = 0,
+        unregisters: usize = 0,
+        releases: usize = 0,
+        destroy_cleared: bool = false,
+        input_cleared: bool = false,
+        a11y_cleared: bool = false,
+
+        fn dispatch(callback_fn: capi.ThreadCallback, ctx: ?*anyopaque) callconv(.c) void {
+            const h = current;
+            std.debug.assert(!h.on_event_thread);
+            h.dispatches += 1;
+            h.on_event_thread = true;
+            defer h.on_event_thread = false;
+            callback_fn(ctx);
+        }
+
+        fn nativeCall(view: ?*anyopaque) *@This() {
+            const h: *@This() = @ptrCast(@alignCast(view.?));
+            // Any call after the wrapper frees the view is a use-after-free.
+            // A sentinel keeps that violation deterministic without dereferencing
+            // a deliberately freed allocation in the test process.
+            std.debug.assert(h.native_alive and h.on_event_thread);
+            h.unregisters += 1;
+            return h;
+        }
+
+        fn unregisterDestroy(view: ?*anyopaque, ctx: ?*anyopaque, handler: ?DestroyCb) callconv(.c) void {
+            std.debug.assert(ctx == null and handler == null);
+            nativeCall(view).destroy_cleared = true;
+        }
+
+        fn unregister(view: ?*anyopaque, ctx: ?*anyopaque, pointer: ?PointerCb, key: ?KeyCb, text: ?TextCb, frame: ?FrameCb) callconv(.c) void {
+            std.debug.assert(ctx == null and pointer == null and key == null and text == null and frame == null);
+            nativeCall(view).input_cleared = true;
+        }
+
+        fn unregisterA11y(view: ?*anyopaque, ctx: ?*anyopaque, request: ?A11yRequestCb, action: ?A11yActionCb) callconv(.c) void {
+            std.debug.assert(ctx == null and request == null and action == null);
+            nativeCall(view).a11y_cleared = true;
+        }
+
+        fn release(hv: *View) void {
+            const h: *@This() = @ptrCast(@alignCast(hv.view));
+            std.debug.assert(h.native_alive and h.on_event_thread);
+            std.debug.assert(h.destroy_cleared and h.input_cleared and h.a11y_cleared);
+            std.debug.assert(liveView(callbackContext(hv)) == null);
+            h.releases += 1;
+        }
+
+        fn destroyNative(ctx: ?*anyopaque) void {
+            const h = current;
+            h.on_event_thread = true;
+            nativeViewDestroyed(ctx, release);
+            h.on_event_thread = false;
+            h.native_alive = false;
+        }
+    };
+    var h: Harness = .{};
+    Harness.current = &h;
+    var hv = View{ .callback_id = std.math.maxInt(usize) - 4, .ui_id = std.math.maxInt(u32), .view = &h, .surface = undefined, .renderer = undefined };
+    const old_ctx = callbackContext(&hv);
+    const saved_native = native;
+    defer native = saved_native;
+    var fixture: Native = undefined;
+    fixture.runOnMainThread = Harness.dispatch;
+    fixture.setUIDestroyHandler = Harness.unregisterDestroy;
+    fixture.setUIHandlers = Harness.unregister;
+    fixture.setA11yHandlers = Harness.unregisterA11y;
+    fixture.composition = null;
+    native = fixture;
+    try views.append(gpa, &hv);
+    defer _ = retireView(hv.ui_id);
+
+    Harness.destroyNative(old_ctx);
+    try std.testing.expect(viewFor(hv.ui_id) == null);
+    try std.testing.expectEqual(@as(usize, 1), h.releases);
+    try std.testing.expectEqual(@as(usize, 0), h.dispatches);
+    const unregisters_before = h.unregisters;
+
+    // Bun's queued close listener can arrive after the OS destroys the view.
+    // Repeated detach and late callbacks must never touch the dead native view.
+    detachView(hv.ui_id, Harness.release);
+    detachView(hv.ui_id, Harness.release);
+    onFrame(old_ctx, 0);
+    onPointer(old_ctx, 0, 10, 10, 0, 0, 0);
+    try std.testing.expectEqual(unregisters_before, h.unregisters);
+    try std.testing.expectEqual(@as(usize, 1), h.releases);
+
+    // Reuse the exact attachment address: the old destroy token must not retire
+    // the replacement UI, even though the OS could reuse its window address too.
+    hv.callback_id += 1;
+    h.native_alive = true;
+    h.destroy_cleared = false;
+    h.input_cleared = false;
+    h.a11y_cleared = false;
+    try views.append(gpa, &hv);
+    nativeViewDestroyed(old_ctx, Harness.release);
+    try std.testing.expect(viewFor(hv.ui_id) == &hv);
+    try std.testing.expectEqual(unregisters_before, h.unregisters);
+    Harness.destroyNative(callbackContext(&hv));
+    try std.testing.expectEqual(@as(usize, 2), h.releases);
+    try std.testing.expect(viewFor(hv.ui_id) == null);
 }

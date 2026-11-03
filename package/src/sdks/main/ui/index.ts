@@ -103,7 +103,8 @@ export class UI {
 		for (const css of ([] as string[]).concat(options.css ?? [])) this.addStylesheet(css);
 		if (options.dark !== undefined) lib.ebui_set_dark(this.id, options.dark);
 		this.startEventPump();
-		// tear down before the native view goes away
+		// Dispose app-side state when the close event arrives. Native removal
+		// already detaches the renderer synchronously before freeing its view.
 		const owner = target as { on?: (name: string, fn: () => void) => unknown };
 		if (typeof owner.on === "function") owner.on("close", () => this.destroy());
 	}

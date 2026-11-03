@@ -2573,10 +2573,10 @@ fn windowCloseTrampoline(window_id: u32) callconv(.c) void {
     }
     window_registry_mutex.unlock(coreIo());
 
-    // Give JS mounts a chance to stop render loops and destroy their devices
-    // while child views and WebGPU surfaces are still valid. The global close
-    // event then removes JS-owned views; the collection below cleans up any
-    // native children that remain.
+    // Dispatch the close notification before removing remaining children.
+    // Threadsafe runtime callbacks may deliver it asynchronously: native UI
+    // attachments retire in the wrapper's view-removal hook, independently of
+    // when the app processes its close event.
     if (close_handler) |handler| {
         handler(window_id);
     }

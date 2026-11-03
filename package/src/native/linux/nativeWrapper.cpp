@@ -4215,6 +4215,7 @@ typedef uint32_t (*UIViewKeyCallback)(void* ctx, uint32_t keyCode,
 typedef void (*UIViewTextCallback)(void* ctx, uint32_t kind, const char* text,
                                    uint32_t selLoc);
 typedef void (*UIViewFrameCallback)(void* ctx, double timestamp);
+typedef void (*UIViewDestroyCallback)(void* ctx);
 typedef void (*UIViewA11yRequestCallback)(void* ctx);
 typedef void (*UIViewA11yActionCallback)(void* ctx, uint32_t nodeId,
                                          uint32_t action, const char* value);
@@ -4233,6 +4234,8 @@ struct UIViewHandlers {
 struct UIViewHost {
     std::mutex mutex;
     UIViewHandlers handlers;
+    void* destroyCtx = nullptr;
+    UIViewDestroyCallback destroy = nullptr;
     bool installed = false;      // input mask/XIC set up on the X window
     bool frameRequested = false;
     guint frameSource = 0;
@@ -9187,6 +9190,14 @@ static void uiUninstallInput(WGPUViewImpl* view) {
 }
 
 static void uiHostViewRemoved(WGPUViewImpl* view) {
+    // Retire the UI attachment while its native surface is still valid. Both
+    // registration and removal run on the event thread. Clear the hook before
+    // invoking it, and hold no mutex: detach reenters the handler setters.
+    const auto destroy = view->ui.destroy;
+    void* destroyCtx = view->ui.destroyCtx;
+    view->ui.destroy = nullptr;
+    view->ui.destroyCtx = nullptr;
+    if (destroy) destroy(destroyCtx);
     {
         std::lock_guard<std::mutex> lock(view->ui.mutex);
         view->ui.handlers = {};
@@ -9199,6 +9210,15 @@ static void uiHostViewRemoved(WGPUViewImpl* view) {
 ELECTROBUN_EXPORT void uiRunOnMainThread(void (*callback)(void*), void* ctx) {
     if (!callback) return;
     dispatch_sync_main_void([callback, ctx]() { callback(ctx); });
+}
+
+// Called on the native event thread by the UI host, outside the UI core lock.
+ELECTROBUN_EXPORT void wgpuViewSetUIDestroyHandler(AbstractView* abstractView, void* ctx,
+                                                   UIViewDestroyCallback destroy) {
+    auto* view = dynamic_cast<WGPUViewImpl*>(abstractView);
+    if (!view) return;
+    view->ui.destroyCtx = ctx;
+    view->ui.destroy = destroy;
 }
 
 // Route a WGPU view's input and frames to the native UI core. Any thread;

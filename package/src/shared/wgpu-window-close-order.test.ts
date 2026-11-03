@@ -6,7 +6,7 @@ const packageRoot = join(import.meta.dirname, "..");
 const read = (path: string) => readFileSync(join(packageRoot, path), "utf8");
 
 describe("WGPU window close ordering", () => {
-	test("notifies JS before native child views are removed", () => {
+	test("dispatches the close notification before removing native child views", () => {
 		const source = read("core/main.zig");
 		const start = source.indexOf("fn windowCloseTrampoline(");
 		const end = source.indexOf("\nfn windowMoveTrampoline(", start);

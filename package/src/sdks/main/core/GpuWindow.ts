@@ -194,8 +194,8 @@ export class GpuWindow {
 	}
 
 	close() {
-		// The native close callback stops mounted renderers before its global close
-		// event removes child views and releases their WebGPU contexts.
+		// Native view removal detaches mounted UI renderers; the runtime's close
+		// event later disposes JS wrappers and their WebGPU contexts.
 		return ffi.request.closeWindow({ winId: this.id });
 	}
 

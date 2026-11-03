@@ -4,6 +4,7 @@
 // Input is synthesized through the same engine path native events take.
 
 import { defineTest, expect, sleep } from "../test-framework/types";
+import { waitForWindowObservation } from "../test-framework/window-observation";
 import { GpuWindow, WGPUView } from "electrobun/main";
 import { createUI, createUIWindow, isUIAvailable, live, signal, store, For, type UI } from "electrobun/main/ui";
 
@@ -84,6 +85,68 @@ export const nativeUiTests = [
 					const frames = survivor.frames;
 					await survivor.nextFrame();
 					expect(survivor.frames).toBeGreaterThan(frames);
+				}
+			});
+		},
+	}),
+
+	defineTest({
+		name: "Native UI: closing a mounted window preserves the other windows",
+		category: "Native UI",
+		description: "Native close requests tear down mounted UI handlers safely while another GPU window remains interactive and animating.",
+		timeout: 60000,
+		async run({ log }) {
+			const animated = `${base} @keyframes pulse { from { opacity: 0.4 } to { opacity: 1 } } .pulse { width: 80px; height: 40px; background: #6366f1; animation: pulse 120ms infinite alternate; }`;
+			let clicks = 0;
+			await withUI("native-ui-close-survivor", animated, () => <main>
+				<button id="survivor" onClick={() => clicks++}>Still running</button>
+				<div class="pulse" />
+			</main>, async (survivor) => {
+				for (let i = 0; i < 6; i++) {
+					const win = new GpuWindow({ title: `native-ui-mounted-close-${i}`, frame: { x: 640, y: 120, width: 320, height: 240 } });
+					const view = win.wgpuView;
+					let ui: UI | undefined;
+					let closed = 0;
+					let closeRequests = 0;
+					try {
+						ui = createUI(win, { css: animated, components: true });
+						ui.render(() => <main>
+							<label>Close while editing <input id="entry" /></label>
+							<div class="pulse" />
+						</main>);
+						await ui.nextFrame();
+						await ui.simulate.click(ui.querySelector("#entry")!);
+						await ui.simulate.type("mounted until native close");
+						win.on("will-close", () => closeRequests++);
+						win.on("close", () => closed++);
+
+						// Keep the UI attached: its automatic close listener must
+						// detach after the OS initiates teardown. withUI's ordinary
+						// cleanup destroys it first and cannot cover this path.
+						// requestClose uses the native close-button/delegate route.
+						const userClose = i % 2 === 0;
+						log(`cycle ${i}: ${userClose ? "native close request" : "programmatic close"} with mounted UI`);
+						if (userClose) win.requestClose();
+						else win.close();
+						await waitForWindowObservation(`cycle ${i}: mounted window closed`, () => ({
+							closeRequests,
+							closed,
+							nativeWindowPresent: win.ptr !== null,
+							windowRemoved: GpuWindow.getById(win.id) === undefined,
+							viewRemoved: view.isRemoved && WGPUView.getById(view.id) === undefined,
+						}), (state) => state.closed === 1 && state.windowRemoved && state.viewRemoved, { log });
+						expect(closeRequests).toBe(userClose ? 1 : 0);
+
+						const frames = survivor.frames;
+						await survivor.simulate.click(survivor.querySelector("#survivor")!);
+						survivor.document.pump();
+						expect(clicks).toBe(i + 1);
+						expect(survivor.frames).toBeGreaterThan(frames);
+						near(await survivor.pixel(300, 200), [255, 255, 255, 255]);
+					} finally {
+						ui?.destroy();
+						if (GpuWindow.getById(win.id)) win.close();
+					}
 				}
 			});
 		},
