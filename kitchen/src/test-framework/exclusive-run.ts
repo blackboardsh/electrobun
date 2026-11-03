@@ -16,12 +16,24 @@ export class RunAlreadyInProgressError extends Error {
  */
 export class ExclusiveRunCoordinator {
 	private activeRun: string | undefined;
+	private invalidationReason: string | undefined;
+
+	get invalidated(): boolean {
+		return this.invalidationReason !== undefined;
+	}
+
+	invalidate(reason: string): void {
+		this.invalidationReason ??= reason;
+	}
 
 	get currentRun(): string | undefined {
 		return this.activeRun;
 	}
 
 	async run<T>(description: string, operation: () => Promise<T>): Promise<T> {
+		if (this.invalidationReason !== undefined) {
+			throw new Error(`Cannot start ${description}: ${this.invalidationReason}. Restart Kitchen Sink before running more tests.`);
+		}
 		if (this.activeRun) {
 			throw new RunAlreadyInProgressError(this.activeRun, description);
 		}

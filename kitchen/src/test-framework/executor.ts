@@ -10,6 +10,7 @@ import type {
 } from "./types";
 import { ExclusiveRunCoordinator } from "./exclusive-run";
 import { getTestSkipReason } from "./requirements";
+import { TestDeadlineError, withTestDeadline } from "./test-deadline";
 
 type TestEventHandler = (event: TestEvent) => void;
 
@@ -204,6 +205,8 @@ export class TestExecutor {
     }
 
     const context = this.createTestContext(test.id);
+    let execution: Promise<void> | undefined;
+    let timedOut = false;
 
     try {
       if (test.interactive) {
@@ -222,12 +225,10 @@ export class TestExecutor {
           (test.timeout ?? 10000) *
             (typeof process !== "undefined" && process.platform === "win32" ? 3 : 1),
         );
-        await Promise.race([
-          test.run(context),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error(`Test timed out after ${scaledTimeout}ms`)), scaledTimeout)
-          ),
-        ]);
+        // Arm the deadline before the test enters its first synchronous native
+        // call. A deadline reports failure but cannot cancel that native work.
+        execution = Promise.resolve().then(() => test.run(context));
+        await withTestDeadline(execution, scaledTimeout);
       }
 
       const result: TestResult = {
@@ -243,6 +244,10 @@ export class TestExecutor {
       this.emit({ type: 'test-completed', testId: test.id, result });
       return result;
     } catch (error: any) {
+      if (error instanceof TestDeadlineError) {
+        timedOut = true;
+        this.runCoordinator.invalidate(`test "${test.name}" timed out and may still be running`);
+      }
       const result: TestResult = {
         testId: test.id,
         name: test.name,
@@ -260,7 +265,17 @@ export class TestExecutor {
       this.emit({ type: 'test-completed', testId: test.id, result });
       return result;
     } finally {
-      await this.cleanupTestWindows(test.id);
+      if (timedOut && execution) {
+        // The timed-out test may still be using its windows or have its own
+        // finally block to run. Never close them underneath the active task.
+        // No subsequent test can start in this process after invalidation.
+        void execution.then(
+          () => this.cleanupTestWindows(test.id),
+          () => this.cleanupTestWindows(test.id),
+        ).catch(error => console.error("Timed-out test cleanup failed:", error));
+      } else {
+        await this.cleanupTestWindows(test.id);
+      }
     }
   }
 
@@ -287,7 +302,7 @@ export class TestExecutor {
     }
 
     // Run tests by category
-    for (const [category, tests] of byCategory) {
+    categories: for (const [category, tests] of byCategory) {
       console.log(`\n\x1b[36m[${category}]\x1b[0m`);
 
       // Run tests in this category sequentially to avoid resource exhaustion
@@ -295,6 +310,10 @@ export class TestExecutor {
       for (const test of tests) {
         const result = await this.runTestInternal(test);
         results.push(result);
+        if (this.runCoordinator.invalidated) {
+          console.error("Stopping the suite because the timed-out test may still be running. Restart Kitchen Sink before running more tests.");
+          break categories;
+        }
       }
     }
 

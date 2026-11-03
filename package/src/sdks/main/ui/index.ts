@@ -201,8 +201,12 @@ export class UI {
 		this.document.flush();
 		const start = this.frames;
 		const deadline = Date.now() + timeoutMs;
-		uiLib().ebui_request_capture(this.id); // forces a frame
+		// Frame synchronization does not need a GPU-to-CPU pixel readback.
+		// In particular, software adapters can take much longer to map a capture
+		// buffer than to present a frame, blocking native input in the meantime.
+		uiLib().ebui_request_frame(this.id);
 		while (this.frames <= start && Date.now() < deadline) await sleep(4);
+		if (this.frames <= start) throw new Error(`Native UI did not present a frame within ${timeoutMs}ms`);
 		this.document.pump();
 	}
 

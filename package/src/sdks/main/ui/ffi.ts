@@ -68,6 +68,7 @@ export const uiSymbols = {
 	ebui_text_input: { args: [u32, ptr, usize], returns: v },
 	ebui_use_components: { args: [u32], returns: FFIType.u64_fast },
 	ebui_host_frames: { args: [u32], returns: FFIType.u64_fast },
+	ebui_request_frame: { args: [u32], returns: v },
 	ebui_request_capture: { args: [u32], returns: v },
 	ebui_capture_ready: { args: [u32], returns: bool },
 	ebui_capture_pixel: { args: [u32, f32, f32, ptr], returns: bool },

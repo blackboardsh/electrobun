@@ -691,6 +691,16 @@ export fn ebui_host_frames(ui_id: u32) u64 {
     return hv.frames;
 }
 
+/// Force a present without a GPU readback. Frame synchronization and synthetic
+/// input use this path; only callers actually inspecting pixels need a capture.
+export fn ebui_request_frame(ui_id: u32) void {
+    capi.lock();
+    defer capi.unlock();
+    const hv = viewFor(ui_id) orelse return;
+    hv.force = true;
+    if (native) |n| n.requestFrame(hv.view);
+}
+
 /// Ask the next frame to read back its pixels (see ebui_capture_pixel).
 export fn ebui_request_capture(ui_id: u32) void {
     capi.lock();
@@ -768,6 +778,44 @@ fn beginDrag(ctx: ?*anyopaque) bool {
     const hv = liveView(ctx) orelse return false;
     const n = native orelse return false;
     return n.beginWindowDrag(hv.view);
+}
+
+test "requesting a host frame preserves captures and does not schedule a readback" {
+    const Harness = struct {
+        requested: usize = 0,
+        fn request(view: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(view.?));
+            self.requested += 1;
+        }
+    };
+    var h: Harness = .{};
+    const saved_native = native;
+    defer native = saved_native;
+    var fixture: Native = undefined;
+    fixture.requestFrame = Harness.request;
+    native = fixture;
+    const pixels = try gpa.dupe(u8, &.{ 10, 20, 30, 255 });
+    var hv = View{ .callback_id = std.math.maxInt(usize) - 6, .ui_id = std.math.maxInt(u32), .view = &h, .surface = undefined, .renderer = undefined, .capture = pixels, .frames = 7 };
+    try views.append(gpa, &hv);
+    defer {
+        _ = views.pop();
+        if (hv.capture) |capture| gpa.free(capture);
+    }
+
+    hv.force = false;
+    ebui_request_frame(hv.ui_id);
+    try std.testing.expect(hv.force);
+    try std.testing.expect(!hv.capture_requested);
+    try std.testing.expect(hv.capture.?.ptr == pixels.ptr);
+    try std.testing.expectEqualSlices(u8, &.{ 10, 20, 30, 255 }, hv.capture.?);
+    try std.testing.expectEqual(@as(u64, 7), ebui_host_frames(hv.ui_id));
+    try std.testing.expectEqual(@as(usize, 1), h.requested);
+
+    // Pixel callers still explicitly invalidate and request their next capture.
+    ebui_request_capture(hv.ui_id);
+    try std.testing.expect(hv.capture_requested);
+    try std.testing.expect(hv.capture == null);
+    try std.testing.expectEqual(@as(usize, 2), h.requested);
 }
 
 test "host attach resolves native handles without holding the UI lock" {
