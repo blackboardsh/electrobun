@@ -14,12 +14,14 @@ import {
 	readdirSync,
 	renameSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertRecipeMatchesInstalled } from "./archive-recipe-test-utils.mjs";
 
 if (process.platform !== "linux") {
 	console.log("Linux adjacent extractor integration: skipped on non-Linux host");
@@ -32,6 +34,7 @@ const launcherRoot = join(packageRoot, "src", "launcher");
 const zig = process.env.ELECTROBUN_ZIG ?? join(packageRoot, "vendors", "zig", "zig");
 const zigZstd = join(packageRoot, "vendors", "zig-zstd", "zig-zstd");
 const temporaryRoot = mkdtempSync(join(tmpdir(), "electrobun-extractor-e2e-"));
+const payloadArchives = new Map();
 
 const embeddedMetadataMarker = "ELECTROBUN_METADATA_V1";
 const embeddedArchiveMarker = "ELECTROBUN_ARCHIVE_V1";
@@ -280,6 +283,10 @@ const createPayload = ({
 		archivePath,
 		"--no-timing",
 	]);
+	payloadArchives.set(`${identifier}/${channel}/${hash}`, {
+		sha256: sha256(tarPath),
+		size: statSync(tarPath).size,
+	});
 
 	return {
 		archivePath,
@@ -408,6 +415,15 @@ const assertInstalled = ({
 	assertExists(paths.app);
 	assertExists(paths.launcher);
 	assertExists(paths.selfExtraction);
+	const hash = `${channel}-${version.replaceAll(".", "-")}-hash`;
+	const archive = payloadArchives.get(`${identifier}/${channel}/${hash}`);
+	assert.ok(archive, "expected original archive identity is missing");
+	assertRecipeMatchesInstalled(join(paths.selfExtraction, `${hash}.recipe.json`), paths.app, archive);
+	assert.equal(
+		readdirSync(paths.selfExtraction).some((entry) => entry.endsWith(".tar") || entry.endsWith(".partial")),
+		false,
+		"completed Linux install retained an archive or partial updater state",
+	);
 	assertExists(paths.uninstaller);
 	assertExists(paths.manifest);
 	assertExists(paths.applicationEntry);

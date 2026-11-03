@@ -49,16 +49,26 @@ if (update.updateAvailable) {
 ```
 
 `applyUpdate()` first asks the normal `before-quit` handlers for permission. If
-they allow the quit, a native post-exit helper validates the downloaded bundle,
+they allow the quit, a native post-exit helper revalidates the staged bundle,
 replaces the installed app transactionally, refreshes platform integration,
-and launches the new version. A failed replacement restores the previous app.
+and launches the new version. A failed replacement or launch operation restores
+the previous app. The old app is removed after the launch operation succeeds;
+this confirms that launch was requested, not that the application completed
+startup or passed an application-specific health check.
 It does nothing until a prepared download is ready.
 
-`downloadUpdate()` starts with the retained local archive and requests the
-patch named after its current hash. After each successful patch it reads the
-next hash from the resulting tar and continues until it reaches the latest hash
-from `update.json`. If any patch is missing or fails, the updater discards the
-attempted chain and downloads the latest full archive instead.
+`downloadUpdate()` uses a native helper to reconstruct the exact current tar in
+RAM from installed file contents and an archive recipe. Original tar headers,
+ordering, and padding come from the recipe, so filesystem timestamps and tar
+tool differences do not change the patch input. File and archive digests must
+match before patching. Original signed file bytes are preserved without
+re-signing the app.
+
+The helper requests the patch named after the current hash and streams its
+output directly into a staged app. It follows intermediate hashes until it
+reaches the target release. A missing recipe, changed source file, unavailable
+patch, or failed patch attempt falls back to streaming the full archive into
+staging. The installed app remains untouched during preparation.
 
 <Aside type="note">
 The `dev` channel never reports an available update. Exercise updater behavior
@@ -67,19 +77,21 @@ with a packaged canary or stable build.
 
 ## Disk space during preparation
 
-Patching writes a new tar rather than modifying its input
-in place. After validating the next archive's metadata, the updater deletes the
-consumed patch and any superseded intermediate tar before the next hop. The
-original cached tar is normally kept so a failed attempt can be retried.
+The updater retains `<hash>.recipe.json` under the installed channel's
+`self-extraction` directory instead of the full uncompressed tar. When migrating
+an older installation, it removes the cached tar only after publishing a recipe
+and verifying that the installed app reproduces the original archive.
 
-When patch-chain preparation detects a disk-full error, it also deletes that
-original cached tar before falling back to the latest full bundle. Detection
-covers `ENOSPC`, Windows disk-full codes, and native patcher disk-full
-diagnostics. This removes update-cache files, not the installed app or user data.
-Other patch failures preserve the original cache.
+Delta preparation holds one reconstructed source tar in RAM, plus decoder
+buffers. It writes the downloaded patch and one replacement app to disk.
+Between patch-chain hops, the intermediate app is reconstructed into RAM and
+removed before the next stage is extracted. If allocating the source buffer
+fails, full-download fallback does not require that buffer.
 
-Fallback still needs space for the full download, decompressed archive, and
-installation staging. It can fail if the disk remains full; do not treat a
+Full downloads stream through decompression into the staged app, without keeping
+a complete compressed or uncompressed archive on disk. Both paths still need
+space for the replacement app, while the old app remains available for rollback.
+Preparation can fail if the disk remains full; do not treat a
 completed download as an applied update. Observe `updateReady`, status events,
 and `error`, and confirm the new version after relaunch.
 
@@ -131,7 +143,8 @@ Updater.onStatusChange(null);
 void history;
 ```
 
-Statuses cover checking, patch-chain attempts and fallback, full-bundle
-download progress, preparation, handoff, relaunch, completion, and errors.
+Statuses cover checking, native update preparation, handoff, relaunch,
+completion, and errors. Native preparation currently reports its overall
+operation rather than individual patch-hop or byte-progress events.
 `UpdateStatusEntry` contains `status`, `message`, `timestamp`, and optional
 structured `details`.

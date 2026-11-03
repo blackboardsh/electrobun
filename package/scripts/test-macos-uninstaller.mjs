@@ -14,12 +14,14 @@ import {
 	readFileSync,
 	realpathSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertRecipeMatchesInstalled } from "./archive-recipe-test-utils.mjs";
 
 if (process.platform !== "darwin") {
 	console.log("macOS uninstaller integration: skipped on non-macOS host");
@@ -424,22 +426,26 @@ try {
 	assertNodeMissing(initialInstall.archive);
 	assertExists(initialInstall.manager);
 	assert.equal(sha256File(initialInstall.manager), sha256File(extractor));
-	const retainedTar = join(
+	const recipePath = join(
 		initialInstall.selfExtraction,
-		`${initialInstall.archiveHash}.tar`,
+		`${initialInstall.archiveHash}.recipe.json`,
 	);
-	assertExists(retainedTar);
+	assertExists(recipePath);
+	assertRecipeMatchesInstalled(recipePath, initialInstall.installedApp, {
+		sha256: sha256File(initialInstall.tarPath),
+		size: statSync(initialInstall.tarPath).size,
+	});
 	assert.equal(
-		sha256File(retainedTar),
-		sha256File(initialInstall.tarPath),
-		"retained updater tar differs from the adjacent installer payload",
+		readdirSync(initialInstall.selfExtraction).some((entry) => entry.endsWith(".tar")),
+		false,
+		"completed install retained a full updater tar",
 	);
 	assert.equal(
 		readdirSync(initialInstall.selfExtraction).some((entry) =>
 			entry.endsWith(".partial"),
 		),
 		false,
-		"completed install retained a partial updater tar",
+		"completed install retained partial updater state",
 	);
 	for (const staleTransactionPath of [
 		`${initialInstall.selfExtraction}.partial`,

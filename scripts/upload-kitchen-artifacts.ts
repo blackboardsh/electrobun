@@ -16,6 +16,7 @@ const KITCHEN_ARTIFACT_NAME =
 
 const isStableUpdateArtifact = (filename: string): boolean =>
 	filename.endsWith("-update.json") ||
+	filename.endsWith("-update-v2.json") ||
 	filename.endsWith(".tar.zst") ||
 	/-[a-z0-9]+\.patch$/.test(filename);
 
@@ -50,7 +51,7 @@ export const kitchenArtifactKey = (filePath: string): string => {
 };
 
 export const isKitchenUpdateManifest = (key: string): boolean =>
-	key.endsWith("-update.json");
+	key.endsWith("-update.json") || key.endsWith("-update-v2.json");
 
 // Keep publication bounded even when the storage service stops responding.
 export async function putKitchenArtifact(

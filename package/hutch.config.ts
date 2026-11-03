@@ -81,7 +81,7 @@ export default {
 		"test:windows-uninstaller":
 			"node scripts/test-windows-uninstaller.mjs",
 		"test:updater-unit":
-			"node scripts/run-bun-test.js src/sdks/main/core/UpdaterPreparation.test.ts src/sdks/main/core/UpdaterResult.test.ts src/sdks/main/core/UtilsInstalledRoot.test.ts src/sdks/main/core/UtilsQuitApproval.test.ts src/sdks/main/core/WindowsUpdateTask.test.ts && node --test scripts/updater-lifecycle-target.test.mjs",
+			"node scripts/run-bun-test.js src/sdks/main/core/UpdaterPreparation.test.ts src/sdks/main/core/UpdaterStreaming.test.ts src/sdks/main/core/UpdaterResult.test.ts src/sdks/main/core/UtilsInstalledRoot.test.ts src/sdks/main/core/UtilsQuitApproval.test.ts src/sdks/main/core/WindowsUpdateTask.test.ts && node --test scripts/updater-lifecycle-target.test.mjs",
 		"test:updater-lifecycle":
 			"hutch build:release && node scripts/test-updater-lifecycle.mjs",
 		"test:npm-bootstrap":

@@ -24,6 +24,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZIG_VERSION } from "../src/shared/build-dependencies.ts";
 import { assertWindowsBinaryArchitecture } from "./windows-binary-architecture.mjs";
+import { assertRecipeMatchesInstalled } from "./archive-recipe-test-utils.mjs";
 
 if (process.platform !== "win32") {
 	console.log("Windows uninstaller integration: skipped on non-Windows host");
@@ -1060,7 +1061,7 @@ function assertShortcuts(channel) {
 
 function assertInstalled(channel, setup, expectedVersion = version) {
 	const paths = fixturePaths(channel);
-	const retainedTar = join(paths.selfExtraction, setup.hash + ".tar");
+	const recipePath = join(paths.selfExtraction, setup.hash + ".recipe.json");
 	for (const path of [
 		paths.app,
 		paths.appMarker,
@@ -1069,19 +1070,23 @@ function assertInstalled(channel, setup, expectedVersion = version) {
 		paths.manager,
 		paths.manifest,
 		paths.selfExtraction,
-		retainedTar,
+		recipePath,
 	]) {
 		assert.equal(pathExists(path), true, path + " should exist");
 	}
+	assertRecipeMatchesInstalled(recipePath, paths.app, {
+		sha256: sha256File(setup.tarPath),
+		size: statSync(setup.tarPath).size,
+	});
 	assert.equal(
-		sha256File(retainedTar),
-		sha256File(setup.tarPath),
-		"retained updater tar differs from the adjacent installer payload",
+		readdirSync(paths.selfExtraction).some((name) => name.endsWith(".tar")),
+		false,
+		"completed install retained a full updater tar",
 	);
 	assert.equal(
 		readdirSync(paths.selfExtraction).some((name) => name.endsWith(".partial")),
 		false,
-		"completed install retained a partial updater tar",
+		"completed install retained partial updater state",
 	);
 	for (const staleTransactionPath of [
 		paths.app + ".previous",

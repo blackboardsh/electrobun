@@ -1,7 +1,15 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const zstd = std.compress.zstd;
+const archive_recipe = @import("archive_recipe.zig");
+const prepare_update = @import("prepare_update.zig");
 const linux_uninstall_prompt = @import("linux_uninstall_prompt.zig");
+
+test {
+    _ = archive_recipe;
+    _ = prepare_update;
+    _ = @import("stream_patch.zig");
+}
 
 // Initialized at the top of main(). Test-only helpers do not touch these.
 var g_io: std.Io = undefined;
@@ -256,7 +264,10 @@ const ApplyUpdatePlan = struct {
     hash: []const u8,
     channel_root: []const u8,
     app_bundle_path: []const u8,
-    retained_tar_path: []const u8,
+    retained_tar_path: []const u8 = "",
+    staging_path: ?[]const u8 = null,
+    recipe_path: ?[]const u8 = null,
+    recipe_sha256: ?[]const u8 = null,
     parent_pid: u32,
     result_path: []const u8,
 };
@@ -269,7 +280,10 @@ const ApplyUpdatePreparedRecord = struct {
     arch: []const u8,
     version: []const u8,
     hash: []const u8,
-    retained_tar_path: []const u8,
+    retained_tar_path: []const u8 = "",
+    staging_path: ?[]const u8 = null,
+    recipe_path: ?[]const u8 = null,
+    recipe_sha256: ?[]const u8 = null,
 };
 
 const ApplyUpdatePhase = enum {
@@ -1467,41 +1481,18 @@ fn extractAndInstall(
     const exe_path = try std.process.executablePathAlloc(g_io, allocator);
     defer allocator.free(exe_path);
 
-    var decompressed_data: ?[]u8 = null;
-    defer if (decompressed_data) |data| allocator.free(data);
-    var staged_extraction_dir: ?[]u8 = null;
-    defer if (staged_extraction_dir) |path| allocator.free(path);
+    const staged_extraction_dir = try std.fmt.allocPrint(allocator, "{s}.partial", .{self_extraction_dir});
+    defer allocator.free(staged_extraction_dir);
     var staging_published = false;
-    defer if (!staging_published) if (staged_extraction_dir) |path| {
-        std.Io.Dir.cwd().deleteTree(g_io, path) catch {};
+    defer if (!staging_published) {
+        std.Io.Dir.cwd().deleteTree(g_io, staged_extraction_dir) catch {};
     };
-    var working_extraction_dir = self_extraction_dir;
-
-    switch (archive_source) {
-        .memory => |compressed_data| {
-            // Embedded legacy installers retain their existing in-memory path.
-            // Shipped adjacent installers use the bounded file path below.
-            const window_buffer = try allocator.alloc(u8, zstd.default_window_len + zstd.block_size_max);
-            defer allocator.free(window_buffer);
-            var input_reader: std.Io.Reader = .fixed(compressed_data);
-            var decompress: zstd.Decompress = .init(&input_reader, window_buffer, .{ .verify_checksum = false });
-            progress.update(.decompressing, 0, @intCast(compressed_data.len));
-            decompressed_data = try decompress.reader.allocRemaining(allocator, .unlimited);
-            progress.update(.decompressing, @intCast(compressed_data.len), @intCast(compressed_data.len));
-            try extractTarWithProgress(decompressed_data.?, self_extraction_dir, progress);
-        },
-        .file => |archive_path| {
-            const staging_dir = try std.fmt.allocPrint(allocator, "{s}.partial", .{self_extraction_dir});
-            staged_extraction_dir = staging_dir;
-            try resetExtractionDirectory(staging_dir);
-
-            const tar_path = try retainedTarPath(allocator, staging_dir, metadata.hash);
-            defer allocator.free(tar_path);
-            try streamZstdToTar(allocator, archive_path, tar_path, progress);
-            try extractTarFile(tar_path, staging_dir, progress);
-            working_extraction_dir = staging_dir;
-        },
-    }
+    try resetExtractionDirectory(staged_extraction_dir);
+    const working_extraction_dir = staged_extraction_dir;
+    progress.update(.extracting, null, null);
+    // Both embedded and adjacent installers stream directly into a private
+    // stage, retaining only the exact archive recipe outside the app bundle.
+    try extractInstallArchive(allocator, archive_source, staged_extraction_dir, metadata.hash);
     std.debug.print(" Done!\n", .{});
 
     // Now move the extracted app to the app directory
@@ -1547,7 +1538,7 @@ fn extractAndInstall(
 
     // Keep the previous application available until its matching updater state
     // has also been published. This bounds rollback storage to one app version
-    // and avoids leaving a newly copied app paired with the old retained tar
+    // and avoids leaving a newly copied app paired with the old archive recipe
     // when publication fails.
     const previous_app_dir = try std.fmt.allocPrint(allocator, "{s}.previous", .{app_dir});
     defer allocator.free(previous_app_dir);
@@ -1581,60 +1572,9 @@ fn extractAndInstall(
 
     progress.update(.installing_files, null, null);
 
-    // On Windows, we need to create the parent directory first, then copy contents
-    if (builtin.os.tag == .windows) {
-        // Create the app directory and all parent directories
-        std.debug.print("\nDEBUG: Windows directory creation...\n", .{});
-        std.debug.print("DEBUG: Current working directory = {s}\n", .{try std.process.currentPathAlloc(g_io, allocator)});
-        std.debug.print("DEBUG: About to create Windows app directory: '{s}'\n", .{app_dir});
-        std.debug.print("DEBUG: app_dir length = {}\n", .{app_dir.len});
-
-        // Check if parent directory exists
-        if (std.fs.path.dirname(app_dir)) |parent| {
-            std.debug.print("DEBUG: Parent directory = '{s}'\n", .{parent});
-            std.Io.Dir.cwd().access(g_io, parent, .{}) catch |err| {
-                std.debug.print("DEBUG: Parent directory does not exist, will create it. Error: {}\n", .{err});
-            };
-        }
-
-        // Print each character to debug the string
-        std.debug.print("DEBUG: app_dir bytes: ", .{});
-        for (app_dir) |byte| {
-            if (byte >= 32 and byte <= 126) {
-                std.debug.print("'{c}' ", .{byte});
-            } else {
-                std.debug.print("0x{x:02} ", .{byte});
-            }
-        }
-        std.debug.print("\n", .{});
-
-        std.debug.print("DEBUG: Calling createDirPath...\n", .{});
-        std.Io.Dir.cwd().createDirPath(g_io, app_dir) catch |err| {
-            std.debug.print("ERROR: Failed to create app directory '{s}': {}\n", .{ app_dir, err });
-
-            // Try to create parent directory first
-            if (std.fs.path.dirname(app_dir)) |parent| {
-                std.debug.print("DEBUG: Trying to create parent directory first: '{s}'\n", .{parent});
-                std.Io.Dir.cwd().createDirPath(g_io, parent) catch |parent_err| {
-                    std.debug.print("ERROR: Failed to create parent directory: {}\n", .{parent_err});
-                };
-            }
-
-            return err;
-        };
-        std.debug.print("DEBUG: Successfully created app directory\n", .{});
-
-        // Copy contents from extracted path to app directory
-        try copyDirectory(allocator, extracted_app_path, app_dir);
-
-        // Remove the extracted directory after successful copy
-        try std.Io.Dir.cwd().deleteTree(g_io, extracted_app_path);
-    } else {
-        // On Unix systems, rename works across directories
-        std.Io.Dir.cwd().rename(extracted_app_path, std.Io.Dir.cwd(), app_dir, g_io) catch |err| {
-            return err;
-        };
-    }
+    // The stage and installed app share the channel volume. Rename preserves
+    // signed bytes and links without allocating a second extracted app on Windows.
+    try renameCurrentApplyUpdateBundle(extracted_app_path, app_dir);
 
     // Fix executable permissions on extracted binaries
     try fixExecutablePermissions(allocator, app_dir);
@@ -1653,54 +1593,11 @@ fn extractAndInstall(
         try replaceSelfWithLauncher(allocator, exe_path, app_dir);
     }
 
-    // Save tar file for Updater API on Linux and Windows after everything else is done
-    if ((builtin.os.tag == .linux or builtin.os.tag == .windows) and archive_source == .memory) {
-        std.debug.print("\n✓ Saving tar file for Updater API...\n", .{});
-        // Make a defensive copy of the hash to prevent memory corruption
-        const safe_hash = if (archive_source == .memory and metadata.hash != null)
-            try allocator.dupe(u8, metadata.hash.?)
-        else
-            null;
-        defer if (safe_hash != null) allocator.free(safe_hash.?);
-
-        // Save decompressed tar with hash as filename (for Updater API patching)
-        const tar_filename = if (safe_hash) |hash|
-            try std.fmt.allocPrint(allocator, "{s}.tar", .{hash})
-        else
-            "current.tar";
-        defer if (safe_hash != null) allocator.free(tar_filename);
-
-        const tar_path = try std.fs.path.join(allocator, &.{ self_extraction_dir, tar_filename });
-        defer allocator.free(tar_path);
-
-        // Ensure self-extraction directory exists
-        try std.Io.Dir.cwd().createDirPath(g_io, self_extraction_dir);
-
-        std.debug.print("DEBUG: Creating tar file at: {s}\n", .{tar_path});
-        if (archive_source == .memory) {
-            const tar_file = try std.Io.Dir.cwd().createFile(g_io, tar_path, .{});
-            defer tar_file.close(g_io);
-            try tar_file.writeStreamingAll(g_io, decompressed_data.?);
-        }
-        if (decompressed_data) |data| std.debug.print("✓ Saved tar file ({} bytes)\n", .{data.len});
-
-        // List files to confirm they're saved
-        std.debug.print("\nDEBUG: Final files in self-extraction dir:\n", .{});
-        var dir = try std.Io.Dir.cwd().openDir(g_io, self_extraction_dir, .{ .iterate = true });
-        defer dir.close(g_io);
-        var iter = dir.iterate();
-        while (try iter.next(g_io)) |entry| {
-            std.debug.print("  - {s} ({s})\n", .{ entry.name, @tagName(entry.kind) });
-        }
-    }
-
-    // Publish the already-complete adjacent updater state before committing the
+    // Publish the already-complete updater state before committing the
     // app replacement. A publication failure therefore rolls the app back to
-    // the version matching the retained updater tar.
-    if (archive_source == .file) {
-        try publishExtractionState(allocator, staged_extraction_dir.?, self_extraction_dir);
-        staging_published = true;
-    }
+    // the version matching the retained archive recipe.
+    try publishExtractionState(allocator, staged_extraction_dir, self_extraction_dir);
+    staging_published = true;
 
     app_install_committed = true;
     app_rollback_armed = false;
@@ -1725,7 +1622,7 @@ fn extractAndInstall(
     return true;
 }
 
-fn retainedTarPath(
+fn retainedRecipePath(
     allocator: std.mem.Allocator,
     extraction_dir: []const u8,
     hash: ?[]const u8,
@@ -1739,11 +1636,138 @@ fn retainedTarPath(
         }
     }
     const file_name = if (hash) |value|
-        try std.fmt.allocPrint(allocator, "{s}.tar", .{value})
+        try std.fmt.allocPrint(allocator, "{s}.recipe.json", .{value})
     else
-        try allocator.dupe(u8, "current.tar");
+        try allocator.dupe(u8, "current.recipe.json");
     defer allocator.free(file_name);
     return std.fs.path.join(allocator, &.{ extraction_dir, file_name });
+}
+
+fn extractInstallArchive(
+    allocator: std.mem.Allocator,
+    archive_source: InstallArchiveSource,
+    staging_dir: []const u8,
+    hash: ?[]const u8,
+) !void {
+    switch (archive_source) {
+        .memory => |compressed_data| {
+            var reader: std.Io.Reader = .fixed(compressed_data);
+            try extractInstallArchiveReader(allocator, &reader, staging_dir, hash);
+        },
+        .file => |archive_path| {
+            const file = try std.Io.Dir.cwd().openFile(g_io, archive_path, .{ .follow_symlinks = false });
+            defer file.close(g_io);
+            if ((try file.stat(g_io)).kind != .file) return error.InvalidInstaller;
+            var buffer: [64 * 1024]u8 = undefined;
+            var reader = file.reader(g_io, &buffer);
+            try extractInstallArchiveReader(allocator, &reader.interface, staging_dir, hash);
+        },
+    }
+}
+
+fn extractInstallArchiveReader(
+    allocator: std.mem.Allocator,
+    compressed: *std.Io.Reader,
+    staging_dir: []const u8,
+    hash: ?[]const u8,
+) !void {
+    const recipe = @import("archive_recipe.zig");
+    const recipe_path = try retainedRecipePath(allocator, staging_dir, hash);
+    defer allocator.free(recipe_path);
+    var stage = try std.Io.Dir.cwd().openDir(g_io, staging_dir, .{ .follow_symlinks = false });
+    defer stage.close(g_io);
+    if (builtin.os.tag != .windows) try stage.setPermissions(g_io, .fromMode(0o700));
+    const window = try allocator.alloc(u8, zstd.default_window_len + zstd.block_size_max);
+    defer allocator.free(window);
+    // Zig's Zstd checksum verification is unimplemented and panics when enabled.
+    // Match the existing installer decoder; the recipe hashes the extracted tar.
+    var decompress: zstd.Decompress = .init(compressed, window, .{ .verify_checksum = false });
+    var receipt = try recipe.extractReader(allocator, g_io, &decompress.reader, null, stage);
+    defer receipt.deinit();
+
+    const file = try stage.createFile(g_io, std.fs.path.basename(recipe_path), .{
+        .exclusive = true,
+        .permissions = if (builtin.os.tag == .windows) .default_file else .fromMode(0o600),
+    });
+    defer file.close(g_io);
+    var output_buffer: [64 * 1024]u8 = undefined;
+    var output = file.writer(g_io, &output_buffer);
+    try recipe.writeJson(receipt.value, &output.interface);
+    try output.interface.flush();
+    try file.sync(g_io);
+}
+
+fn installerRecipeTestArchive() ![2062]u8 {
+    var archive: [2062]u8 = @splat(0);
+    // A standard checksummed Zstd frame with one raw block holding a 2048-byte tar.
+    @memcpy(archive[0..10], &[_]u8{ 0x28, 0xb5, 0x2f, 0xfd, 0x64, 0x00, 0x07, 0x01, 0x40, 0x00 });
+    const tar = archive[10..2058];
+    @memcpy(tar[0..15], "Example/app.txt");
+    _ = try std.fmt.bufPrint(tar[100..108], "{o:0>7}\x00", .{0o644});
+    _ = try std.fmt.bufPrint(tar[124..136], "{o:0>11}\x00", .{3});
+    @memset(tar[148..156], ' ');
+    tar[156] = '0';
+    @memcpy(tar[257..263], "ustar\x00");
+    var checksum: usize = 0;
+    for (tar[0..512]) |byte| checksum += byte;
+    _ = try std.fmt.bufPrint(tar[148..156], "{o:0>6}\x00 ", .{checksum});
+    @memcpy(tar[512..515], "abc");
+    std.mem.writeInt(u32, archive[2058..2062], @truncate(std.hash.XxHash64.hash(0, tar)), .little);
+    return archive;
+}
+
+test "installer streams embedded and adjacent archives into an exact recipe without retaining tar" {
+    const allocator = std.testing.allocator;
+    g_io = std.testing.io;
+    const recipe = @import("archive_recipe.zig");
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(g_io, ".", allocator);
+    defer allocator.free(root);
+    const archive = try installerRecipeTestArchive();
+    try tmp.dir.writeFile(g_io, .{ .sub_path = "installer.tar.zst", .data = &archive });
+    const archive_path = try std.fs.path.join(allocator, &.{ root, "installer.tar.zst" });
+    defer allocator.free(archive_path);
+    for ([_]bool{ true, false }) |embedded| {
+        const stage_name = if (embedded) "embedded" else "adjacent";
+        try tmp.dir.createDir(g_io, stage_name, .default_dir);
+        const stage_path = try std.fs.path.join(allocator, &.{ root, stage_name });
+        defer allocator.free(stage_path);
+        try extractInstallArchive(allocator, if (embedded) .{ .memory = &archive } else .{ .file = archive_path }, stage_path, "release-hash");
+        var stage = try tmp.dir.openDir(g_io, stage_name, .{ .iterate = true });
+        defer stage.close(g_io);
+        const json = try stage.readFileAlloc(g_io, "release-hash.recipe.json", allocator, .limited(recipe.max_recipe_bytes));
+        defer allocator.free(json);
+        var receipt = try recipe.parse(allocator, json);
+        defer receipt.deinit();
+        var installed = try stage.openDir(g_io, "Example", .{ .follow_symlinks = false });
+        defer installed.close(g_io);
+        var reconstructed: std.Io.Writer.Allocating = .init(allocator);
+        defer reconstructed.deinit();
+        try recipe.reconstruct(allocator, g_io, receipt.value, installed, &reconstructed.writer);
+        try std.testing.expectEqualSlices(u8, archive[10..2058], reconstructed.written());
+        var iterator = stage.iterate();
+        var count: usize = 0;
+        while (try iterator.next(g_io)) |entry| {
+            try std.testing.expect(std.mem.eql(u8, entry.name, "Example") or std.mem.eql(u8, entry.name, "release-hash.recipe.json"));
+            count += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 2), count);
+    }
+}
+
+test "installer does not retain a recipe for a truncated compressed archive" {
+    const allocator = std.testing.allocator;
+    g_io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(g_io, ".", allocator);
+    defer allocator.free(root);
+    const archive = try installerRecipeTestArchive();
+    if (extractInstallArchive(allocator, .{ .memory = archive[0 .. archive.len - 1] }, root, "release-hash")) |_| {
+        return error.TestExpectedError;
+    } else |_| {}
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(g_io, "release-hash.recipe.json", .{}));
 }
 
 fn resetExtractionDirectory(extract_dir: []const u8) !void {
@@ -6601,13 +6625,46 @@ fn validateApplyUpdateHelper(
     return executable_path;
 }
 
+fn applyUpdatePayloadPath(plan: ApplyUpdatePlan) ![]const u8 {
+    if (plan.schema_version == 1) {
+        if (plan.staging_path != null or plan.recipe_path != null or plan.recipe_sha256 != null or plan.retained_tar_path.len == 0)
+            return error.InvalidUpdatePlan;
+        return plan.retained_tar_path;
+    }
+    if (plan.schema_version != 2 or plan.retained_tar_path.len != 0 or plan.staging_path == null)
+        return error.InvalidUpdatePlan;
+    if (!archive_recipe.isDigest(plan.recipe_sha256 orelse return error.InvalidUpdatePlan)) return error.InvalidUpdatePlan;
+    return plan.recipe_path orelse error.InvalidUpdatePlan;
+}
+
+fn verifyPreparedUpdateTree(allocator: std.mem.Allocator, plan: ApplyUpdatePlan, staged_bundle: []const u8) !void {
+    const path = plan.recipe_path orelse return error.InvalidUpdatePlan;
+    const file = try std.Io.Dir.openFileAbsolute(g_io, path, .{ .follow_symlinks = false });
+    defer file.close(g_io);
+    if ((try file.stat(g_io)).kind != .file) return error.InvalidUpdatePath;
+    var buffer: [4096]u8 = undefined;
+    var reader = file.reader(g_io, &buffer);
+    const contents = try reader.interface.allocRemaining(allocator, .limited(archive_recipe.max_recipe_bytes));
+    defer allocator.free(contents);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(contents, &digest, .{});
+    if (!std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), plan.recipe_sha256 orelse return error.InvalidUpdatePlan))
+        return error.UpdateRecipeHashMismatch;
+    var recipe = try archive_recipe.parse(allocator, contents);
+    defer recipe.deinit();
+    if (!std.mem.eql(u8, recipe.value.root, std.fs.path.basename(staged_bundle))) return error.InvalidUpdateIdentity;
+    var bundle = try std.Io.Dir.openDirAbsolute(g_io, staged_bundle, .{ .follow_symlinks = false, .iterate = true });
+    defer bundle.close(g_io);
+    try archive_recipe.verifyTree(allocator, g_io, recipe.value, bundle);
+}
+
 fn validateApplyUpdatePlanAndPaths(
     allocator: std.mem.Allocator,
     plan_path: []const u8,
     plan: ApplyUpdatePlan,
     progress: *ApplyUpdateValidationProgress,
 ) !ValidatedApplyUpdateContext {
-    if (plan.schema_version != APPLY_UPDATE_PLAN_SCHEMA_VERSION or
+    if ((plan.schema_version != APPLY_UPDATE_PLAN_SCHEMA_VERSION and plan.schema_version != 2) or
         !isApplyUpdateTransactionId(plan.transaction_id) or
         !isBuildChannel(plan.channel) or
         !std.mem.eql(u8, plan.platform, expectedApplyUpdatePlatform()) or
@@ -6699,15 +6756,27 @@ fn validateApplyUpdatePlanAndPaths(
         &.{ plan.channel_root, "self-extraction" },
     );
     defer allocator.free(extraction_dir);
-    const tar_name = try std.fmt.allocPrint(allocator, "{s}.tar", .{plan.hash});
+    const tar_name = try std.fmt.allocPrint(allocator, "{s}{s}", .{ plan.hash, if (plan.schema_version == 2) ".recipe.json" else ".tar" });
     defer allocator.free(tar_name);
     const expected_tar_path = try std.fs.path.join(allocator, &.{ extraction_dir, tar_name });
     defer allocator.free(expected_tar_path);
-    try requireResolvedApplyUpdatePath(allocator, plan.retained_tar_path);
-    if (!std.mem.eql(u8, std.fs.path.basename(plan.retained_tar_path), tar_name) or
-        !try applyUpdatePathsEqual(allocator, plan.retained_tar_path, expected_tar_path))
+    const payload_path = try applyUpdatePayloadPath(plan);
+    try requireResolvedApplyUpdatePath(allocator, payload_path);
+    if (!std.mem.eql(u8, std.fs.path.basename(payload_path), tar_name) or
+        !try applyUpdatePathsEqual(allocator, payload_path, expected_tar_path))
     {
         return error.InvalidUpdatePath;
+    }
+    if (plan.schema_version == 2) {
+        const staging_path = plan.staging_path orelse return error.InvalidUpdatePlan;
+        const expected_stage = try std.fmt.allocPrint(allocator, "{s}.prepared-{s}", .{ plan.app_bundle_path, plan.hash });
+        defer allocator.free(expected_stage);
+        try requireResolvedApplyUpdatePath(allocator, staging_path);
+        if (!try applyUpdatePathsEqual(allocator, staging_path, expected_stage)) return error.InvalidUpdatePath;
+        const parent = std.fs.path.dirname(plan.app_bundle_path) orelse return error.InvalidUpdatePath;
+        try requirePhysicalApplyUpdateChild(allocator, parent, staging_path, .directory);
+        if (!applyUpdatePreparedStateMatchesPlan(allocator, extraction_dir, APPLY_UPDATE_PREPARED_FILE, plan))
+            return error.InvalidPreparedUpdate;
     }
 
     var display_name: []u8 = undefined;
@@ -6845,7 +6914,7 @@ fn validateApplyUpdatePlanAndPaths(
     try requirePhysicalApplyUpdateChild(
         allocator,
         extraction_dir,
-        plan.retained_tar_path,
+        payload_path,
         .file,
     );
     try requireResolvedApplyUpdatePath(allocator, plan.app_bundle_path);
@@ -6869,7 +6938,7 @@ fn validateApplyUpdateRecoveryTarget(
     allocator: std.mem.Allocator,
     plan: ApplyUpdatePlan,
 ) !void {
-    if (plan.schema_version != APPLY_UPDATE_PLAN_SCHEMA_VERSION or
+    if ((plan.schema_version != APPLY_UPDATE_PLAN_SCHEMA_VERSION and plan.schema_version != 2) or
         !isApplyUpdateTransactionId(plan.transaction_id) or
         !std.mem.eql(u8, plan.platform, expectedApplyUpdatePlatform()) or
         !std.mem.eql(u8, plan.arch, expectedApplyUpdateArch()) or
@@ -7332,11 +7401,10 @@ fn performApplyUpdateTransaction(
         .directory,
     );
 
-    const staging_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}.update-{s}",
-        .{ plan.app_bundle_path, plan.transaction_id },
-    );
+    const staging_path = if (plan.schema_version == 2)
+        try allocator.dupe(u8, plan.staging_path orelse return error.InvalidUpdatePlan)
+    else
+        try std.fmt.allocPrint(allocator, "{s}.update-{s}", .{ plan.app_bundle_path, plan.transaction_id });
     defer allocator.free(staging_path);
     const previous_path = try std.fmt.allocPrint(
         allocator,
@@ -7345,14 +7413,19 @@ fn performApplyUpdateTransaction(
     );
     errdefer allocator.free(previous_path);
 
-    try removePlainApplyUpdateDirectoryIfPresent(staging_path);
-    try std.Io.Dir.createDirAbsolute(g_io, staging_path, .default_dir);
+    if (plan.schema_version == 1) {
+        try removePlainApplyUpdateDirectoryIfPresent(staging_path);
+        try std.Io.Dir.createDirAbsolute(g_io, staging_path, .default_dir);
+    }
     defer removePlainApplyUpdateDirectoryIfPresent(staging_path) catch {};
 
     phase.* = .extracting;
-    try extractTarFileQuiet(plan.retained_tar_path, staging_path);
+    if (plan.schema_version == 1) try extractTarFileQuiet(plan.retained_tar_path, staging_path);
     const staged_bundle = try findSingleApplyUpdateBundle(allocator, staging_path);
     defer allocator.free(staged_bundle);
+    // Prepared trees are mutable filesystem state. Recheck contents and links
+    // immediately before the swap, without allocating or writing another tar.
+    if (plan.schema_version == 2) try verifyPreparedUpdateTree(allocator, plan, staged_bundle);
 
     if (builtin.os.tag != .windows) try fixExecutablePermissions(allocator, staged_bundle);
     if (builtin.os.tag == .linux) try fixCefSymlinks(allocator, staged_bundle);
@@ -7611,14 +7684,20 @@ fn applyUpdatePreparedStateMatchesPlan(
         .{ .ignore_unknown_fields = true },
     ) catch return false;
     defer parsed.deinit();
-    return parsed.value.schema_version == 1 and
+    return parsed.value.schema_version == plan.schema_version and
         std.mem.eql(u8, parsed.value.identifier, plan.identifier) and
         std.mem.eql(u8, parsed.value.channel, plan.channel) and
         std.mem.eql(u8, parsed.value.platform, plan.platform) and
         std.mem.eql(u8, parsed.value.arch, plan.arch) and
         std.mem.eql(u8, parsed.value.version, plan.version) and
         std.mem.eql(u8, parsed.value.hash, plan.hash) and
-        std.mem.eql(u8, parsed.value.retained_tar_path, plan.retained_tar_path);
+        std.mem.eql(u8, parsed.value.retained_tar_path, plan.retained_tar_path) and
+        ((parsed.value.staging_path == null) == (plan.staging_path == null)) and
+        (if (plan.staging_path) |stage| std.mem.eql(u8, parsed.value.staging_path.?, stage) else true) and
+        ((parsed.value.recipe_path == null) == (plan.recipe_path == null)) and
+        (if (plan.recipe_path) |recipe| std.mem.eql(u8, parsed.value.recipe_path.?, recipe) else true) and
+        ((parsed.value.recipe_sha256 == null) == (plan.recipe_sha256 == null)) and
+        (if (plan.recipe_sha256) |digest| std.mem.eql(u8, parsed.value.recipe_sha256.?, digest) else true);
 }
 
 fn cleanupInvalidApplyUpdatePayloadState(
@@ -7627,9 +7706,10 @@ fn cleanupInvalidApplyUpdatePayloadState(
     phase: ApplyUpdatePhase,
 ) !void {
     if (!shouldInvalidateApplyUpdatePayload(phase)) return;
-    const extraction_path = std.fs.path.dirname(plan.retained_tar_path) orelse
+    const payload_path = try applyUpdatePayloadPath(plan);
+    const extraction_path = std.fs.path.dirname(payload_path) orelse
         return error.InvalidUpdatePath;
-    const retained_tar_name = std.fs.path.basename(plan.retained_tar_path);
+    const retained_tar_name = std.fs.path.basename(payload_path);
     var extraction_dir = try std.Io.Dir.openDirAbsolute(g_io, extraction_path, .{
         .follow_symlinks = false,
         .iterate = true,
@@ -7657,6 +7737,7 @@ fn shouldRemoveCommittedUpdateState(name: []const u8, retained_tar_name: []const
     if (std.mem.eql(u8, name, APPLY_UPDATE_PREPARED_FILE) or
         std.mem.startsWith(u8, name, APPLY_UPDATE_PREPARED_FILE ++ ".")) return true;
     return std.mem.endsWith(u8, name, ".tar") or
+        std.mem.endsWith(u8, name, ".recipe.json") or
         std.mem.endsWith(u8, name, ".tar.previous") or
         std.mem.endsWith(u8, name, ".tar.zst") or
         std.mem.endsWith(u8, name, ".partial");
@@ -7666,9 +7747,10 @@ fn cleanupCommittedApplyUpdateState(
     allocator: std.mem.Allocator,
     plan: ApplyUpdatePlan,
 ) !void {
-    const extraction_path = std.fs.path.dirname(plan.retained_tar_path) orelse
+    const payload_path = try applyUpdatePayloadPath(plan);
+    const extraction_path = std.fs.path.dirname(payload_path) orelse
         return error.InvalidUpdatePath;
-    const retained_tar_name = std.fs.path.basename(plan.retained_tar_path);
+    const retained_tar_name = std.fs.path.basename(payload_path);
     var extraction_dir = try std.Io.Dir.openDirAbsolute(g_io, extraction_path, .{
         .follow_symlinks = false,
         .iterate = true,
@@ -7788,13 +7870,21 @@ fn runApplyUpdateManager(
     defer commit.deinit(allocator);
 
     phase = .complete;
-    try publishApplyUpdateResult(allocator, plan, true, phase, "Update applied successfully.");
+    var result_published = true;
+    publishApplyUpdateResult(allocator, plan, true, phase, "Update applied successfully.") catch |err| {
+        // The app has already launched. A full disk must not prevent releasing
+        // its previous bundle and obsolete state, which may free the space
+        // needed to record success.
+        result_published = false;
+        std.debug.print("Warning: Will retry update result publication after cleanup: {}\n", .{err});
+    };
     cleanupCommittedApplyUpdateState(allocator, plan) catch |err| {
         std.debug.print("Warning: Could not clean stale committed update state: {}\n", .{err});
     };
     removePlainApplyUpdateDirectoryIfPresent(commit.previous_path) catch |err| {
         std.debug.print("Warning: Could not remove previous application after update: {}\n", .{err});
     };
+    if (!result_published) try publishApplyUpdateResult(allocator, plan, true, phase, "Update applied successfully.");
 }
 
 /// Electrobun v1 updaters replace only the application bundle. The first v2
@@ -7976,6 +8066,13 @@ pub fn main(init: std.process.Init) !void {
         defer args.deinit();
         _ = args.next() orelse return error.InvalidArguments;
         if (args.next()) |first_arg| {
+            if (std.mem.eql(u8, first_arg, "--prepare-update")) {
+                const request_path = args.next() orelse return error.InvalidArguments;
+                const quiet = args.next() orelse return error.InvalidArguments;
+                if (!std.mem.eql(u8, quiet, "--quiet") or args.next() != null) return error.InvalidArguments;
+                try prepare_update.run(allocator, g_io, g_environ_map, request_path);
+                return;
+            }
             if (std.mem.eql(u8, first_arg, "--apply-update")) {
                 const plan_path = args.next() orelse return error.InvalidArguments;
                 const quiet = args.next() orelse return error.InvalidArguments;
@@ -8228,24 +8325,14 @@ pub fn main(init: std.process.Init) !void {
         std.Io.Dir.cwd().deleteTree(g_io, SELF_EXTRACTION_STAGING_PATH) catch {};
     };
 
-    // compressedTarballPath replace extension
-    // remove the .zst extension from filename.tar.zst
-    const tarFileName = std.fs.path.stem(compressedTarballPath);
-
-    const tarPath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_STAGING_PATH, tarFileName });
-    defer allocator.free(tarPath);
-    std.debug.print("tarPath: {s}\n", .{tarPath});
-    try streamZstdToTar(allocator, compressedTarballPath, tarPath, &macos_progress);
-
-    const decompress_done = std.Io.Clock.now(.awake, g_io);
-    std.debug.print("Time taken to decompress: {} ns\n", .{startTime.durationTo(decompress_done).toNanoseconds()});
-
-    startTime = decompress_done;
-
-    try extractTarFile(tarPath, SELF_EXTRACTION_STAGING_PATH, &macos_progress);
+    // Decompress directly into the private stage and record the exact archive
+    // recipe there. No full uncompressed archive is retained beside the app.
+    macos_progress.update(.extracting, null, null);
+    try extractInstallArchive(allocator, .{ .file = compressedTarballPath }, SELF_EXTRACTION_STAGING_PATH, hashName);
 
     const untar_done = std.Io.Clock.now(.awake, g_io);
-    std.debug.print("Time taken to untar: {} ns\n", .{startTime.durationTo(untar_done).toNanoseconds()});
+    std.debug.print("Time taken to decompress and extract: {} ns\n", .{startTime.durationTo(untar_done).toNanoseconds()});
+    startTime = untar_done;
 
     const bundleBaseName = if (isStableChannel(channelName))
         appDisplayName
@@ -8269,10 +8356,6 @@ pub fn main(init: std.process.Init) !void {
     //     if (std.mem.eql(u8, std.fs.path.extension(entryName), ".app")) {
     const newBundlePath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_STAGING_PATH, bundleFileName });
     defer allocator.free(newBundlePath);
-
-    // todo
-    // rename the tar file to its hash so we can update it later
-    // const hash = "";
 
     // todo: get the basename of the newBundlePath and join a new path with it
     // in case the name changed.
@@ -9854,6 +9937,116 @@ test "successful update cleanup preserves the committed retained tar" {
         error.FileNotFound,
         tmp.dir.access(std.testing.io, "self-extraction/download.partial", .{}),
     );
+}
+
+test "recipe update plans cannot mix retained archives and staged trees" {
+    var plan: ApplyUpdatePlan = .{
+        .schema_version = 2,
+        .transaction_id = "0123456789abcdef0123456789abcdef",
+        .identifier = "dev.example.application",
+        .channel = "stable",
+        .platform = expectedApplyUpdatePlatform(),
+        .arch = expectedApplyUpdateArch(),
+        .version = "2.0.0",
+        .hash = "newhash",
+        .channel_root = "/profile/stable",
+        .app_bundle_path = "/application",
+        .staging_path = "/application.prepared-newhash",
+        .recipe_path = "/profile/stable/self-extraction/newhash.recipe.json",
+        .recipe_sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+        .parent_pid = 1,
+        .result_path = "/result",
+    };
+    try std.testing.expectEqualStrings(plan.recipe_path.?, try applyUpdatePayloadPath(plan));
+    plan.retained_tar_path = "/profile/stable/self-extraction/newhash.tar";
+    try std.testing.expectError(error.InvalidUpdatePlan, applyUpdatePayloadPath(plan));
+    plan.retained_tar_path = "";
+    plan.staging_path = null;
+    try std.testing.expectError(error.InvalidUpdatePlan, applyUpdatePayloadPath(plan));
+    plan.schema_version = 1;
+    plan.retained_tar_path = "/profile/stable/self-extraction/newhash.tar";
+    try std.testing.expectError(error.InvalidUpdatePlan, applyUpdatePayloadPath(plan));
+    plan.recipe_path = null;
+    plan.recipe_sha256 = null;
+    try std.testing.expectEqualStrings(plan.retained_tar_path, try applyUpdatePayloadPath(plan));
+}
+
+test "committed recipe update retains only new recipe and removes legacy archives" {
+    g_io = std.testing.io;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(g_io, "self-extraction", .default_dir);
+    for ([_][]const u8{ "newhash.recipe.json", "oldhash.recipe.json", "oldhash.tar", "newhash.tar", "download.tar.zst", ".electrobun-prepared-update.json", "unrelated.json" }) |name| {
+        const path = try std.fs.path.join(allocator, &.{ "self-extraction", name });
+        defer allocator.free(path);
+        try tmp.dir.writeFile(g_io, .{ .sub_path = path, .data = "fixture" });
+    }
+    const root = try tmp.dir.realPathFileAlloc(g_io, ".", allocator);
+    defer allocator.free(root);
+    const recipe_path = try std.fs.path.join(allocator, &.{ root, "self-extraction", "newhash.recipe.json" });
+    defer allocator.free(recipe_path);
+    const plan: ApplyUpdatePlan = .{
+        .schema_version = 2,
+        .transaction_id = "0123456789abcdef0123456789abcdef",
+        .identifier = "dev.example.application",
+        .channel = "stable",
+        .platform = expectedApplyUpdatePlatform(),
+        .arch = expectedApplyUpdateArch(),
+        .version = "2.0.0",
+        .hash = "newhash",
+        .channel_root = root,
+        .app_bundle_path = root,
+        .staging_path = root,
+        .recipe_path = recipe_path,
+        .recipe_sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+        .parent_pid = 1,
+        .result_path = root,
+    };
+    try cleanupCommittedApplyUpdateState(allocator, plan);
+    try tmp.dir.access(g_io, "self-extraction/newhash.recipe.json", .{});
+    try tmp.dir.access(g_io, "self-extraction/unrelated.json", .{});
+    for ([_][]const u8{ "oldhash.recipe.json", "oldhash.tar", "newhash.tar", "download.tar.zst", ".electrobun-prepared-update.json" }) |name| {
+        const path = try std.fs.path.join(allocator, &.{ "self-extraction", name });
+        defer allocator.free(path);
+        try std.testing.expectError(error.FileNotFound, tmp.dir.access(g_io, path, .{}));
+    }
+}
+
+test "staged update rejects recipe edits before interpreting filesystem mappings" {
+    g_io = std.testing.io;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const original = "{\"archive_sha256\":\"unchanged\",\"entries\":[]}";
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(original, &digest, .{});
+    const expected = std.fmt.bytesToHex(digest, .lower);
+    try tmp.dir.writeFile(g_io, .{ .sub_path = "recipe.json", .data = "{\"archive_sha256\":\"unchanged\",\"entries\":[{\"path\":\"other\"}]}" });
+    const root = try tmp.dir.realPathFileAlloc(g_io, ".", allocator);
+    defer allocator.free(root);
+    const recipe_path = try std.fs.path.join(allocator, &.{ root, "recipe.json" });
+    defer allocator.free(recipe_path);
+    const plan: ApplyUpdatePlan = .{
+        .schema_version = 2,
+        .transaction_id = "0123456789abcdef0123456789abcdef",
+        .identifier = "dev.example.application",
+        .channel = "stable",
+        .platform = expectedApplyUpdatePlatform(),
+        .arch = expectedApplyUpdateArch(),
+        .version = "2.0.0",
+        .hash = "newhash",
+        .channel_root = root,
+        .app_bundle_path = root,
+        .staging_path = root,
+        .recipe_path = recipe_path,
+        .recipe_sha256 = &expected,
+        .parent_pid = 1,
+        .result_path = root,
+    };
+    try std.testing.expectError(error.UpdateRecipeHashMismatch, verifyPreparedUpdateTree(allocator, plan, root));
+    // Rejection occurs before opening or modifying any bundle paths.
+    try tmp.dir.access(g_io, "recipe.json", .{});
 }
 
 test "invalid payload cleanup removes only the failed hash and matching prepared state" {

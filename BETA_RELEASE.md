@@ -28,7 +28,8 @@ It builds the package and every Kitchen main-process backend (Cottontail, Bun,
 Zig, Rust, Go, Odin) against both the system webview (without bundled CEF) and
 CEF, then runs each variant's automated suite one at a time. It then runs
 `test:unit` (unit tests plus the desktop-only native tests), Kitchen's
-`test:tooling`, the complete install/update/uninstall lifecycle, and finally
+`test:tooling`, the complete install/update/uninstall lifecycle, the native
+updater's archive/patch/HTTP tests, and finally
 `check:release`. Every stage
 runs even if an earlier stage fails (Kitchen launches are skipped, and
 reported, only when the build stage failed, so stale builds are never tested);
@@ -44,13 +45,25 @@ that request so system-only builds exercise Electrobun's CEF-to-system fallback.
 Only tests whose stated purpose and assertions require actual CEF are skipped
 when CEF is not bundled.
 
-The updater lifecycle is intentionally a local desktop-VM test and does not run
-as part of `check:release`, the `push:*` tasks, or release CI. When working on
+Release CI runs the updater lifecycle through `test:vm` on macOS, Windows, and
+Linux, on both x64 and ARM64. The release job depends on that entire matrix, so
+a lifecycle failure blocks publication. The local `check:release` and `push:*`
+preflight checks do not run the full lifecycle themselves. When working on
 installer, updater, or uninstaller code, run `hutch test:updater-lifecycle` from
-`package/`. It builds four releases, installs the first, verifies an app two
-versions behind follows a two-patch chain, verifies the next update falls back
-to the full archive when its patch returns `404`, and then uninstalls. It uses
+`package/` to exercise it locally. It builds four releases, installs the first,
+verifies an app two
+versions behind follows a two-patch chain using the v2 integrity manifest when
+the pinned Hutch emits one, then serves the next update with only its legacy
+manifest and no patch. That verifies both `404`-to-legacy manifest negotiation
+and full-archive fallback before uninstalling. It uses
 real native UI and may display installer or uninstaller windows while running.
+
+The lifecycle restores a retained tar and removes the standalone manager and
+uninstall manifest to test migration from an older installation layout. The
+app still runs the current updater; this simulation does not verify an actual
+released old updater binary. Before promoting the streaming updater to stable,
+test a real previously released installation updating to the beta, followed by
+another update with the new updater, on each supported operating system.
 
 Before the first 2.0 release, also smoke-test one real v1.18.1 installation
 updating to the 2.0 release candidate. Keep `app.name`, `app.identifier`, and

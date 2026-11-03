@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 
 import { systemTarBinary } from "./windows-tar.mjs";
 import { updaterLifecycleBuildTarget, updaterLifecycleHutchBinary } from "./updater-lifecycle-target.mjs";
+import { assertRecipeMatchesInstalled, readCompressedTarIdentity } from "./archive-recipe-test-utils.mjs";
 
 const FOCUSES = new Set(["build", "install", "update", "uninstall", "full"]);
 const INITIAL_VERSION = "1.0.0";
@@ -524,13 +525,21 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 	const releasePrefix = `${CHANNEL}-${platform.updatePlatform}-${platform.updateArch}`;
 	const installerPrefix = `${platform.updatePlatform}-${platform.updateArch}-`;
 	const updatePath = join(root, `${releasePrefix}-update.json`);
+	const updateV2Candidate = join(root, `${releasePrefix}-update-v2.json`);
+	const updateV2Path = pathExists(updateV2Candidate) ? updateV2Candidate : undefined;
 	assert.equal(pathExists(updatePath), true, `${label} stable update metadata`);
 	assert.deepEqual(
 		new Set(names.filter((name) => name.endsWith("-update.json"))),
 		new Set([basename(updatePath)]),
 		`${label} update metadata names`,
 	);
+	assert.deepEqual(
+		new Set(names.filter((name) => name.endsWith("-update-v2.json"))),
+		new Set(updateV2Path ? [basename(updateV2Path)] : []),
+		`${label} streaming update metadata names`,
+	);
 	const metadata = readJson(updatePath);
+	const streamingMetadata = updateV2Path ? readJson(updateV2Path) : undefined;
 	assert.equal(
 		basename(metadata.artifact?.file || ""),
 		metadata.artifact?.file,
@@ -538,6 +547,14 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 	);
 	const archivePath = join(root, metadata.artifact.file);
 	assert.equal(pathExists(archivePath), true, `${label} full update archive`);
+	const tarIdentity = await readCompressedTarIdentity(archivePath);
+	if (streamingMetadata) {
+		const { tarSha256, tarSize, ...legacyArtifact } = streamingMetadata.artifact;
+		assert.deepEqual({ ...streamingMetadata, artifact: legacyArtifact }, metadata, `${label} manifest generations disagree`);
+		assert.match(tarSha256, /^[0-9a-f]{64}$/, `${label} exact tar digest`);
+		assert.equal(Number.isSafeInteger(tarSize) && tarSize > 0, true, `${label} exact tar size`);
+		assert.deepEqual({ sha256: tarSha256, size: tarSize }, tarIdentity, `${label} manifest integrity differs from CI archive`);
+	}
 	const installerPath = exactlyOne(
 		names.filter((name) => platform.isInstaller(name)).map((name) => join(root, name)),
 		`${label} installer`,
@@ -597,10 +614,13 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 	return {
 		root,
 		updatePath,
+		updateV2Path,
 		archivePath,
 		patchPath,
 		installerPath,
 		metadata,
+		streamingMetadata,
+		tarIdentity,
 	};
 }
 
@@ -615,6 +635,12 @@ function publishRelease(release, options = {}) {
 		copyFileSync(release.patchPath, join(serverRoot, basename(release.patchPath)));
 	}
 	copyFileSync(release.updatePath, join(serverRoot, basename(release.updatePath)));
+	if (release.updateV2Path) {
+		copyFileSync(release.updateV2Path, join(serverRoot, basename(release.updateV2Path)));
+	} else {
+		// A legacy-only release must not accidentally advertise a stale v2 target.
+		rmSync(join(serverRoot, basename(release.updatePath).replace(/-update\.json$/, "-update-v2.json")), { force: true });
+	}
 }
 
 async function startReleaseServer() {
@@ -676,12 +702,18 @@ function assertInstalledIdentity(expected) {
 	assert.equal(actual.hash, expected.metadata.hash);
 	assert.equal(actual.name, artifactAppName, "installed artifact name");
 	assert.equal(actual.displayName, appName, "installed display name");
-	const retainedTar = join(
+	const recipePath = join(
 		channelRoot,
 		"self-extraction",
-		`${expected.metadata.hash}.tar`,
+		`${expected.metadata.hash}.recipe.json`,
 	);
-	assert.equal(pathExists(retainedTar), true, `retained updater tar missing: ${retainedTar}`);
+	assert.equal(pathExists(recipePath), true, `updater archive recipe missing: ${recipePath}`);
+	assertRecipeMatchesInstalled(recipePath, appBundlePath, expected.tarIdentity);
+	assert.equal(
+		readdirSync(join(channelRoot, "self-extraction")).some((name) => name.endsWith(".tar")),
+		false,
+		"completed installation retained a full updater tar",
+	);
 	const manager = platform.uninstallerPath(channelRoot);
 	const manifestPath = join(channelRoot, ".electrobun-uninstall.json");
 	assert.equal(pathExists(manager), true, `installed uninstaller missing: ${manager}`);
@@ -692,14 +724,14 @@ function assertInstalledIdentity(expected) {
 	if (platform.uninstallManifestHasVersion) {
 		assert.equal(manifest.version, expected.metadata.version);
 	}
-	return { actual, retainedTar, manager, manifestPath, manifest };
+	return { actual, recipePath, manager, manifestPath, manifest };
 }
 
 function bundledUninstallerPath() {
 	return platform.bundledUninstallerPath(appBundlePath);
 }
 
-async function simulateV1InstallLayout() {
+async function simulateV1InstallLayout(release) {
 	assert.equal(pathExists(channelRoot), true, "installed v1 stable root is missing");
 	const manager = platform.uninstallerPath(channelRoot);
 	const manifest = join(channelRoot, ".electrobun-uninstall.json");
@@ -707,6 +739,16 @@ async function simulateV1InstallLayout() {
 	assert.equal(pathExists(bundled), true, `bundled update helper missing: ${bundled}`);
 	assert.equal(pathExists(manager), true, `standalone manager missing: ${manager}`);
 	assert.equal(pathExists(manifest), true, `uninstall manifest missing: ${manifest}`);
+	// Older installations retained the original CI tar rather than a recipe.
+	// Exercise conversion using the real release archive, not a re-tar of the
+	// installed tree whose headers may already differ from the patch baseline.
+	const extraction = join(channelRoot, "self-extraction");
+	const legacyTar = join(extraction, `${release.metadata.hash}.tar`);
+	await run(join(devkitRoot, `zig-zstd${executableSuffix}`), [
+		"decompress", "-i", release.archivePath, "-o", legacyTar, "--no-timing",
+	], { label: "prepare legacy retained-tar migration" });
+	assert.equal(statSync(legacyTar).size, release.tarIdentity.size);
+	rmSync(join(extraction, `${release.metadata.hash}.recipe.json`));
 	// Electrobun v1 used the same stable root and updater protocol, but it did not
 	// install the standalone v2 manager/manifest pair. Removing those two files
 	// exercises the first-v2-runtime launcher bootstrap without inventing a
@@ -855,9 +897,9 @@ async function verifySuccessfulUpdate({
 		toRelease,
 	);
 	assert.equal(
-		pathExists(join(channelRoot, "self-extraction", `${fromRelease.metadata.hash}.tar`)),
+		pathExists(join(channelRoot, "self-extraction", `${fromRelease.metadata.hash}.recipe.json`)),
 		false,
-		"the previous retained tar survived a committed update",
+		"the previous archive recipe survived a committed update",
 	);
 	for (const stale of [
 		"self-extraction.partial",
@@ -877,7 +919,7 @@ async function verifySuccessfulUpdate({
 	}
 
 	const phaseRequests = requests.slice(requestStart);
-	const updateName = `/${basename(toRelease.updatePath)}`;
+	const updateName = `/${basename(toRelease.updateV2Path || toRelease.updatePath)}`;
 	const archiveName = `/${basename(toRelease.archivePath)}`;
 	const metadataRequest = phaseRequests.findIndex(
 		(request) =>
@@ -885,6 +927,13 @@ async function verifySuccessfulUpdate({
 			request.status === 200,
 	);
 	assert.notEqual(metadataRequest, -1, `updater never fetched ${updateName}`);
+	if (!toRelease.updateV2Path) {
+		const attemptedV2Name = updateName.replace(/-update\.json$/, "-update-v2.json");
+		const missingV2Request = phaseRequests.findIndex(
+			(request) => request.pathname === attemptedV2Name && request.status === 404,
+		);
+		assert.ok(missingV2Request >= 0 && missingV2Request < metadataRequest, "legacy manifest must follow an unavailable v2 manifest");
+	}
 	assert.equal(
 		phaseRequests.every(
 			(request) => !request.search.toLowerCase().includes("sha256"),
@@ -912,7 +961,7 @@ async function verifySuccessfulUpdate({
 			.filter(
 				({ request }) =>
 					request.pathname === patchName &&
-					request.search === "" &&
+					/^\?cache=[0-9a-f]{32}$/.test(request.search) &&
 					request.status === expectedStatus,
 			);
 		assert.equal(
@@ -967,66 +1016,17 @@ async function verifySuccessfulUpdate({
 					{ event: "user-data-seeded", version: sourceVersion },
 				]
 			: [{ event: "source-data-preserved", version: sourceVersion }];
-	const expectedStatuses = [
-		{ event: "updater-status", version: sourceVersion, status: "checking-local-tar" },
-		{ event: "updater-status", version: sourceVersion, status: "local-tar-found" },
-	];
-	if (expectedDownloadPath === "patch") {
-		for (const [index, patchRelease] of patchReleases.entries()) {
-			const source = index === 0 ? fromRelease : patchReleases[index - 1];
-			expectedStatuses.push(
-				{ event: "updater-status", version: sourceVersion, status: "fetching-patch" },
-				{ event: "updater-status", version: sourceVersion, status: "patch-found" },
-				{ event: "updater-status", version: sourceVersion, status: "downloading-patch" },
-				{ event: "updater-status", version: sourceVersion, status: "applying-patch" },
-				{
-					event: "updater-status",
-					version: sourceVersion,
-					status: "patch-applied",
-					verify: (entry) =>
-						entry.details?.details?.patchNumber === index + 1 &&
-						entry.details?.details?.totalPatchesApplied === index + 1 &&
-						entry.details?.details?.fromHash === source.metadata.hash &&
-						entry.details?.details?.toHash === patchRelease.metadata.hash &&
-						entry.details?.details?.currentHash === patchRelease.metadata.hash,
-				},
-			);
-		}
-		expectedStatuses.push({
-			event: "updater-status",
-			version: sourceVersion,
-			status: "patch-chain-complete",
-			verify: (entry) =>
-				entry.details?.details?.usedPatchPath === true &&
-				entry.details?.details?.totalPatchesApplied === patchReleases.length,
-		});
-	} else {
-		expectedStatuses.push(
-			{ event: "updater-status", version: sourceVersion, status: "fetching-patch" },
-			{
-				event: "updater-status",
-				version: sourceVersion,
-				status: "patch-not-found",
-				verify: (entry) => entry.details?.details?.totalPatchesApplied === 0,
-			},
-			{ event: "updater-status", version: sourceVersion, status: "downloading-full-bundle" },
-		);
-	}
 	assertOrderedPhaseEvents(
 		phaseEvents,
 		[
 			{ event: "launched", version: sourceVersion },
 			...sourceStateEvents,
-			...expectedStatuses,
+			{ event: "updater-status", version: sourceVersion, status: "downloading" },
 			{
 				event: "updater-status",
 				version: sourceVersion,
 				status: "download-complete",
-				verify: (entry) =>
-					entry.details?.details?.usedPatchPath ===
-						(expectedDownloadPath === "patch") &&
-					entry.details?.details?.totalPatchesApplied ===
-						(expectedDownloadPath === "patch" ? patchReleases.length : 0),
+				verify: (entry) => entry.details?.details?.latestHash === toRelease.metadata.hash,
 			},
 			{ event: "download-completed", version: sourceVersion },
 			{ event: "launched", version: targetVersion },
@@ -1035,16 +1035,6 @@ async function verifySuccessfulUpdate({
 			{ event: "target-relaunched", version: targetVersion },
 		],
 		`${sourceVersion} -> ${targetVersion}`,
-	);
-	assert.equal(
-		phaseEvents.filter(
-			(entry) =>
-				entry.event === "updater-status" &&
-				entry.version === sourceVersion &&
-				entry.details?.status === "patch-applied",
-		).length,
-		expectedDownloadPath === "patch" ? patchReleases.length : 0,
-		`${sourceVersion} -> ${targetVersion} patch-applied count`,
 	);
 	for (const intermediateRelease of patchReleases.slice(0, -1)) {
 		assert.equal(
@@ -1057,17 +1047,7 @@ async function verifySuccessfulUpdate({
 			`patch chain unexpectedly launched intermediate ${intermediateRelease.metadata.version}`,
 		);
 	}
-	assert.equal(
-		phaseEvents.some(
-			(entry) =>
-				entry.event === "updater-status" &&
-				entry.version === sourceVersion &&
-				entry.details?.status ===
-					(expectedDownloadPath === "patch" ? "downloading-full-bundle" : "patch-applied"),
-		),
-		false,
-		`${sourceVersion} -> ${targetVersion} mixed patch and fallback success paths`,
-	);
+
 	return { resultPath, result };
 }
 
@@ -1665,7 +1645,7 @@ async function main() {
 		return;
 	}
 
-	if (v1CompatibilitySimulationEnabled) await simulateV1InstallLayout();
+	if (v1CompatibilitySimulationEnabled) await simulateV1InstallLayout(v1);
 	const firstRequestStart = requests.length;
 	const firstEventStart = recordedEvents().length;
 	const firstPriorResults = new Set(resultFiles());
@@ -1690,7 +1670,17 @@ async function main() {
 	assert.notEqual(v3.metadata.hash, v4.metadata.hash, "v3 and v4 produced the same hash");
 	assert.notEqual(v2.metadata.hash, v4.metadata.hash, "v2 and v4 produced the same hash");
 	assert.notEqual(v1.metadata.hash, v4.metadata.hash, "v1 and v4 produced the same hash");
-	publishRelease(v4, { includePatch: false });
+	// Artifact inspection above still validates both documents emitted by the
+	// pinned producer. Serve this update through the historical document only:
+	// one lifecycle run must cover v2 metadata and the 404-to-legacy negotiation,
+	// even when Hutch emits v2 metadata for every release.
+	const legacyV4 = { ...v4, updateV2Path: undefined, streamingMetadata: undefined };
+	publishRelease(legacyV4, { includePatch: false });
+	assert.equal(
+		pathExists(join(serverRoot, basename(v4.updatePath).replace(/-update\.json$/, "-update-v2.json"))),
+		false,
+		"v4 must remove the preceding v2 manifest before exercising legacy negotiation",
+	);
 	assert.equal(
 		pathExists(join(serverRoot, basename(v4.patchPath))),
 		false,
@@ -1713,7 +1703,7 @@ async function main() {
 	);
 	await verifySuccessfulUpdate({
 		fromRelease: v3,
-		toRelease: v4,
+		toRelease: legacyV4,
 		relaunchSentinelPath: fallbackRelaunchSentinelPath,
 		expectedDownloadPath: "full",
 		patchReleases: [v4],

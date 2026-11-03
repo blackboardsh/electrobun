@@ -147,7 +147,7 @@ assert(
 
 const vmTestCommands = createVmTestCommands({ hutchBinary, packageDir, platform: "linux", arch: "x64" });
 const armVmCommands = createVmTestCommands({ hutchBinary, packageDir, platform: "win32", arch: "arm64" });
-assert(armVmCommands.length === 15, "Windows ARM64 should test ten supported Kitchen variants and five common stages");
+assert(armVmCommands.length === 16, "Windows ARM64 should test ten supported Kitchen variants and six common stages");
 assert(armVmCommands[0]!.args.includes("--jobs=1"), "Windows ARM64 builds run serially");
 assert(!armVmCommands[0]!.args.some((arg) => arg.includes("odin:")), "Windows ARM64 must not schedule unsupported Odin variants");
 const mainProcesses = [...VM_MAIN_PROCESSES];
@@ -161,8 +161,8 @@ const vmVariants = VM_WEBVIEWS.flatMap((webview) =>
 	mainProcesses.map((main) => `${main}:${webview}`),
 );
 assert(
-	vmTestCommands.length === 5 + vmVariants.length,
-	"VM test plan should have build, per-variant Kitchen, unit, Kitchen tooling, updater, and release stages",
+	vmTestCommands.length === 6 + vmVariants.length,
+	"VM test plan should have build, per-variant Kitchen, unit, Kitchen tooling, updater lifecycle, native updater, and release stages",
 );
 const kitchenBuild = vmTestCommands[0];
 const expectedBuildArgs = [
@@ -202,12 +202,17 @@ assert(
 const unitStage = vmTestCommands[1 + vmVariants.length];
 const kitchenToolingStage = vmTestCommands[2 + vmVariants.length];
 const updaterStage = vmTestCommands[3 + vmVariants.length];
-const releaseStage = vmTestCommands[4 + vmVariants.length];
+const nativeUpdaterStage = vmTestCommands[4 + vmVariants.length];
+const releaseStage = vmTestCommands[5 + vmVariants.length];
 assertArray(unitStage?.args ?? [], ["test:unit"], "Unit and native test argv");
 assert(unitStage?.cwd === packageDir, "Unit tests should run from package");
 assertArray(kitchenToolingStage?.args ?? [], ["test:tooling"], "Kitchen tooling test argv");
 assert(kitchenToolingStage?.cwd === kitchenDir, "Kitchen tooling tests should run from Kitchen");
 assertArray(updaterStage?.args ?? [], ["test:updater-lifecycle"], "Updater lifecycle argv");
+assertArray(nativeUpdaterStage?.args ?? [], ["build", "test"], "Native updater unit test argv");
+assert(nativeUpdaterStage?.command === join(packageDir, "vendors", "zig", "zig"), "Native updater tests use the packaged Zig compiler");
+assert(nativeUpdaterStage?.cwd === join(packageDir, "src", "extractor"), "Native updater tests run from the extractor project");
+assert(armVmCommands.find(command => command.label === "Native updater tests")?.command === join(packageDir, "vendors", "zig", "zig.exe"), "Windows updater tests select the executable suffix");
 assertArray(releaseStage?.args ?? [], ["check:release"], "Release check argv");
 
 const attemptedVmStages: string[] = [];
@@ -284,7 +289,7 @@ for (const arch of ["x64", "arm64"]) {
 		attemptedAfterFailedBuild.push(command.label);
 		if (command === macCommands[0]) throw new Error("build failed");
 	}, () => {});
-	assertArray(attemptedAfterFailedBuild, [macCommands[0]!.label, ...macCommands.slice(-4).map(command => command.label)],
+	assertArray(attemptedAfterFailedBuild, [macCommands[0]!.label, ...macCommands.slice(-5).map(command => command.label)],
 		`${arch} a failed build must not verify or launch stale app bundles`);
 }
 

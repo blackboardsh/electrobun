@@ -184,12 +184,12 @@ describe("Windows adjacent installer streaming contract", () => {
 
 		const streaming = sourceBetween(
 			extractorMain,
-			"fn streamZstdToTar",
-			"fn extractTarFile",
+			"fn extractAndInstall",
+			"fn retainedRecipePath",
 		);
 		expect(streaming).toContain("progress: *ProgressIndicator");
 		expect(streaming).toContain("progress.update(");
-		expect(streaming).not.toContain("builtin.os.tag == .windows");
+		expect(streaming).toContain("extractInstallArchive(");
 	});
 
 	test("does not materialize the adjacent compressed archive in memory", () => {
@@ -204,26 +204,28 @@ describe("Windows adjacent installer streaming contract", () => {
 		expect(adjacentInstall).toContain(".{ .file = archive_path }");
 	});
 
-	test("commits a complete retained tar and cleans partial output", () => {
+	test("commits an exact archive recipe with the app and cleans partial output", () => {
 		const streaming = sourceBetween(
 			extractorMain,
-			"fn streamZstdToTar",
-			"fn extractTarFile",
+			"fn extractInstallArchiveReader",
+			"fn installerRecipeTestArchive",
 		);
-		expect(streaming).toContain("errdefer");
 		expect(streaming).toContain("sync(");
 		expect(streaming).toContain("zstd.Decompress");
+		expect(streaming).toContain("recipe.extractReader(");
+		expect(streaming).toContain("recipe.writeJson(");
 		expect(streaming).not.toContain("allocRemaining(");
 
 		const fileInstall = sourceBetween(
 			extractorMain,
 			"const InstallArchiveSource",
-			"fn extractTar(",
+			"fn retainedRecipePath",
 		);
 		expect(fileInstall).toContain('"{s}.partial"');
 		expect(fileInstall).toContain("errdefer");
-		expect(fileInstall).toContain("streamZstdToTar(");
-		expect(fileInstall).toContain("extractTarFile(");
+		expect(fileInstall).toContain("extractInstallArchive(");
+		expect(fileInstall).not.toContain("streamZstdToTar(");
+		expect(fileInstall).not.toContain("extractTarFile(");
 		expect(fileInstall).toContain("publishExtractionState(");
 
 		const rollbackArmed = fileInstall.indexOf(
@@ -254,10 +256,10 @@ describe("Windows adjacent installer streaming contract", () => {
 		);
 
 		expect(windowsIntegration).toContain(
-			"retained updater tar differs from the adjacent installer payload",
+			"assertRecipeMatchesInstalled(recipePath, paths.app",
 		);
 		expect(windowsIntegration).toContain(
-			"completed install retained a partial updater tar",
+			"completed install retained partial updater state",
 		);
 		expect(windowsIntegration).toContain(
 			'ELECTROBUN_INSTALLER_UI_AUTOCLOSE: "1"',

@@ -63,6 +63,11 @@ describe("Kitchen artifact publishing", () => {
 		).toBe("kitchen/stable-macos-arm64-update.json");
 		expect(
 			kitchenArtifactKey(
+				"staged/kitchen-macos-arm64/stable-macos-arm64-update-v2.json",
+			),
+		).toBe("kitchen/stable-macos-arm64-update-v2.json");
+		expect(
+			kitchenArtifactKey(
 				"staged/kitchen-win-x64/win-x64-ElectrobunKitchenSink-Setup.exe",
 			),
 		).toBe("kitchen/win-x64-ElectrobunKitchenSink-Setup.exe");
@@ -81,11 +86,45 @@ describe("Kitchen artifact publishing", () => {
 				"kitchen/canary-linux-x64-update.json",
 			),
 		).toBe(true);
+		for (const channel of ["canary", "stable"]) {
+			expect(
+				isKitchenUpdateManifest(`kitchen/${channel}-win-arm64-update-v2.json`),
+			).toBe(true);
+		}
 		expect(
 			isKitchenUpdateManifest(
 				"kitchen/canary-linux-x64-ElectrobunKitchenSink.tar.zst",
 			),
 		).toBe(false);
+	});
+
+	test("publishes both manifest generations after their payloads", () => {
+		const directory = mkdtempSync(join(tmpdir(), "kitchen-publish-order-"));
+		const prefix = "stable-linux-x64";
+		const payload = `${prefix}-zz-payload.tar.zst`;
+		const manifests = [`${prefix}-update.json`, `${prefix}-update-v2.json`];
+		try {
+			for (const filename of [...manifests, payload]) {
+				writeFileSync(join(directory, filename), "test artifact");
+			}
+			const result = Bun.spawnSync([
+				process.execPath,
+				join(import.meta.dir, "upload-kitchen-artifacts.ts"),
+				directory,
+				"--dry-run",
+			]);
+			expect(result.exitCode).toBe(0);
+			const output = result.stdout.toString();
+			const payloadPublished = output.indexOf(`Validated kitchen/${payload}`);
+			expect(payloadPublished).toBeGreaterThanOrEqual(0);
+			for (const manifest of manifests) {
+				expect(output.indexOf(`Validated kitchen/${manifest}`)).toBeGreaterThan(
+					payloadPublished,
+				);
+			}
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 
 	test("rejects unrelated files", () => {
@@ -94,6 +133,9 @@ describe("Kitchen artifact publishing", () => {
 		);
 		expect(() =>
 			kitchenArtifactKey("production-win-x64-update.json"),
+		).toThrow("Unexpected Kitchen artifact filename");
+		expect(() =>
+			kitchenArtifactKey("stable-win-x64-update-v3.json"),
 		).toThrow("Unexpected Kitchen artifact filename");
 		expect(() =>
 			kitchenArtifactKey("stable-win-x64-Example-Setup.exe"),

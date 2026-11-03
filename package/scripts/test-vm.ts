@@ -150,6 +150,12 @@ export function createVmTestCommands({
 			cwd: packageDir,
 		},
 		{
+			label: "Native updater tests",
+			command: join(packageDir, "vendors", "zig", platform === "win32" ? "zig.exe" : "zig"),
+			args: ["build", "test"],
+			cwd: join(packageDir, "src", "extractor"),
+		},
+		{
 			label: "Release checks",
 			command: hutchBinary,
 			args: ["check:release"],

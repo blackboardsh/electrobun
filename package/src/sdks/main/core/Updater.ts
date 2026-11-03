@@ -130,6 +130,9 @@ export interface UpdateInfo {
 
 export interface UpdateArtifactV1 {
 	file: string;
+	/** Digest and size of the exact, uncompressed release tar. */
+	tarSha256?: string;
+	tarSize?: number;
 }
 
 export interface UpdateManifestV1 {
@@ -155,6 +158,15 @@ export interface PreparedUpdateV1 {
 	artifact_file: string;
 }
 
+export interface PreparedUpdateV2 extends Omit<PreparedUpdateV1, "schema_version" | "retained_tar_path"> {
+	schema_version: 2;
+	staging_path: string;
+	recipe_path: string;
+	recipe_sha256: string;
+}
+
+export type PreparedUpdate = PreparedUpdateV1 | PreparedUpdateV2;
+
 export interface NativeUpdatePlanV1 {
 	schema_version: 1;
 	transaction_id: string;
@@ -170,6 +182,16 @@ export interface NativeUpdatePlanV1 {
 	parent_pid: number;
 	result_path: string;
 }
+
+export interface NativeUpdatePlanV2 extends Omit<NativeUpdatePlanV1, "schema_version" | "retained_tar_path"> {
+	schema_version: 2;
+	retained_tar_path: "";
+	staging_path: string;
+	recipe_path: string;
+	recipe_sha256: string;
+}
+
+export type NativeUpdatePlan = NativeUpdatePlanV1 | NativeUpdatePlanV2;
 
 export interface NativeUpdateResultV1 {
 	schema_version: 1;
@@ -458,6 +480,22 @@ export function validateUpdateManifest(
 	) {
 		throw new Error("Invalid update manifest: unsafe artifact filename");
 	}
+	const artifact: UpdateArtifactV1 = { file };
+	const tarSha256 = artifactValue["tarSha256"];
+	const tarSize = artifactValue["tarSize"];
+	if (tarSha256 !== undefined || tarSize !== undefined) {
+		if (
+			typeof tarSha256 !== "string" ||
+			!/^[a-f0-9]{64}$/.test(tarSha256) ||
+			typeof tarSize !== "number" ||
+			!Number.isSafeInteger(tarSize) ||
+			tarSize <= 0
+		) {
+			throw new Error("Invalid update manifest: invalid tar integrity metadata");
+		}
+		artifact.tarSha256 = tarSha256;
+		artifact.tarSize = tarSize;
+	}
 
 	return {
 		schemaVersion: 1,
@@ -467,7 +505,7 @@ export function validateUpdateManifest(
 		hash,
 		platform: platform as SupportedOS,
 		arch: arch as SupportedArch,
-		artifact: { file },
+		artifact,
 	};
 }
 
@@ -574,12 +612,15 @@ export function resolveInstalledChannelRootForPlatform(
 		}
 	}
 	const distinctCandidates = [...new Set(candidates)];
-	const currentTarRoot = distinctCandidates.find((candidate) =>
+	const currentArchiveRoot = distinctCandidates.find((candidate) =>
+		regularFileProbe(
+			pathApi.join(candidate, "self-extraction", `${info.hash}.recipe.json`),
+		) ||
 		regularFileProbe(
 			pathApi.join(candidate, "self-extraction", `${info.hash}.tar`),
 		),
 	);
-	if (currentTarRoot) return currentTarRoot;
+	if (currentArchiveRoot) return currentArchiveRoot;
 	const manifestRoot = distinctCandidates.find((candidate) =>
 		regularFileProbe(pathApi.join(candidate, ".electrobun-uninstall.json")),
 	);
@@ -698,12 +739,19 @@ function requireRegularFile(path: string, description: string): void {
 	}
 }
 
-function validatePreparedUpdate(
+function installedAppBundlePath(channelRoot: string): string {
+	return currentOS === "macos"
+		? resolve(dirname(process.execPath), "..", "..")
+		: join(channelRoot, "app");
+}
+
+export function validatePreparedUpdate(
 	document: unknown,
 	info: LocalUpdateInfo,
 	channelRoot: string,
-): PreparedUpdateV1 {
-	if (!isRecord(document) || document["schema_version"] !== 1) {
+	appBundlePath = installedAppBundlePath(channelRoot),
+): PreparedUpdate {
+	if (!isRecord(document) || (document["schema_version"] !== 1 && document["schema_version"] !== 2)) {
 		throw new Error("Invalid prepared update record");
 	}
 	const identifier = requireString(document, "identifier");
@@ -712,11 +760,7 @@ function validatePreparedUpdate(
 	const hash = requireString(document, "hash");
 	const platform = requireString(document, "platform");
 	const arch = requireString(document, "arch");
-	const retainedTarPath = requireString(document, "retained_tar_path");
 	const artifactFile = requireString(document, "artifact_file");
-	const expectedTarPath = resolve(
-		join(extractionFolderFor(channelRoot), `${hash}.tar`),
-	);
 	if (
 		identifier !== info.identifier ||
 		channel !== info.channel ||
@@ -725,30 +769,53 @@ function validatePreparedUpdate(
 		arch !== currentArch ||
 		!isSafeVersion(version) ||
 		!SAFE_HASH_PATTERN.test(hash) ||
-		resolve(retainedTarPath) !== retainedTarPath ||
-		retainedTarPath !== expectedTarPath ||
 		!isSafeArtifactFileName(artifactFile)
 	) {
 		throw new Error("Invalid prepared update record");
 	}
-	requireRegularFile(retainedTarPath, "Prepared update archive");
-	return {
-		schema_version: 1,
+	const identity = {
 		identifier,
 		channel,
 		version,
 		hash,
 		platform: platform as SupportedOS,
 		arch: arch as SupportedArch,
-		retained_tar_path: retainedTarPath,
 		artifact_file: artifactFile,
 	};
+	if (document["schema_version"] === 2) {
+		const stagingPath = requireString(document, "staging_path");
+		const recipePath = requireString(document, "recipe_path");
+		const recipeSha256 = requireString(document, "recipe_sha256");
+		if (
+			!/^[a-f0-9]{64}$/.test(recipeSha256) ||
+			!isCanonicalAbsolutePath(stagingPath) ||
+			!isCanonicalAbsolutePath(recipePath) ||
+			stagingPath !== `${appBundlePath}.prepared-${hash}` ||
+			recipePath !== join(extractionFolderFor(channelRoot), `${hash}.recipe.json`) ||
+			!isPlainManagedFile(channelRoot, recipePath)
+		) {
+			throw new Error("Invalid prepared update paths");
+		}
+		const stage = lstatSync(stagingPath, { throwIfNoEntry: false });
+		if (!stage?.isDirectory() || stage.isSymbolicLink()) {
+			throw new Error("Prepared update staging directory is missing or unsafe");
+		}
+		return { ...identity, schema_version: 2, staging_path: stagingPath, recipe_path: recipePath, recipe_sha256: recipeSha256 };
+	}
+	const retainedTarPath = requireString(document, "retained_tar_path");
+	const expectedTarPath = resolve(join(extractionFolderFor(channelRoot), `${hash}.tar`));
+	if (!isCanonicalAbsolutePath(retainedTarPath) || retainedTarPath !== expectedTarPath) {
+		throw new Error("Invalid prepared update record");
+	}
+	requireRegularFile(retainedTarPath, "Prepared update archive");
+	return { ...identity, schema_version: 1, retained_tar_path: retainedTarPath };
 }
 
 function loadPreparedUpdate(
 	info: LocalUpdateInfo,
 	channelRoot: string,
-): PreparedUpdateV1 {
+	appBundlePath = installedAppBundlePath(channelRoot),
+): PreparedUpdate {
 	const recordPath = preparedUpdatePathFor(channelRoot);
 	const stat = lstatSync(recordPath, { throwIfNoEntry: false });
 	if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) {
@@ -758,11 +825,12 @@ function loadPreparedUpdate(
 		JSON.parse(readFileSync(recordPath, "utf8")),
 		info,
 		channelRoot,
+		appBundlePath,
 	);
 }
 
 function preparedMatchesManifest(
-	prepared: PreparedUpdateV1,
+	prepared: PreparedUpdate,
 	manifest: UpdateManifestV1,
 ): boolean {
 	return (
@@ -868,7 +936,7 @@ export function reconcileNativeUpdateResultState(
 function preparedUpdateForResult(
 	info: LocalUpdateInfo,
 	channelRoot: string,
-): PreparedUpdateV1 | undefined {
+): PreparedUpdate | undefined {
 	try {
 		return loadPreparedUpdate(info, channelRoot);
 	} catch {
@@ -1176,52 +1244,6 @@ export async function downloadResponseToFile(
 		}
 		rmSync(partialPath, { force: true });
 		throw error;
-	}
-}
-
-async function downloadArtifact(
-	response: Response,
-	partialPath: string,
-): Promise<void> {
-	const headerValue = response.headers.get("content-length");
-	const parsedLength = headerValue === null ? 0 : Number(headerValue);
-	const totalBytes =
-		Number.isSafeInteger(parsedLength) && parsedLength > 0 ? parsedLength : 0;
-	const progressState = createDownloadProgressThrottleState();
-	const bytesDownloaded = await downloadResponseToFile(
-		response,
-		partialPath,
-		"Update artifact",
-		(bytesDownloaded) => {
-			if (totalBytes === 0) return;
-			const progress = nextDownloadProgressPercent(
-				progressState,
-				bytesDownloaded,
-				totalBytes,
-				Date.now(),
-			);
-			if (progress !== null) {
-				emitStatus("download-progress", "Downloading update bundle...", {
-					progress,
-					bytesDownloaded,
-					totalBytes,
-				});
-			}
-		},
-	);
-	const finalProgress = nextDownloadProgressPercent(
-		progressState,
-		bytesDownloaded,
-		bytesDownloaded || 1,
-		Date.now(),
-		true,
-	);
-	if (finalProgress !== null) {
-		emitStatus("download-progress", "Downloading update bundle...", {
-			progress: finalProgress,
-			bytesDownloaded,
-			...(totalBytes > 0 ? { totalBytes } : {}),
-		});
 	}
 }
 
@@ -1599,15 +1621,20 @@ export function resolveUpdateHelperSource(
 	channelRoot: string,
 	appBundlePath: string,
 	platform: SupportedOS = currentOS,
+	preferBundled = false,
 ): string {
 	const candidates = getUpdateHelperSourceCandidates(
 		channelRoot,
 		appBundlePath,
 		platform,
 	);
-	const source = candidates.find((candidate, index) =>
-		isPlainManagedFile(index === 0 ? channelRoot : appBundlePath, candidate),
+	// The bundled manager matches this SDK. The standalone manager can still be
+	// from an older installer when adopting a new preparation protocol.
+	const indexes = preferBundled ? [1, 0] : [0, 1];
+	const index = indexes.find((index) =>
+		isPlainManagedFile(index === 0 ? channelRoot : appBundlePath, candidates[index]!),
 	);
+	const source = index === undefined ? undefined : candidates[index];
 	if (!source) {
 		throw new Error("No installed or bundled native update manager is available");
 	}
@@ -1625,8 +1652,9 @@ function copyUpdateHelper(
 	channelRoot: string,
 	appBundlePath: string,
 	transactionId: string,
+	preferBundled = false,
 ): string {
-	const source = resolveUpdateHelperSource(channelRoot, appBundlePath);
+	const source = resolveUpdateHelperSource(channelRoot, appBundlePath, currentOS, preferBundled);
 	const destination = join(
 		physicalTemporaryDirectory(),
 		`electrobun-update-${transactionId}${currentOS === "win" ? ".exe" : ""}`,
@@ -1685,11 +1713,9 @@ function isCanonicalAbsolutePath(path: string): boolean {
 	return isAbsolute(path) && resolve(path) === path && !path.includes("\0");
 }
 
-export function createNativeUpdatePlan(
-	plan: NativeUpdatePlanV1,
-): NativeUpdatePlanV1 {
+export function createNativeUpdatePlan<T extends NativeUpdatePlan>(plan: T): T {
 	if (
-		plan.schema_version !== 1 ||
+		(plan.schema_version !== 1 && plan.schema_version !== 2) ||
 		!TRANSACTION_ID_PATTERN.test(plan.transaction_id) ||
 		!isSafeIdentityComponent(plan.identifier, plan.platform) ||
 		!isSafeIdentityComponent(plan.channel, plan.platform) ||
@@ -1705,24 +1731,33 @@ export function createNativeUpdatePlan(
 		![
 			plan.channel_root,
 			plan.app_bundle_path,
-			plan.retained_tar_path,
 			plan.result_path,
 		].every(isCanonicalAbsolutePath)
 	) {
 		throw new Error("Invalid native update plan");
 	}
-	const expectedTarPath = join(
-		plan.channel_root,
-		"self-extraction",
-		`${plan.hash}.tar`,
-	);
 	const expectedResultPath = join(
 		plan.channel_root,
 		`.electrobun-update-${plan.transaction_id}.result.json`,
 	);
-	if (
-		plan.retained_tar_path !== expectedTarPath ||
-		plan.result_path !== expectedResultPath
+	if (plan.result_path !== expectedResultPath) {
+		throw new Error("Invalid native update plan paths");
+	}
+	if (plan.schema_version === 2) {
+		if (
+			plan.retained_tar_path !== "" ||
+			typeof plan.recipe_sha256 !== "string" ||
+			!/^[a-f0-9]{64}$/.test(plan.recipe_sha256) ||
+			!isCanonicalAbsolutePath(plan.staging_path) ||
+			!isCanonicalAbsolutePath(plan.recipe_path) ||
+			plan.staging_path !== `${plan.app_bundle_path}.prepared-${plan.hash}` ||
+			plan.recipe_path !== join(plan.channel_root, "self-extraction", `${plan.hash}.recipe.json`)
+		) {
+			throw new Error("Invalid native update plan paths");
+		}
+	} else if (
+		!isCanonicalAbsolutePath(plan.retained_tar_path) ||
+		plan.retained_tar_path !== join(plan.channel_root, "self-extraction", `${plan.hash}.tar`)
 	) {
 		throw new Error("Invalid native update plan paths");
 	}
@@ -1774,11 +1809,23 @@ async function checkForUpdateOperation(): Promise<UpdateInfo> {
 	}
 
 	const platformPrefix = getPlatformPrefix(info.channel, currentOS, currentArch);
-	const updateInfoUrl = `${info.baseUrl.replace(/\/+$/, "")}/${platformPrefix}-update.json?${randomBytes(8).toString("hex")}`;
+	const cacheBuster = randomBytes(8).toString("hex");
+	const manifestBase = `${info.baseUrl.replace(/\/+$/, "")}/${platformPrefix}`;
+	let updateInfoUrl = `${manifestBase}-update-v2.json?${cacheBuster}`;
 	try {
-		const response = await fetch(updateInfoUrl, {
+		let response = await fetch(updateInfoUrl, {
 			signal: AbortSignal.timeout(30_000),
 		});
+		// Existing clients require the exact legacy document shape. New releases
+		// publish the archive digest separately; only absence permits legacy use.
+		const legacyManifest = response.status === 404;
+		if (legacyManifest) {
+			await response.body?.cancel();
+			updateInfoUrl = `${manifestBase}-update.json?${cacheBuster}`;
+			response = await fetch(updateInfoUrl, {
+				signal: AbortSignal.timeout(30_000),
+			});
+		}
 		if (!response.ok) {
 			throw new Error(`HTTP ${response.status}`);
 		}
@@ -1798,6 +1845,9 @@ async function checkForUpdateOperation(): Promise<UpdateInfo> {
 			platform: currentOS,
 			arch: currentArch,
 		});
+		if (!legacyManifest && manifest.artifact.tarSha256 === undefined) {
+			throw new Error("Invalid update manifest: archive integrity metadata is required");
+		}
 		checkedManifest = manifest;
 		let ready = false;
 		try {
@@ -2089,6 +2139,144 @@ export async function preparePatchChainForUpdate(
 	}
 }
 
+export interface NativePrepareUpdateRequest {
+	schema_version: 1;
+	transaction_id: string;
+	identifier: string;
+	channel: string;
+	platform: SupportedOS;
+	arch: SupportedArch;
+	version: string;
+	hash: string;
+	base_hash: string;
+	base_url: string;
+	artifact_file: string;
+	channel_root: string;
+	app_bundle_path: string;
+	tar_sha256?: string;
+	tar_size?: number;
+}
+
+type NativePrepareExecutor = (helper: string, args: readonly string[]) => Promise<void>;
+
+/** Windows process lookup requires an executable suffix on the bundled manager. */
+export async function withNativePreparationHelper(
+	platform: SupportedOS,
+	source: string,
+	copy: () => string,
+	execute: (helper: string) => Promise<void>,
+	remove: (helper: string) => void = (helper) => rmSync(helper, { force: true }),
+): Promise<void> {
+	if (platform !== "win") return execute(source);
+	const helper = copy();
+	try {
+		await execute(helper);
+	} finally {
+		// Antivirus can briefly retain the executable after process exit. A
+		// cleanup failure must not turn a verified staged release into a failure.
+		try { remove(helper); } catch {}
+	}
+}
+
+async function executeNativePreparation(helper: string, args: readonly string[]): Promise<void> {
+	const child = Bun.spawn([helper, ...args], {
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	// Drain concurrently so diagnostics cannot block the helper. Keep a bounded
+	// tail for failures rather than retaining download/extraction logs in RAM.
+	const diagnostics = (async () => {
+		const reader = child.stderr.getReader();
+		const decoder = new TextDecoder();
+		let tail = "";
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				tail = (tail + decoder.decode(value, { stream: true })).slice(-8192);
+			}
+			return (tail + decoder.decode()).slice(-8192).trim();
+		} finally {
+			reader.releaseLock();
+		}
+	})();
+	const [exitCode, message] = await Promise.all([child.exited, diagnostics]);
+	if (exitCode !== 0) {
+		throw new Error(`Native update preparation failed (${exitCode})${message ? `: ${message}` : ""}`);
+	}
+}
+
+/** Stage the release without ever persisting a complete uncompressed tar. */
+export async function prepareNativeUpdate(options: {
+	info: LocalUpdateInfo;
+	manifest: UpdateManifestV1;
+	channelRoot: string;
+	appBundlePath: string;
+	transactionId: string;
+	execute?: NativePrepareExecutor;
+}): Promise<PreparedUpdateV2> {
+	const { info, channelRoot, appBundlePath, transactionId } = options;
+	const manifest = validateUpdateManifest(options.manifest, {
+		identifier: info.identifier,
+		channel: info.channel,
+		platform: currentOS,
+		arch: currentArch,
+	});
+	if (
+		!SAFE_HASH_PATTERN.test(info.hash) ||
+		!TRANSACTION_ID_PATTERN.test(transactionId) ||
+		!isCanonicalAbsolutePath(channelRoot) ||
+		!isCanonicalAbsolutePath(appBundlePath) ||
+		(currentOS !== "macos" && appBundlePath !== join(channelRoot, "app"))
+	) {
+		throw new Error("Invalid native preparation request");
+	}
+	const base = new URL(info.baseUrl);
+	const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(base.hostname);
+	if (
+		(base.protocol !== "https:" && !(base.protocol === "http:" && loopback)) ||
+		base.username || base.password || base.search || base.hash
+	) {
+		throw new Error("Invalid update base URL");
+	}
+	const helper = resolveUpdateHelperSource(channelRoot, appBundlePath, currentOS, true);
+	const requestPath = join(channelRoot, `.electrobun-prepare-${transactionId}.json`);
+	const request: NativePrepareUpdateRequest = {
+		schema_version: 1,
+		transaction_id: transactionId,
+		identifier: manifest.identifier,
+		channel: manifest.channel,
+		platform: manifest.platform,
+		arch: manifest.arch,
+		version: manifest.version,
+		hash: manifest.hash,
+		base_hash: info.hash,
+		base_url: info.baseUrl,
+		artifact_file: manifest.artifact.file,
+		channel_root: channelRoot,
+		app_bundle_path: appBundlePath,
+		...(manifest.artifact.tarSha256 === undefined ? {} : {
+			tar_sha256: manifest.artifact.tarSha256,
+			tar_size: manifest.artifact.tarSize,
+		}),
+	};
+	atomicWriteJson(requestPath, request);
+	try {
+		await withNativePreparationHelper(
+			currentOS,
+			helper,
+			() => copyUpdateHelper(channelRoot, appBundlePath, transactionId, true),
+			(helper) => (options.execute ?? executeNativePreparation)(helper, ["--prepare-update", requestPath, "--quiet"]),
+		);
+		const prepared = loadPreparedUpdate(info, channelRoot, appBundlePath);
+		if (prepared.schema_version !== 2 || !preparedMatchesManifest(prepared, manifest)) {
+			throw new Error("Native preparation did not publish the requested staged update");
+		}
+		return prepared;
+	} finally {
+		try { rmSync(requestPath, { force: true }); } catch {}
+	}
+}
+
 async function downloadUpdateOperation(): Promise<void> {
 	if (applyInFlight) {
 		throw new Error("Cannot download an update while one is being applied");
@@ -2101,112 +2289,28 @@ async function downloadUpdateOperation(): Promise<void> {
 	if (!manifest || manifest.hash === info.hash) return;
 
 	const channelRoot = appDataFolderFor(info);
-	const extractionFolder = extractionFolderFor(channelRoot);
-	mkdirSync(extractionFolder, { recursive: true });
+	mkdirSync(extractionFolderFor(channelRoot), { recursive: true });
 	try {
 		const existing = loadPreparedUpdate(info, channelRoot);
 		if (preparedMatchesManifest(existing, manifest)) {
 			updateInfo = { ...updateInfo, updateReady: true, error: "" };
-			emitStatus("download-complete", "Update bundle is already prepared", {
-				latestHash: manifest.hash,
-				usedPatchPath: false,
-				totalPatchesApplied: 0,
-			});
+			emitStatus("download-complete", "Update is already prepared", { latestHash: manifest.hash });
 			return;
 		}
 	} catch {
-		// A missing or stale prepared record is replaced only after a fully
-		// downloaded artifact and decompressed tar have been published.
+		// Native preparation publishes its record only after stage verification.
 	}
-
-	const transactionId = randomBytes(16).toString("hex");
-	const compressedPartialPath = join(
-		extractionFolder,
-		`.${manifest.hash}.${transactionId}.tar.zst.partial`,
-	);
-	const compressedPath = join(
-		extractionFolder,
-		`.${manifest.hash}.${transactionId}.tar.zst`,
-	);
-	const tarPartialPath = join(
-		extractionFolder,
-		`${manifest.hash}.tar.${transactionId}.partial`,
-	);
-	const retainedTarPath = resolve(
-		join(extractionFolder, `${manifest.hash}.tar`),
-	);
-	const artifactUrl = buildUpdateArtifactUrl(
-		info.baseUrl,
-		manifest.artifact.file,
-	);
-	const artifactRequestUrl = addUpdateArtifactCacheBuster(
-		artifactUrl,
-		transactionId,
-	);
 	try {
-		const patchResult = await preparePatchChainForUpdate({
+		emitStatus("downloading", "Preparing the update with the native updater...", {
+			latestHash: manifest.hash,
+		});
+		await prepareNativeUpdate({
 			info,
 			manifest,
-			extractionFolder,
-			transactionId,
-			retainedTarPath,
+			channelRoot,
+			appBundlePath: installedAppBundlePath(channelRoot),
+			transactionId: randomBytes(16).toString("hex"),
 		});
-		const usedPatchPath = patchResult.completed;
-		if (!usedPatchPath) {
-			emitStatus("downloading-full-bundle", "Downloading full update bundle...", {
-				url: artifactRequestUrl,
-				latestHash: manifest.hash,
-				usedPatchPath: false,
-			});
-			const response = await fetch(artifactRequestUrl, {
-				signal: AbortSignal.timeout(10 * 60_000),
-			});
-			if (!response.ok) {
-				throw new Error(`Update artifact request failed with HTTP ${response.status}`);
-			}
-			await downloadArtifact(response, compressedPartialPath);
-			renameSync(compressedPartialPath, compressedPath);
-
-			const zstdPath = join(
-				dirname(process.execPath),
-				currentOS === "win" ? "zig-zstd.exe" : "zig-zstd",
-			);
-			requireRegularFile(zstdPath, "zig-zstd executable");
-			emitStatus("decompressing", "Decompressing update bundle...", {
-				zstdPath,
-			});
-			execFileSync(
-				zstdPath,
-				[
-					"decompress",
-					"-i",
-					compressedPath,
-					"-o",
-					tarPartialPath,
-					"--no-timing",
-				],
-				{ stdio: "ignore", windowsHide: true },
-			);
-			requireRegularFile(tarPartialPath, "Decompressed update archive");
-			if (lstatSync(tarPartialPath).size <= 0) {
-				throw new Error("Decompressed update archive is empty");
-			}
-			syncFile(tarPartialPath);
-			publishFileReplacingRegular(tarPartialPath, retainedTarPath);
-		}
-
-		const record: PreparedUpdateV1 = {
-			schema_version: 1,
-			identifier: manifest.identifier,
-			channel: manifest.channel,
-			version: manifest.version,
-			hash: manifest.hash,
-			platform: manifest.platform,
-			arch: manifest.arch,
-			retained_tar_path: retainedTarPath,
-			artifact_file: manifest.artifact.file,
-		};
-		atomicWriteJson(preparedUpdatePathFor(channelRoot), record);
 		updateInfo = {
 			version: manifest.version,
 			hash: manifest.hash,
@@ -2214,22 +2318,13 @@ async function downloadUpdateOperation(): Promise<void> {
 			updateReady: true,
 			error: "",
 		};
-		emitStatus("download-complete", "Update bundle downloaded and prepared", {
+		emitStatus("download-complete", "Update downloaded, verified, and staged", {
 			latestHash: manifest.hash,
-			usedPatchPath,
-			totalPatchesApplied: patchResult.patchesApplied,
 		});
 	} catch (error) {
 		const message = `Failed to download update: ${(error as Error).message}`;
 		updateInfo = { ...updateInfo, updateReady: false, error: message };
-		emitStatus("error", message, {
-			errorMessage: (error as Error).message,
-			url: artifactRequestUrl,
-		});
-	} finally {
-		rmSync(compressedPartialPath, { force: true });
-		rmSync(compressedPath, { force: true });
-		rmSync(tarPartialPath, { force: true });
+		emitStatus("error", message, { errorMessage: (error as Error).message });
 	}
 }
 
@@ -2252,7 +2347,7 @@ async function applyUpdateOperation(): Promise<void> {
 	if (downloadInFlight) await downloadInFlight;
 	const info = await Updater.getLocalInfo();
 	const channelRoot = appDataFolderFor(info);
-	let prepared: PreparedUpdateV1;
+	let prepared: PreparedUpdate;
 	try {
 		prepared = loadPreparedUpdate(info, channelRoot);
 	} catch (error) {
@@ -2269,10 +2364,7 @@ async function applyUpdateOperation(): Promise<void> {
 	}
 
 	const transactionId = randomBytes(16).toString("hex");
-	const appBundlePath =
-		currentOS === "macos"
-			? resolve(dirname(process.execPath), "..", "..")
-			: join(channelRoot, "app");
+	const appBundlePath = installedAppBundlePath(channelRoot);
 	const planPath = join(
 		channelRoot,
 		`.electrobun-update-${transactionId}.json`,
@@ -2281,8 +2373,11 @@ async function applyUpdateOperation(): Promise<void> {
 		channelRoot,
 		`.electrobun-update-${transactionId}.result.json`,
 	);
+	const payload = prepared.schema_version === 2
+		? { schema_version: 2 as const, retained_tar_path: "" as const, staging_path: prepared.staging_path, recipe_path: prepared.recipe_path, recipe_sha256: prepared.recipe_sha256 }
+		: { schema_version: 1 as const, retained_tar_path: prepared.retained_tar_path };
 	const plan = createNativeUpdatePlan({
-		schema_version: 1,
+		...payload,
 		transaction_id: transactionId,
 		identifier: info.identifier,
 		channel: info.channel,
@@ -2292,7 +2387,6 @@ async function applyUpdateOperation(): Promise<void> {
 		hash: prepared.hash,
 		channel_root: channelRoot,
 		app_bundle_path: appBundlePath,
-		retained_tar_path: prepared.retained_tar_path,
 		parent_pid: resolveUpdateParentPid(),
 		result_path: resultPath,
 	});
@@ -2311,7 +2405,7 @@ async function applyUpdateOperation(): Promise<void> {
 	try {
 		emitStatus("applying", "Preparing update handoff...");
 		cleanupOlderNativeUpdateResults(info, channelRoot);
-		helperPath = copyUpdateHelper(channelRoot, appBundlePath, transactionId);
+		helperPath = copyUpdateHelper(channelRoot, appBundlePath, transactionId, prepared.schema_version === 2);
 		atomicWriteJson(planPath, plan);
 		planPublished = true;
 		if (currentOS !== "win") chmodSync(planPath, 0o400);
