@@ -1226,7 +1226,7 @@ async function vendorRust() {
 	try {
 		await $`mkdir -p vendors ${tempExtractDir}`;
 		console.log(`Downloading Rust ${RUST_VERSION} for ${rustTriple}...`);
-		await $`curl -L "${rustUrl}" -o "${tempTarball}"`;
+		await $`curl --fail --location --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 300 --connect-timeout 30 --max-time 180 "${rustUrl}" --output "${tempTarball}"`;
 		validateDownload(tempTarball, "rust");
 
 		await $`tar -xJf "${tempTarball}" -C "${tempExtractDir}"`;
@@ -1311,7 +1311,7 @@ async function vendorGo() {
 	try {
 		await $`mkdir -p vendors`;
 		console.log(`Downloading Go ${GO_VERSION} for ${goOS}-${goArch}...`);
-		await $`curl -L "${goUrl}" -o "${tempArchive}"`;
+		await $`curl --fail --location --retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 300 --connect-timeout 30 --max-time 180 "${goUrl}" --output "${tempArchive}"`;
 		validateDownload(tempArchive, "go");
 
 		if (OS === "win") {
