@@ -301,7 +301,7 @@ const Extraction = struct {
                 var target_parent = try openParent(self.io, self.root.?, entry.link_target.?, false);
                 defer target_parent.close(self.io);
                 // The recipe only permits links to regular file entries.
-                try target_parent.hardLink(leafName(entry.link_target.?), parent, leafName(entry.path), self.io, .{});
+                try createHardlink(self.io, target_parent, leafName(entry.link_target.?), parent, leafName(entry.path));
             } else {
                 const is_directory = try linkTargetsDirectory(allocator, recipe, entry);
                 try parent.symLink(self.io, entry.link_target.?, leafName(entry.path), .{ .is_directory = is_directory });
@@ -333,6 +333,59 @@ const Extraction = struct {
         }
     }
 };
+
+fn createHardlink(io: Io, source_parent: Io.Dir, source_name: []const u8, destination_parent: Io.Dir, destination_name: []const u8) !void {
+    // Both names are leaves under already validated, no-follow directory
+    // handles. Do not reopen their full paths or replace an existing object.
+    try validatePath(source_name);
+    try validatePath(destination_name);
+    if (std.mem.indexOfScalar(u8, source_name, '/') != null or std.mem.indexOfScalar(u8, destination_name, '/') != null) return error.InvalidArchivePath;
+    if (builtin.os.tag != .windows) {
+        return source_parent.hardLink(source_name, destination_parent, destination_name, io, .{});
+    }
+    // Zig's Windows Io backend does not implement hardLink yet. Use the native
+    // handle-relative operation so NTFS keeps the actual shared file identity.
+    // FileLinkInformation needs no additional access rights on the source:
+    // https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_link_information
+    const w = std.os.windows;
+    const source = try openRegularFile(io, source_parent, source_name);
+    defer source.close(io);
+    const LinkInformation = extern struct {
+        // The low byte is ReplaceIfExists for FileLinkInformation; zero means
+        // exclusive creation. The union also reserves a ULONG-sized flags field.
+        Flags: w.ULONG = 0,
+        RootDirectory: w.HANDLE,
+        FileNameLength: w.ULONG = 0,
+        FileName: [4096]w.WCHAR = undefined,
+    };
+    var information: LinkInformation = .{ .RootDirectory = destination_parent.handle };
+    const name_length = try std.unicode.utf8ToUtf16Le(&information.FileName, destination_name);
+    information.FileNameLength = @intCast(name_length * @sizeOf(w.WCHAR));
+    // NT requires at least sizeof(FILE_LINK_INFORMATION), including ABI tail
+    // padding after its first WCHAR, even for a single-character filename.
+    const name_offset = @offsetOf(LinkInformation, "FileName");
+    const minimum_size = std.mem.alignForward(usize, name_offset + @sizeOf(w.WCHAR), @alignOf(LinkInformation));
+    const information_size = @max(minimum_size, name_offset + information.FileNameLength);
+    var status_block: w.IO_STATUS_BLOCK = undefined;
+    while (true) {
+        try io.checkCancel();
+        switch (w.ntdll.NtSetInformationFile(source.handle, &status_block, &information, @intCast(information_size), .Link)) {
+            .SUCCESS => return,
+            .CANCELLED => continue,
+            .OBJECT_NAME_COLLISION => return error.PathAlreadyExists,
+            .ACCESS_DENIED => return error.AccessDenied,
+            .OBJECT_NAME_NOT_FOUND, .OBJECT_PATH_NOT_FOUND, .DELETE_PENDING => return error.FileNotFound,
+            .NOT_SAME_DEVICE => return error.CrossDevice,
+            .DISK_FULL => return error.NoSpaceLeft,
+            .QUOTA_EXCEEDED => return error.DiskQuota,
+            .TOO_MANY_LINKS => return error.LinkQuotaExceeded,
+            .INSUFFICIENT_RESOURCES, .NO_MEMORY => return error.SystemResources,
+            .MEDIA_WRITE_PROTECTED => return error.ReadOnlyFileSystem,
+            .NOT_SUPPORTED, .INVALID_DEVICE_REQUEST => return error.OperationUnsupported,
+            else => |status| return w.unexpectedStatus(status),
+        }
+    }
+}
 
 fn linkTargetsDirectory(allocator: Allocator, recipe: Recipe, entry: Entry) !bool {
     var current = entry;
@@ -730,6 +783,9 @@ pub fn verifyTree(allocator: Allocator, io: Io, recipe: Recipe, app_root: Io.Dir
                 defer file.close(io);
                 const hash = try hashFile(io, file, target.size);
                 if (!std.mem.eql(u8, &hash, target.sha256.?)) return error.FileHashMismatch;
+                const target_file = try openRegularFile(io, app_root, target.path);
+                defer target_file.close(io);
+                if ((try target_file.stat(io)).inode != stat.inode) return error.StagedHardlinkTargetMismatch;
             },
         }
     }
@@ -1128,6 +1184,7 @@ test "unknown-length extraction stages files and hardlinks while recording byte-
     defer receipt.deinit();
     var app = try tmp.dir.openDir(io, "App", .{});
     defer app.close(io);
+    try verifyTree(allocator, io, receipt.value, app);
     const content = try app.readFileAlloc(io, "hard", allocator, .limited(1024));
     defer allocator.free(content);
     try std.testing.expectEqualStrings("preserve these signed bytes\x00\xff", content);
@@ -1140,9 +1197,47 @@ test "unknown-length extraction stages files and hardlinks while recording byte-
         defer executable.close(io);
         try std.testing.expectEqual(@as(std.posix.mode_t, 0o751), (try executable.stat(io)).permissions.toMode() & 0o777);
     }
+    try app.deleteFile(io, "hard");
+    try app.writeFile(io, .{ .sub_path = "hard", .data = "preserve these signed bytes\x00\xff" });
+    try std.testing.expectError(error.StagedHardlinkTargetMismatch, verifyTree(allocator, io, receipt.value, app));
+    try app.writeFile(io, .{ .sub_path = "hard", .data = "modified these signed bytes\x00\xff" });
+    try std.testing.expectError(error.FileHashMismatch, verifyTree(allocator, io, receipt.value, app));
     // A failed/retried extraction never merges into a prior or installed tree.
     var retry: Io.Reader = .fixed(original.written());
     try std.testing.expectError(error.PathAlreadyExists, extractReader(allocator, io, &retry, original.written().len, tmp.dir));
+}
+
+test "extracted hardlinks preserve file identity and never overwrite paths" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var payload: [copy_buffer_size * 2 + 37]u8 = undefined;
+    for (&payload, 0..) |*byte, i| byte.* = @truncate(i *% 37);
+    try tmp.dir.writeFile(io, .{ .sub_path = "target", .data = &payload });
+    try tmp.dir.createDir(io, "nested", .default_dir);
+    var nested = try tmp.dir.openDir(io, "nested", .{ .follow_symlinks = false });
+    defer nested.close(io);
+    try createHardlink(io, tmp.dir, "target", nested, "hard");
+    const content = try nested.readFileAlloc(io, "hard", allocator, .limited(payload.len + 1));
+    defer allocator.free(content);
+    try std.testing.expectEqualSlices(u8, &payload, content);
+    const source_stat = try tmp.dir.statFile(io, "target", .{ .follow_symlinks = false });
+    const linked_stat = try nested.statFile(io, "hard", .{ .follow_symlinks = false });
+    try std.testing.expectEqual(source_stat.inode, linked_stat.inode);
+    try std.testing.expectEqual(@as(Io.File.NLink, 2), linked_stat.nlink);
+    try tmp.dir.writeFile(io, .{ .sub_path = "other", .data = "different target" });
+    try std.testing.expectError(error.PathAlreadyExists, createHardlink(io, tmp.dir, "other", nested, "hard"));
+    const preserved = try nested.readFileAlloc(io, "hard", allocator, .limited(payload.len + 1));
+    defer allocator.free(preserved);
+    try std.testing.expectEqualSlices(u8, &payload, preserved);
+    try tmp.dir.writeFile(io, .{ .sub_path = "empty", .data = "" });
+    // A single UTF-16 character exercises native ABI minimum buffer length as
+    // well as UTF-8 filename conversion on Windows.
+    try createHardlink(io, tmp.dir, "empty", nested, "\xc3\xa9");
+    try std.testing.expectEqual(@as(u64, 0), (try nested.statFile(io, "\xc3\xa9", .{ .follow_symlinks = false })).size);
+    try std.testing.expectError(error.InvalidArchivePath, createHardlink(io, tmp.dir, "nested/../target", nested, "unsafe"));
+    try std.testing.expectError(error.InvalidArchivePath, createHardlink(io, tmp.dir, "target", nested, "other/unsafe"));
 }
 
 test "staged extraction creates validated symlinks only after regular files" {

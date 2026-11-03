@@ -34,15 +34,26 @@ pub fn checkedUri(url: []const u8) !std.Uri {
 
 pub fn fetch(allocator: A, io: Io, url: []const u8, context: *anyopaque, consume: Consumer, options: Options) !void {
     _ = try checkedUri(url);
-    const Outcome = union(enum) { transfer: anyerror!void, timer: Io.Cancelable!void };
+    const Transfer = struct {
+        result: anyerror!void,
+        finished_at: Io.Clock.Timestamp,
+
+        fn run(a: A, transfer_io: Io, transfer_url: []const u8, transfer_context: *anyopaque, consumer: Consumer, transfer_options: Options) @This() {
+            const result = exchange(a, transfer_io, transfer_url, transfer_context, consumer, transfer_options);
+            return .{ .result = result, .finished_at = .now(transfer_io, .awake) };
+        }
+    };
+    const Outcome = union(enum) { transfer: Transfer, timer: Io.Cancelable!void };
     var buffer: [2]Outcome = undefined;
     var select = Io.Select(Outcome).init(io, &buffer);
     defer select.cancelDiscard();
     const deadline = (Io.Timeout{ .duration = .{ .raw = .fromMilliseconds(options.timeout_ms), .clock = .awake } }).toDeadline(io);
-    try select.concurrent(.transfer, exchange, .{ allocator, io, url, context, consume, options });
+    try select.concurrent(.transfer, Transfer.run, .{ allocator, io, url, context, consume, options });
     try select.concurrent(.timer, Io.Timeout.sleep, .{ deadline, io });
     return switch (try select.await()) {
-        .transfer => |result| result,
+        // The timer task may be scheduled late on a busy machine. Completion
+        // order alone must not accept a transfer that exceeded the deadline.
+        .transfer => |transfer| if (transfer.finished_at.compare(.gte, deadline.deadline)) error.UpdateDownloadTimeout else transfer.result,
         .timer => error.UpdateDownloadTimeout,
     };
 }
@@ -147,7 +158,15 @@ const CountedReader = struct {
     }
     fn fill(reader: *Io.Reader) Io.Reader.Error!usize {
         const self: *CountedReader = @fieldParentPtr("interface", reader);
-        const count = self.source.readSliceShort(&self.buffer) catch |err| {
+        // readVec may be called by peek/fill while a suffix is still unread.
+        // Preserve it before appending: Zstd table parsing routinely needs a
+        // contiguous view spanning transport reads.
+        const unread = reader.end - reader.seek;
+        std.debug.assert(unread < reader.buffer.len);
+        @memmove(reader.buffer[0..unread], reader.buffer[reader.seek..reader.end]);
+        reader.seek = 0;
+        reader.end = unread;
+        const count = self.source.readSliceShort(reader.buffer[unread..]) catch |err| {
             self.err = err;
             return error.ReadFailed;
         };
@@ -157,8 +176,7 @@ const CountedReader = struct {
             return error.ReadFailed;
         }
         self.received += count;
-        reader.seek = 0;
-        reader.end = count;
+        reader.end += count;
         return 0;
     }
 };
@@ -202,6 +220,25 @@ test "streaming HTTP reader enforces size limits without buffering body" {
     try std.testing.expectError(error.ReadFailed, reader.interface.readSliceShort(&output));
     try std.testing.expectEqual(error.UpdateDownloadTooLarge, reader.err.?);
     try std.testing.expectEqual(@as(u64, 0), reader.received);
+}
+
+test "streaming HTTP reader preserves unread bytes when a peek crosses a buffer boundary" {
+    const allocator = std.testing.allocator;
+    const bytes = try allocator.alloc(u8, 64 * 1024 + 32);
+    defer allocator.free(bytes);
+    for (bytes, 0..) |*byte, index| byte.* = @truncate(index *% 37);
+    var source: Io.Reader = .fixed(bytes);
+    var reader: CountedReader = undefined;
+    reader.init(&source, bytes.len);
+    const prefix = bytes.len - 39;
+    try std.testing.expectEqualSlices(u8, bytes[0..prefix], try reader.interface.take(prefix));
+    // Zstd table parsing peeks beyond the remaining compressed bytes, then
+    // consumes only part of that view. Both operations must retain the suffix.
+    try std.testing.expectEqualSlices(u8, bytes[prefix..][0..16], try reader.interface.peek(16));
+    try std.testing.expectEqualSlices(u8, bytes[prefix..][0..9], try reader.interface.take(9));
+    try std.testing.expectEqualSlices(u8, bytes[prefix + 9 ..], try reader.interface.take(bytes.len - prefix - 9));
+    try std.testing.expectError(error.EndOfStream, reader.interface.takeByte());
+    try std.testing.expectEqual(@as(u64, bytes.len), reader.received);
 }
 
 test "redirect destinations resolve relative references and preserve HTTPS" {
@@ -264,7 +301,10 @@ const TestServer = struct {
 };
 
 fn testDownload(server: *TestServer, url: []const u8, options: Options) ![]u8 {
-    const io = std.testing.io;
+    return testDownloadWithIo(server, url, options, std.testing.io);
+}
+
+fn testDownloadWithIo(server: *TestServer, url: []const u8, options: Options, io: Io) ![]u8 {
     const allocator = std.testing.allocator;
     var serving = try io.concurrent(TestServer.serve, .{server});
     defer serving.cancel(io) catch {};
@@ -296,6 +336,53 @@ test "HTTP download follows five relative and absolute redirects into one stream
     const result = try testDownload(&server, start, .{ .timeout_ms = 3000 });
     defer allocator.free(result);
     try std.testing.expectEqualStrings("payload\x00\xff", result);
+}
+
+test "HTTP streaming decodes compressed Zstd blocks across buffer boundaries" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const frame = @embedFile("testdata/http-compressed-blocks.zst");
+    // A valid skippable frame positions the compressed Huffman table across
+    // the transport's 64 KiB boundary. Decoding raw blocks cannot expose this.
+    const frame_offset = 64 * 1024 - 20;
+    const compressed = try allocator.alloc(u8, frame_offset + frame.len);
+    defer allocator.free(compressed);
+    @memset(compressed[0..frame_offset], 0);
+    std.mem.writeInt(u32, compressed[0..4], 0x184d2a50, .little);
+    std.mem.writeInt(u32, compressed[4..8], frame_offset - 8, .little);
+    @memcpy(compressed[frame_offset..], frame);
+    var server = try TestServer.init();
+    defer server.deinit();
+    const url = try server.url("/archive.tar.zst");
+    defer allocator.free(url);
+    server.steps = &.{.{ .path = "/archive.tar.zst", .body = compressed }};
+    var serving = try io.concurrent(TestServer.serve, .{&server});
+    defer serving.cancel(io) catch {};
+    const Context = struct {
+        size: usize = 0,
+        hash: [32]u8 = undefined,
+        fn consume(pointer: *anyopaque, input: *Io.Reader) !void {
+            const self: *@This() = @ptrCast(@alignCast(pointer));
+            const zstd = std.compress.zstd;
+            const window = try std.testing.allocator.alloc(u8, zstd.default_window_len + zstd.block_size_max);
+            defer std.testing.allocator.free(window);
+            var decoder: zstd.Decompress = .init(input, window, .{ .verify_checksum = false });
+            var digest: std.crypto.hash.sha2.Sha256 = .init(.{});
+            var bytes: [4096]u8 = undefined;
+            while (true) {
+                const count = decoder.reader.readSliceShort(&bytes) catch |err| return decoder.err orelse err;
+                if (count == 0) break;
+                self.size += count;
+                digest.update(bytes[0..count]);
+            }
+            self.hash = digest.finalResult();
+        }
+    };
+    var context: Context = .{};
+    try fetch(allocator, io, url, &context, Context.consume, .{ .timeout_ms = 5000 });
+    try serving.await(io);
+    try std.testing.expectEqual(@as(usize, 8192), context.size);
+    try std.testing.expectEqualStrings("07e0756ccdfdb405f9e883e589b1f338f6b53daff3f1783dfbbda63320374c52", &std.fmt.bytesToHex(context.hash, .lower));
 }
 
 test "HTTP redirect loops stop after five followed responses" {
@@ -331,5 +418,40 @@ test "the download deadline covers the complete redirect chain" {
         .{ .path = "/start", .status = 302, .location = "/final", .delay_ms = 60 },
         .{ .path = "/final", .body = "late payload", .delay_ms = 60 },
     };
-    try std.testing.expectError(error.UpdateDownloadTimeout, testDownload(&server, start, .{ .timeout_ms = 100 }));
+    const result = testDownload(&server, start, .{ .timeout_ms = 100 });
+    defer if (result) |bytes| allocator.free(bytes) else |_| {};
+    try std.testing.expectError(error.UpdateDownloadTimeout, result);
+}
+
+test "a delayed timer cannot accept a transfer completed past the deadline" {
+    const allocator = std.testing.allocator;
+    var server = try TestServer.init();
+    defer server.deinit();
+    const start = try server.url("/start");
+    defer allocator.free(start);
+    server.steps = &.{
+        .{ .path = "/start", .status = 302, .location = "/final", .delay_ms = 60 },
+        .{ .path = "/final", .body = "late payload", .delay_ms = 60 },
+    };
+
+    // Delay only the client's deadline task. The server still uses the real
+    // test IO, so the transfer finishes first but beyond its original budget.
+    // This reproduces a delayed timer on a busy VM without scheduling races.
+    var delayed_timer_vtable = std.testing.io.vtable.*;
+    delayed_timer_vtable.sleep = struct {
+        fn sleep(userdata: ?*anyopaque, timeout: Io.Timeout) Io.Cancelable!void {
+            const delayed: Io.Timeout = switch (timeout) {
+                .deadline => |deadline| .{ .deadline = deadline.addDuration(.{
+                    .raw = .fromMilliseconds(1000),
+                    .clock = deadline.clock,
+                }) },
+                else => timeout,
+            };
+            return std.testing.io.vtable.sleep(userdata, delayed);
+        }
+    }.sleep;
+    const io: Io = .{ .userdata = std.testing.io.userdata, .vtable = &delayed_timer_vtable };
+    const result = testDownloadWithIo(&server, start, .{ .timeout_ms = 100 }, io);
+    defer if (result) |bytes| allocator.free(bytes) else |_| {};
+    try std.testing.expectError(error.UpdateDownloadTimeout, result);
 }

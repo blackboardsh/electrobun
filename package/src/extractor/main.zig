@@ -1674,7 +1674,9 @@ fn extractInstallArchiveReader(
     const recipe = @import("archive_recipe.zig");
     const recipe_path = try retainedRecipePath(allocator, staging_dir, hash);
     defer allocator.free(recipe_path);
-    var stage = try std.Io.Dir.cwd().openDir(g_io, staging_dir, .{ .follow_symlinks = false });
+    // setPermissions needs an iterable handle; Linux otherwise opens O_PATH,
+    // which cannot be passed to fchmod.
+    var stage = try std.Io.Dir.cwd().openDir(g_io, staging_dir, .{ .follow_symlinks = false, .iterate = true });
     defer stage.close(g_io);
     if (builtin.os.tag != .windows) try stage.setPermissions(g_io, .fromMode(0o700));
     const window = try allocator.alloc(u8, zstd.default_window_len + zstd.block_size_max);
@@ -1736,6 +1738,9 @@ test "installer streams embedded and adjacent archives into an exact recipe with
         try extractInstallArchive(allocator, if (embedded) .{ .memory = &archive } else .{ .file = archive_path }, stage_path, "release-hash");
         var stage = try tmp.dir.openDir(g_io, stage_name, .{ .iterate = true });
         defer stage.close(g_io);
+        if (builtin.os.tag != .windows) {
+            try std.testing.expectEqual(@as(std.posix.mode_t, 0o700), (try stage.stat(g_io)).permissions.toMode() & 0o777);
+        }
         const json = try stage.readFileAlloc(g_io, "release-hash.recipe.json", allocator, .limited(recipe.max_recipe_bytes));
         defer allocator.free(json);
         var receipt = try recipe.parse(allocator, json);
