@@ -17,6 +17,7 @@ import {
 	syncReleaseToolchainPins as syncPins,
 	updateMigrationGuideHutchPin,
 	updateNpmResolverPin,
+	updateProjectToolchainPins,
 	updateReleaseWorkflowPins,
 } from "./sync-release-toolchain-pins.mjs";
 
@@ -39,6 +40,10 @@ function resolver(version = oldPins.hutch) {
 	return `"use strict";\n\nconst PAIRED_HUTCH_VERSION = "${version}";\nconsole.log(PAIRED_HUTCH_VERSION);\n`;
 }
 
+function projectConfig(project, pins = oldPins) {
+	return `// @hutch cli=${pins.hutch} cottontail=${pins.cottontail}\nexport default { name: "${project}" };\n`;
+}
+
 function migrationGuide(hutchVersion = oldPins.hutch) {
 	return `# Migrating to v2\n\nFor an exact install:\n\n\`\`\`ts\n// @hutch cli=${hutchVersion} cottontail=0.5.0\nexport default {};\n\`\`\`\n`;
 }
@@ -47,6 +52,7 @@ function createRepositoryFixture(t, options = {}) {
 	const root = mkdtempSync(join(tmpdir(), "electrobun-pin-sync-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const packageDir = join(root, "package");
+	const kitchenDir = join(root, "kitchen");
 	const sharedDir = join(packageDir, "src", "shared");
 	const workflowDir = join(root, ".github", "workflows");
 	const resolverDir = join(root, "npm", "electrobun", "bin");
@@ -61,6 +67,7 @@ function createRepositoryFixture(t, options = {}) {
 	);
 	for (const directory of [
 		packageDir,
+		kitchenDir,
 		sharedDir,
 		workflowDir,
 		resolverDir,
@@ -73,6 +80,8 @@ function createRepositoryFixture(t, options = {}) {
 		appVersion: join(sharedDir, "cottontail-version.ts"),
 		workflow: join(workflowDir, "release.yml"),
 		resolver: join(resolverDir, "resolve-hutch.cjs"),
+		kitchen: join(kitchenDir, "hutch.config.ts"),
+		docs: join(root, "docs", "hutch.config.ts"),
 		migrationGuide: join(migrationGuideDir, "migrating-to-v2.mdx"),
 	};
 	writeFileSync(
@@ -86,6 +95,9 @@ function createRepositoryFixture(t, options = {}) {
 		options.appVersion ?? `export const COTTONTAIL_VERSION = "${newPins.appCottontail}";\n`,
 	);
 	writeFileSync(paths.resolver, options.resolver ?? resolver());
+	for (const project of ["kitchen", "docs"]) {
+		writeFileSync(paths[project], options[project] ?? projectConfig(project));
+	}
 	writeFileSync(
 		paths.migrationGuide,
 		options.migrationGuide ?? migrationGuide(),
@@ -109,6 +121,8 @@ test("pin synchronization is atomic per file and reaches a fixed point", (t) => 
 		changed: [
 			".github/workflows/release.yml",
 			"npm/electrobun/bin/resolve-hutch.cjs",
+			"kitchen/hutch.config.ts",
+			"docs/hutch.config.ts",
 			"docs/src/content/docs/electrobun/guides/migrating-to-v2.mdx",
 		],
 	});
@@ -124,6 +138,9 @@ test("pin synchronization is atomic per file and reaches a fixed point", (t) => 
 		readFileSync(fixture.paths.migrationGuide, "utf8"),
 		migrationGuide(newPins.hutch),
 	);
+	for (const project of ["kitchen", "docs"]) {
+		assert.equal(readFileSync(fixture.paths[project], "utf8"), projectConfig(project, newPins));
+	}
 	assert.equal(statSync(fixture.paths.workflow).mode & 0o777, workflowMode);
 	assert.equal(statSync(fixture.paths.resolver).mode & 0o777, resolverMode);
 	assert.equal(
@@ -164,10 +181,15 @@ test("prerelease pins preserve the documented stable install until a stable pin 
 		changed: [
 			".github/workflows/release.yml",
 			"npm/electrobun/bin/resolve-hutch.cjs",
+			"kitchen/hutch.config.ts",
+			"docs/hutch.config.ts",
 		],
 	});
 	assert.equal(readFileSync(fixture.paths.workflow, "utf8"), workflow(prereleasePins));
 	assert.equal(readFileSync(fixture.paths.resolver, "utf8"), resolver(prereleasePins.hutch));
+	for (const project of ["kitchen", "docs"]) {
+		assert.equal(readFileSync(fixture.paths[project], "utf8"), projectConfig(project, prereleasePins));
+	}
 	assert.equal(readFileSync(fixture.paths.migrationGuide, "utf8"), documentedInstall);
 	assert.deepEqual(syncReleaseToolchainPins(fixture.root, prereleasePins), {
 		pins: prereleasePins,
@@ -182,6 +204,8 @@ test("prerelease pins preserve the documented stable install until a stable pin 
 		changed: [
 			".github/workflows/release.yml",
 			"npm/electrobun/bin/resolve-hutch.cjs",
+			"kitchen/hutch.config.ts",
+			"docs/hutch.config.ts",
 			"docs/src/content/docs/electrobun/guides/migrating-to-v2.mdx",
 		],
 	});
@@ -240,6 +264,32 @@ test("pin synchronization validates every target before mutating any", (t) => {
 	);
 	assert.equal(readFileSync(fixture.paths.workflow, "utf8"), originalWorkflow);
 	assert.equal(readFileSync(fixture.paths.resolver, "utf8"), resolver("latest"));
+});
+
+test("project pin synchronization preserves file contents, modes, and Windows line endings", (t) => {
+	const suffix = '\r\n// Project-specific settings: café\r\nexport default { scripts: { build: "hutch build.ts" } };\r\n';
+	const source = `// @hutch cli=${oldPins.hutch} cottontail=${oldPins.cottontail}${suffix}`;
+	const fixture = createRepositoryFixture(t, { kitchen: source, docs: source });
+	chmodSync(fixture.paths.kitchen, 0o640);
+	chmodSync(fixture.paths.docs, 0o600);
+	const modes = ["kitchen", "docs"].map((project) => statSync(fixture.paths[project]).mode & 0o777);
+	syncReleaseToolchainPins(fixture.root);
+	for (const [index, project] of ["kitchen", "docs"].entries()) {
+		assert.equal(readFileSync(fixture.paths[project], "utf8"),
+			`// @hutch cli=${newPins.hutch} cottontail=${newPins.cottontail}${suffix}`);
+		assert.equal(statSync(fixture.paths[project]).mode & 0o777, modes[index]);
+	}
+});
+
+test("malformed project pragmas prevent every pin mutation", (t) => {
+	for (const project of ["kitchen", "docs"]) {
+		const fixture = createRepositoryFixture(t, { [project]: projectConfig(project, { ...oldPins, hutch: "latest" }) });
+		const originals = Object.entries(fixture.paths).map(([name, path]) => [name, readFileSync(path, "utf8")]);
+		assert.throws(() => syncReleaseToolchainPins(fixture.root), /Hutch pin must be an exact SemVer/);
+		for (const [name, source] of originals) assert.equal(readFileSync(fixture.paths[name], "utf8"), source);
+	}
+	assert.throws(() => updateProjectToolchainPins("export default {};\n", newPins, "docs/hutch.config.ts"),
+		/docs\/hutch.config.ts must start with an exact/);
 });
 
 for (const hutch of [newPins.hutch, "0.28.2-canary.0"]) {
