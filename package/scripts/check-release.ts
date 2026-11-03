@@ -9,6 +9,7 @@ import { createTestRunDiagnostics } from "./test-run-diagnostics.mjs";
 export const releaseCheckTasks = [
 	["Clean template artifacts", "clean:templates"],
 	["Typecheck", "typecheck"],
+	["Kitchen typecheck", "typecheck:kitchen"],
 	["Development command tests", "dev:test"],
 	["Core host transport tests", "test:core-host-transport"],
 	["Core synchronization stress", "test:core-synchronization"],

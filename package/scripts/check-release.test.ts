@@ -49,6 +49,7 @@ assert(
 const expectedReleaseTasks = [
 	"clean:templates",
 	"typecheck",
+	"typecheck:kitchen",
 	"dev:test",
 	"test:core-host-transport",
 	"test:core-synchronization",

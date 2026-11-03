@@ -24,6 +24,7 @@ export default {
 		"build:docs:release": "cd ../docs && hutch run build",
 		typecheck:
 			"hutch src/preload/build.ts && node node_modules/typescript/bin/tsc --noEmit",
+		"typecheck:kitchen": "hutch test scripts/typecheck-kitchen.test.ts && hutch scripts/typecheck-kitchen.ts",
 		"check:release": ["hutch", "scripts/check-release.ts"],
 		"pin:latest":
 			"hutch self update && cd .. && hutch self pin --recursive && hutch cottontail pin --recursive && node package/scripts/sync-release-toolchain-pins.mjs",

@@ -35,7 +35,11 @@ describe("test deadlines", () => {
 			await expect(withTestDeadline(Promise.resolve("done"), 60_000)).resolves.toBe("done");
 			const failure = new Error("assertion failed");
 			await expect(withTestDeadline(Promise.reject(failure), 60_000)).rejects.toBe(failure);
-			expect(clear.mock.calls).toEqual(timers.mock.results.map(result => [result.value]));
+			const handles = timers.mock.results.map(result => {
+				if (result.type !== "return") throw new Error("setTimeout did not return a timer handle");
+				return result.value;
+			});
+			expect(clear.mock.calls.map(([handle]) => handle)).toEqual(handles);
 		} finally {
 			timers.mockRestore();
 			clear.mockRestore();
@@ -61,7 +65,11 @@ describe("test deadlines", () => {
 				return "late completion";
 			});
 			await expect(withTestDeadline(operation, 1000)).rejects.toBeInstanceOf(TestDeadlineError);
-			expect(clear.mock.calls).toEqual(timers.mock.results.map(result => [result.value]));
+			const handles = timers.mock.results.map(result => {
+				if (result.type !== "return") throw new Error("setTimeout did not return a timer handle");
+				return result.value;
+			});
+			expect(clear.mock.calls.map(([handle]) => handle)).toEqual(handles);
 		} finally {
 			clock.mockRestore();
 			timers.mockRestore();
