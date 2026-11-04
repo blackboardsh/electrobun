@@ -15,6 +15,15 @@ on:
         description: Run containing the saved source smoke screenshots
         type: string
         default: '41794831289'
+      compare_batch:
+        description: Compare separate and batched OCR, including a positive portal frame
+        type: boolean
+        default: false
+      contention_workers:
+        description: Additional explicitly synthetic CPU-contention comparison
+        type: choice
+        default: '0'
+        options: ['0', '4', '8', '16']
 
 permissions:
   contents: read
@@ -44,6 +53,7 @@ jobs:
           python-version: '3.12'
           architecture: x64
       - name: Install original Windows OCR toolchain
+        id: toolchain
         shell: pwsh
         run: |
           $tesseract = 'C:\Program Files\Tesseract-OCR\tesseract.exe'
@@ -57,6 +67,7 @@ jobs:
           python -m pip install Pillow==11.3.0
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Download original saved screenshots
+        id: source
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,10 +77,24 @@ jobs:
           exit $LASTEXITCODE
       - name: Replay complete negative OCR within original budget
         shell: pwsh
+        env:
+          COMPARE_BATCH: ${{ inputs.compare_batch }}
         run: |
           $source = Join-Path $env:RUNNER_TEMP 'ocr-source'
           $output = Join-Path $env:RUNNER_TEMP 'ocr-replay'
-          python scripts/desktop-smoke/replay_ocr.py $source $output
+          $arguments = @('scripts/desktop-smoke/replay_ocr.py', $source, $output)
+          if ($env:COMPARE_BATCH -eq 'true') { $arguments += '--compare-batch' }
+          python @arguments
+          exit $LASTEXITCODE
+      - name: Compare OCR under synthetic CPU contention
+        if: always() && inputs.compare_batch && inputs.contention_workers != '0' && steps.toolchain.outcome == 'success' && steps.source.outcome == 'success'
+        shell: pwsh
+        env:
+          CONTENTION_WORKERS: ${{ inputs.contention_workers }}
+        run: |
+          $source = Join-Path $env:RUNNER_TEMP 'ocr-source'
+          $output = Join-Path $env:RUNNER_TEMP 'ocr-replay/contention'
+          python scripts/desktop-smoke/replay_ocr.py $source $output --compare-batch --contention-workers $env:CONTENTION_WORKERS
           exit $LASTEXITCODE
       - name: Upload saved-frame OCR timings
         if: always()
