@@ -52,6 +52,9 @@ Already know what you want? Skip the picker:
 hutch electrobun init my-app --template=hello-world
 ```
 
+For experimental native GPU-rendered interfaces, start with `bun-ui` or
+`zig-ui` and follow the [Electrobun UI guide](/electrobun/guides/electrobun-ui/).
+
 Add `--beta` to scaffold from the latest **beta** templates instead of stable:
 
 ```bash
@@ -96,7 +99,7 @@ release it was tested and shipped with:
 ```ts docs=syntax
 export default {
   electrobun: {
-    version: "2.0.5",
+    version: "2.0.6",
   },
   scripts: {
     install: ["hutch", "install", "--frozen-lockfile"],

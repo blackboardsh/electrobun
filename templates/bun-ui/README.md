@@ -40,9 +40,11 @@ tsconfig.json          jsxImportSource: electrobun/main/ui (editor/typecheck onl
 - **Forms** behave like the web: Enter in the input or clicking the submit
   button fires the form's `onSubmit`; `onInput`/`onChange` events carry the
   control's value in `e.data`.
-- **Dark mode:** the `eb-*` theme follows `prefers-color-scheme`;
-  `app.ui.setDark(on)` overrides it.
+- **Dark mode:** `app.ui.setDark(on)` sets the engine's `prefers-color-scheme`
+  value and the `eb-*` theme. It does not automatically follow system appearance.
 - **Window dragging:** the header uses `-webkit-app-region: drag`, with the
-  native traffic lights inset (`titleBarStyle: "hiddenInset"`).
+  native traffic lights inset on macOS (`titleBarStyle: "hiddenInset"`).
 
-The UI engine is macOS-only for now.
+The UI engine is experimental on macOS, Windows, and Linux (X11), on x64 and
+ARM64. See the [platform support and limitations](https://docs.electrobun.dev/electrobun/apis/ui/overview/#platform-support)
+before relying on transparent windows, text shaping, or native accessibility.

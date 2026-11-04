@@ -24,7 +24,7 @@ not currently cross-compile Electrobun apps.
 ## Main process runtimes
 
 Bun is the default JavaScript main process. For existing applications, see the
-[2.0.5 migration guide](/electrobun/guides/migrating-to-v2/#upgrading-from-202-to-205).
+[2.0.6 upgrade guide](/electrobun/guides/migrating-to-v2/#upgrading-from-205-to-206).
 
 | Runtime | Status | Notes |
 | --- | --- | --- |
@@ -54,6 +54,13 @@ Linux requires GTK 3, WebKitGTK 4.1, Ayatana AppIndicator, and librsvg runtime
 packages even when CEF is bundled. See
 [Cross-Platform Development](/electrobun/guides/cross-platform-development/)
 for package names.
+
+## Native GPU UI
+
+[Electrobun UI](/electrobun/guides/electrobun-ui/) is experimental and supports
+macOS, Windows, and Linux. Enable `bundleWGPU: true` in each target's build
+configuration to package the GPU renderer and UI engine. See the guide for
+supported input, accessibility, and rendering features on each platform.
 
 ## JavaScript compatibility
 

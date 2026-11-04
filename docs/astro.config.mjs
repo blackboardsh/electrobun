@@ -8,7 +8,7 @@ const sidebar = JSON.parse(
 );
 
 export default defineConfig({
-  site: "https://framework.blackboard.sh",
+  site: "https://docs.electrobun.dev",
   integrations: [
     starlight({
       title: "Electrobun Docs",

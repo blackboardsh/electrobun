@@ -22,7 +22,7 @@ project does not need a `package.json`:
 
 ```ts docs=syntax
 export default {
-  electrobun: { version: "2.0.5" },
+  electrobun: { version: "2.0.6" },
   scripts: {
     dev: ["hutch", "electrobun", "dev", "--watch"],
     build: ["hutch", "electrobun", "build", "--env=stable"],
@@ -252,7 +252,7 @@ Focused Odin graphics templates also exist: `odin-fluid-wgpu`,
 ## Toolchain
 
 Odin is pre-1.0 and ships monthly dev releases with breaking changes;
-Electrobun 2.0.5 defaults to **Odin dev-2026-07a** and guarantees the SDK only
+Electrobun 2.0.6 defaults to **Odin dev-2026-07a** and guarantees the SDK only
 against that release. Override it exactly with `build.odin.version`. Hutch uses
 a system compiler only on an exact version match; otherwise it downloads the
 selected toolchain into

@@ -3,7 +3,7 @@ title: "Migrate to Electrobun 2.x"
 description: "Upgrade the npm dependency, run your scripts, and fix what the validator reports."
 ---
 
-Electrobun 2.x moves build orchestration to Hutch. Electrobun 2.0.5 uses Bun
+Electrobun 2.x moves build orchestration to Hutch. Electrobun 2.0.6 uses Bun
 as the default JavaScript main process; 2.0.2 defaulted to Cottontail.
 Application code and RPC schemas usually need
 little or no change, and the npm package remains the front door. There is one
@@ -53,6 +53,54 @@ npm run dev                   # your existing `electrobun ...` scripts still wor
 
 That's the whole migration for most apps. The sections below cover the
 details and the situational cases.
+
+## Upgrading from 2.0.5 to 2.0.6
+
+Update the npm dependency and any explicit Electrobun pin:
+
+```bash
+npm install --save-dev electrobun@2.0.6
+```
+
+If `hutch.config.ts` sets `electrobun.version`, change it to `2.0.6` as well.
+An exact project pin takes precedence over the installed npm package. A
+first-line Hutch pragma also overrides the npm defaults: update it to
+`cli=0.29.0 cottontail=0.7.3`, or remove it to use the release's paired tools.
+Direct Hutch users should run `hutch upgrade` before rebuilding.
+
+### Update publishing
+
+Keep the application's identity and update channel, and continue publishing at
+the URL known to existing installations. New builds require an HTTPS
+`release.baseUrl`, except for loopback HTTP in local development; see the
+[release-host migration guidance](/electrobun/guides/updates/#upgrading-to-the-206-updater)
+if older clients use a remote HTTP host. Publish the complete generated
+`artifacts/` directory, including both `*-update.json` and
+`*-update-v2.json`, after its bundles and patches are available. Hutch 0.29
+adds the v2 manifest while preserving the original format for older clients.
+
+Apps built with 2.0.6 reconstruct the original release tar in memory from the
+installed files and an archive recipe, then stream patch output into a staged
+replacement. The application-side `Updater` API stays the same. An older
+installed app still uses its older updater to receive this release; test a
+subsequent update from the new installation to exercise the new path. See
+[Updates](/electrobun/guides/updates/) for the hosting contract and
+[Updater disk space](/electrobun/apis/updater/#disk-space-during-preparation)
+for the staging and memory requirements.
+
+### Native GPU UI and embedded frames
+
+[Electrobun UI](/electrobun/guides/electrobun-ui/) is an optional experimental
+API for GPU-rendered interfaces on macOS, Windows, and Linux. Follow its setup
+guide to enable `bundleWGPU` for each target and choose the native UI or webview
+DOM renderer. The experimental API status applies even when using a stable
+Electrobun release.
+
+In macOS system webviews, native bridge access and custom preloads are scoped
+to the main frame. If an embedded iframe needs to communicate with the app,
+relay its messages through the parent with `postMessage` and validate the
+sender there. See [BrowserView](/electrobun/apis/browser-view/) for navigation
+and preload behavior.
 
 <span id="upgrading-from-202-to-204"></span>
 
@@ -147,10 +195,10 @@ reproducible builds independent of the npm dependency — create
 `hutch.config.ts`:
 
 ```ts docs=syntax
-// @hutch cli=0.28.2 cottontail=0.7.3
+// @hutch cli=0.29.0 cottontail=0.7.3
 export default {
   electrobun: {
-    version: "2.0.5",
+    version: "2.0.6",
   },
 };
 ```

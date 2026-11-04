@@ -2,8 +2,17 @@
 
 A GPU-direct UI engine for Electrobun apps, written in Zig. HTML + CSS (a stable,
 practical subset) + fine-grained reactivity, rendered with WebGPU (Dawn) — no
-webview, no browser engine. One C ABI serves every Electrobun backend
-(TypeScript via FFI, Zig, Rust, Go, Odin, C).
+webview, no browser engine. TypeScript uses the C ABI through FFI; Zig can
+compile the engine directly into the app. The C ABI is also available to
+other languages.
+
+The engine is experimental on macOS, Windows, and Linux (X11), on x64 and
+ARM64. macOS uses system text/image services; Windows and Linux use portable
+Zig implementations. Linux has no native Wayland host or native accessibility
+bridge yet, and its WGPU surfaces commonly do not support transparency. The
+portable text backend does not yet implement bidirectional reordering,
+complex Arabic/Indic shaping, or variable-font instances. See the
+[platform support and limitations](https://docs.electrobun.dev/electrobun/apis/ui/overview/#platform-support).
 
 ## What's in here
 
@@ -12,14 +21,14 @@ webview, no browser engine. One C ABI serves every Electrobun backend
 | DOM | `dom.zig`, `html.zig` | retained tree, u32 ids, dirty bits, forgiving HTML5-ish parser |
 | CSS | `css/*.zig`, `style.zig`, `ua.css` | selectors L4 subset (`:is/:where/:not/:has`, nth), nesting, `@layer`, `@media` (incl. range syntax), `@supports`, `@property`, `@keyframes`, `var()`, `calc/min/max/clamp`, oklch/lab/hsl colors — enough for Tailwind v4 output |
 | Layout | `layout.zig`, `inline.zig`, `grid.zig` | block (margin collapsing), inline formatting (wrapping, baselines, ellipsis, line-clamp), flexbox (full §9 algorithm), grid (tracks, fr, minmax, repeat/auto-fill, placement), absolute/fixed, replaced elements, per-node layout caching |
-| Text | `text/*.zig` | platform shaping + rasterization (CoreText today; zero binary cost), font fallback, color emoji |
+| Text | `text/*.zig` | CoreText on macOS; portable OpenType shaping/rasterization on Windows/Linux; font fallback, supported color emoji |
 | Paint | `paint.zig` | stacking contexts/z-index, clips, transforms, opacity/filter layers, shadows, gradients (linear/radial/conic), borders (per-side, dashed/dotted), decorations, hit regions |
 | Render | `render/gpu.zig` + `ui.wgsl`, `render/cpu.zig` | instanced SDF quads on Dawn; CPU twin with identical math for tests / headless / fallback; backdrop-filter, blur |
 | Input | `events.zig` | hit testing, hover/active/focus(-visible/-within), bubbling, wheel scroll, Tab order, form-control behaviors, select popups, text editing with undo, IME composition |
 | Motion | `anim.zig` | CSS transitions (interruptible, reversal shortening), `@keyframes`, velocity-preserving springs |
 | Reactivity | `reactive.zig`, `template.zig`, `app.zig` | signals/computeds/effects in the core; HTML templates with `{expr}`, `if/else`, keyed `each`, `bind:value`, components + slots; comptime-bound Zig apps |
-| A11y | `a11y.zig` | semantic tree → NSAccessibility (macOS host) |
-| Media | `images.zig`, `svg.zig` | ImageIO decode, inline SVG via CoreGraphics |
+| A11y | `a11y.zig` | semantic tree → NSAccessibility (macOS) or UI Automation (Windows); tree inspection on every platform |
+| Media | `images.zig`, `svg.zig` | ImageIO/CoreGraphics on macOS; portable PNG/JPEG/GIF/BMP decode and SVG rasterization on Windows/Linux |
 | ABI | `capi.zig`, `host/electrobun.zig` | `ebui_*` functions, batched command buffer, event queue; host for Electrobun WGPU views |
 | Components | `components/electrobun.css` | `eb-*` design system (buttons, inputs, switch, tabs, cards, dialogs, menus, toasts, tables …) — plain CSS, also works in browsers |
 

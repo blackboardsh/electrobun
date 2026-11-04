@@ -13,7 +13,7 @@ see [Native main process](/electrobun/guides/native-main-process/).
 Hutch stable and canary builds create update metadata plus a compressed full
 bundle. When a previous release is available, Hutch also creates a delta patch.
 Publish the artifact directory
-to a static host and configure its public base URL:
+to a static host and configure its public HTTPS base URL:
 
 ```ts
 import type { ElectrobunConfig } from "electrobun";
@@ -29,6 +29,13 @@ export default {
   },
 } satisfies ElectrobunConfig;
 ```
+
+From 2.0.6, native update preparation requires an HTTPS base URL without
+credentials, query parameters, or a fragment. HTTP is allowed only for local
+tests on `localhost`, `127.0.0.1`, or `[::1]`. Artifact redirects cannot
+downgrade HTTPS to HTTP; HTTP-to-HTTP redirects must stay on the same loopback
+host and port. See [Updates](/electrobun/guides/updates/) for migration from
+older release hosts.
 
 ## Check and install
 
@@ -49,18 +56,21 @@ if (update.updateAvailable) {
 ```
 
 `applyUpdate()` first asks the normal `before-quit` handlers for permission. If
-they allow the quit, a native post-exit helper revalidates the staged bundle,
+they allow the quit, a native helper revalidates the staged bundle,
 replaces the installed app transactionally, refreshes platform integration,
-and launches the new version. A failed replacement or launch operation restores
-the previous app. The old app is removed after the launch operation succeeds;
+and launches the new version. The helper waits for the running app to exit before
+swapping its files, including on Windows. If replacement, platform integration,
+or the launch operation fails, it attempts to restore the previous app.
+The old app is removed after the launch operation succeeds;
 this confirms that launch was requested, not that the application completed
 startup or passed an application-specific health check.
 It does nothing until a prepared download is ready.
 
-`downloadUpdate()` uses a native helper to reconstruct the exact current tar in
-RAM from installed file contents and an archive recipe. Original tar headers,
-ordering, and padding come from the recipe, so filesystem timestamps and tar
-tool differences do not change the patch input. File and archive digests must
+Starting with Electrobun 2.0.6, `downloadUpdate()` uses a native helper to
+reconstruct the exact current tar in RAM from installed file contents and an
+archive recipe. Original tar headers, ordering, and padding come from the
+recipe, so filesystem timestamps and tar tool differences do not change the
+patch input. File and archive digests must
 match before patching. Original signed file bytes are preserved without
 re-signing the app.
 
@@ -82,11 +92,15 @@ The updater retains `<hash>.recipe.json` under the installed channel's
 an older installation, it removes the cached tar only after publishing a recipe
 and verifying that the installed app reproduces the original archive.
 
-Delta preparation holds one reconstructed source tar in RAM, plus decoder
-buffers. It writes the downloaded patch and one replacement app to disk.
+Delta preparation holds one reconstructed source tar in RAM, plus recipe
+metadata and decoder buffers. This allocation is based on the uncompressed tar
+size, not the smaller patch download. It writes the downloaded patch and one
+replacement app to disk; it does not accumulate the new tar in a second RAM
+buffer.
 Between patch-chain hops, the intermediate app is reconstructed into RAM and
 removed before the next stage is extracted. If allocating the source buffer
-fails, full-download fallback does not require that buffer.
+fails, the helper attempts full-download fallback, which needs decoder buffers
+but no complete source-tar buffer.
 
 Full downloads stream through decompression into the staged app, without keeping
 a complete compressed or uncompressed archive on disk. Both paths still need

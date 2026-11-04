@@ -5,14 +5,14 @@ description: "Electrobun UI windows, mounting, the UI object, native views, and 
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Electrobun UI is experimental and macOS-only today. APIs may change between
-releases.
+Electrobun UI is experimental on macOS, Windows, and Linux (X11). APIs may
+change between releases.
 </Aside>
 
 Everything lives in the `electrobun/main/ui` entrypoint. It is import-gated:
 apps that never import it pay nothing for it. It works in the Bun and
-Cottontail main processes and needs `bundleWGPU: true` (which also bundles the
-UI engine library on macOS). Start with the
+Cottontail main processes and needs `bundleWGPU: true` for each target OS
+(which bundles Dawn and the platform UI engine library). Start with the
 [setup guide](/electrobun/guides/electrobun-ui/#hello-world).
 
 ```tsx
@@ -49,7 +49,7 @@ full-window view, and renders the app.
 | `width`, `height` | `number` | `800`, `600` | Initial content size. |
 | `x`, `y` | `number` | — | Initial position. |
 | `titleBarStyle` | `"hidden" \| "hiddenInset" \| "default"` | `"default"` | `hiddenInset` keeps native window controls over full-size content. |
-| `transparent` | `boolean` | `false` | Alpha-composited window: only what the page paints is visible. |
+| `transparent` | `boolean` | `false` | Request an alpha-composited window. See the platform limits below. |
 | `alwaysOnTop` | `boolean` | `false` | Keep the window above normal windows. |
 | `background` | `string` | white / dark canvas | Page background (`html { background }`). Transparent windows default to none. |
 | `css` | `string \| string[]` | — | Stylesheets to add. |
@@ -103,7 +103,9 @@ Like `createUIWindow`, but into an existing `WGPUView`. Without a
 ## isUIAvailable
 
 `isUIAvailable()` returns whether the UI engine library could be loaded — for
-example to fall back to a webview on platforms the engine doesn't support yet.
+example to fall back to a webview when the engine was not bundled. It does not
+prove that a usable GPU surface can be created; mounting still reports attachment
+failures.
 
 ## The UI object
 
@@ -165,7 +167,7 @@ input uses. Electrobun's own Kitchen tests use them:
 | Member | Description |
 | --- | --- |
 | `frames` | Number of frames presented so far. |
-| `nextFrame(timeoutMs?)` | Resolves after at least one more frame has been presented. |
+| `nextFrame(timeoutMs?)` | Resolves after at least one more frame has been presented, without requesting a pixel readback. |
 | `pixel(x, y)` | Premultiplied RGBA of the presented frame at a point (CSS px). |
 | `accessibilityTree()` | Accessibility nodes as `"role\|name\|value\|flags"` lines. |
 | `simulate.move(x, y)` | Pointer move (updates `:hover`). |
@@ -199,6 +201,16 @@ behavior.
 
 | Platform | Status |
 | --- | --- |
-| macOS | Supported (CoreText text, ImageIO images, NSAccessibility) |
-| Windows | Not yet supported |
-| Linux | Not yet supported |
+| macOS (x64/ARM64) | Native input and IME, CoreText text, ImageIO images, NSAccessibility. |
+| Windows (x64/ARM64) | Native input and IMM32 IME, portable text/images, UI Automation; transparent UI uses DirectComposition. |
+| Linux (x64/ARM64, X11) | Native input and XIM, portable text/images; native assistive-technology integration is not implemented. |
+
+Linux WGPU surfaces use X11, including through XWayland when an X11 session
+is available; there is no native Wayland UI host. Their alpha support depends
+on the surface, and X11/Vulkan commonly exposes an opaque surface. Do not rely
+on transparent UI windows or overlays on Linux. macOS and Windows support
+alpha-composited UI windows.
+
+The Windows/Linux text backend has
+[shaping limitations](/electrobun/apis/ui/html-css/#text). The engine remains
+experimental even when it is distributed in a stable Electrobun release.

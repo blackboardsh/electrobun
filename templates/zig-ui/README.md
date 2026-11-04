@@ -11,7 +11,9 @@ hutch run dev
 ```
 
 `hutch run dev` builds the app, launches it, and rebuilds when source files
-change. The template has no npm dependencies. macOS only for now.
+change. The template has no npm dependencies. Electrobun UI is experimental
+on macOS, Windows, and Linux (X11), on x64 and ARM64. See the
+[platform support and limitations](https://docs.electrobun.dev/electrobun/apis/ui/overview/#platform-support).
 
 ## Layout
 
@@ -21,7 +23,7 @@ change. The template has no npm dependencies. macOS only for now.
   `electrobun_ui.electrobun.mountApp(App, &state, ...)`.
 - `build.zig` builds the `main` executable. It adds the Zig SDK
   (`electrobun`) and the UI engine (`electrobun_ui`, shipped as source next to
-  the SDK), and links the macOS frameworks the engine uses.
+  the SDK), and links system frameworks when targeting macOS.
 - `electrobun.config.ts`: `mainProcess: "zig"` and `bundleWGPU: true` (Dawn).
 
 How fields and methods map to the template (signals, lists, handlers,

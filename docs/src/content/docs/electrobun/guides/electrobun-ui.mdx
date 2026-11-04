@@ -5,8 +5,9 @@ description: "Build app UI with HTML, CSS, and JSX rendered straight to the GPU 
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Electrobun UI is experimental and currently runs on **macOS only**. APIs may
-change between releases. See [current limitations](#current-limitations).
+Electrobun UI is experimental on macOS, Windows, and Linux (X11), on x64 and
+ARM64. APIs may change between releases, including stable Electrobun releases.
+See [current limitations](#current-limitations).
 </Aside>
 
 Electrobun UI renders HTML, CSS, and JSX directly to the GPU from your main
@@ -26,7 +27,8 @@ instanced SDF quads → Dawn surface (WGPUView)
 
 Rendering is invalidation-driven: style, layout, and paint only run when
 something changed, and frames are only presented while something is
-animating or invalidated. An idle window does no work.
+animating or invalidated. An unchanged, idle window does not continuously
+repaint.
 
 ## A stable subset, not a browser
 
@@ -53,9 +55,9 @@ hutch electrobun init my-app --template=bun-ui      # Bun main process
 hutch electrobun init my-app --template=zig-ui      # Zig main process
 ```
 
-To set it up by hand, enable `bundleWGPU` — on macOS it bundles Dawn and the
-UI engine library (`libElectrobunUI.dylib`) into the app. Electrobun UI works
-with the Bun and Cottontail main processes; this example uses Bun:
+To set it up by hand, enable `bundleWGPU` for each target OS. It bundles Dawn
+and the platform UI engine library into the app. Electrobun UI works with
+the Bun and Cottontail main processes; this example uses Bun:
 
 ```ts
 // electrobun.config.ts
@@ -67,6 +69,8 @@ export default {
     mainProcess: "bun",
     bun: { entrypoint: "src/main.tsx" },
     mac: { bundleCEF: false, bundleWGPU: true },
+    win: { bundleCEF: false, bundleWGPU: true },
+    linux: { bundleCEF: false, bundleWGPU: true },
   },
 } satisfies ElectrobunConfig;
 ```
@@ -139,6 +143,30 @@ positioned over elements so they participate in the layout; see
 To put Electrobun UI *inside* web content instead, use the
 [`<electrobun-ui>` tag](/electrobun/apis/ui/ui-tag/).
 
+## Migrating from the 2.0.5 prototype
+
+Electrobun 2.0.6 replaces the experimental UI prototype with the Zig HTML/CSS
+engine. Apps using ordinary webviews do not need to change. Apps that used
+the experimental `electrobun/main/ui` renderer should migrate their markup
+and mounting code:
+
+| Prototype API | Current API |
+| --- | --- |
+| `<box>`, `<row>`, `<column>`, `<text>`, `<spacer>` and layout props | HTML elements with CSS; use `.eb-row` / `.eb-col` for simple flex containers and `flex-grow` for spacers. |
+| `textInput` | Native HTML `<input>` and `<textarea>` with DOM input events. |
+| `webview` / `wgpuSurface` components | Create a `BrowserView` or `WGPUView` and position it with `ui.anchor(element, view)`. |
+| `createUiContext`, `getUiContext`, `onKey` | The `UI` instance and DOM event listeners, such as `onKeyDown`. |
+| `UiTree` and low-level layout/paint helpers | `UI.document`, `UIDocument`, and `UINode`; layout and rendering now live in the Zig engine. |
+| `mount.context`, `mount.closed`, `mount.isClosed()` | Access `mount.ui`; observe window closure with `mount.window.on("close", ...)`. |
+
+The reactivity model remains explicit: `signal`, `store`, `live`, `memo`,
+and the control-flow components still drive individual bindings. The native
+renderer now shares its HTML/JSX renderer with
+[`electrobun/browser/ui`](/electrobun/apis/ui/browser-dom/). The mounting
+signatures and node interfaces have changed; use the
+[API overview](/electrobun/apis/ui/overview/) and updated templates as the
+reference when migrating.
+
 ## Where to go next
 
 - [API overview](/electrobun/apis/ui/overview/) — windows, mounting, the `UI`
@@ -152,10 +180,13 @@ To put Electrobun UI *inside* web content instead, use the
 
 ## Current limitations
 
-- **macOS only.** The engine uses CoreText, ImageIO, and the macOS native
-  wrapper today; Windows and Linux are not supported yet.
+- **Platform differences:** Linux uses X11, has no native assistive-technology
+  bridge yet, and should not rely on transparent UI surfaces. See
+  [platform support](/electrobun/apis/ui/overview/#platform-support).
 - **Fonts:** system fonts only. `@font-face` rules are parsed but web fonts
-  are not loaded.
+  are not loaded. The portable Windows/Linux text backend does not yet
+  implement bidirectional reordering, complex Arabic/Indic shaping, or
+  variable-font instances.
 - **Images:** `<img>` loads `data:` URLs and file paths; there is no network
   loading. Inline `<svg>` is rasterized.
 - **Layout gaps:** no floats; `position: sticky` behaves like `relative`;

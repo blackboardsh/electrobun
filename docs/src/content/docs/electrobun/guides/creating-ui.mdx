@@ -11,6 +11,11 @@ TypeScript — with isolated content embedded inside it through
 webview tag holds the untrusted remote page, composited into your layout like
 any other element but fully isolated from it.
 
+For a GPU-rendered interface written in HTML/CSS and JSX or Zig, start with
+[Electrobun UI](/electrobun/guides/electrobun-ui/). It can render the app
+without a webview, or anchor native webviews inside its layout. This tutorial
+uses a browser-rendered host page so remote web content stays isolated.
+
 ## Browser Code
 
 The host page's script wires the toolbar to the embedded view: navigate on

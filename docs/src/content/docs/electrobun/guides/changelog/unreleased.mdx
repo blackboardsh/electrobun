@@ -2,30 +2,6 @@
 title: "Unreleased"
 ---
 
-Changes since [v2.0.5](/electrobun/guides/changelog/v2-0-5/).
+Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
 
-## Updates
-
-- Replaced retained update tars with archive recipes that reconstruct the exact
-  original tar in RAM. Delta patches and full-download fallback now stream
-  directly into a staged app, preserving the existing replacement and rollback
-  flow while avoiding duplicate full archives on disk.
-- Added v2 update manifests with the exact tar's SHA-256 and size. The original
-  manifest format remains available for older clients.
-
-## Fixes
-
-- Fixed a crash when closing a window with a mounted native GPU UI. The renderer
-  now detaches before its native view is destroyed, even when the application's
-  close event is delivered asynchronously.
-- Fixed macOS WKWebView navigation rules blocking child iframes when the main
-  document has a restrictive allowlist. Native bridge access and custom preloads
-  are now limited to the main frame; embedded pages should use `postMessage` to
-  communicate with their parent.
-- Fixed a macOS native UI deadlock when creating or destroying a UI while a
-  display-frame or input callback is pending. Handler registration and removal
-  no longer wait for the main thread while holding the UI lock.
-- Fixed a Linux CEF navigation race where the constructor's initial page could
-  overwrite an immediate `loadURL` or `loadHTML` request.
-- Fixed Linux native UI windows repeatedly stealing focus from each other when
-  stale focus events arrived, which could leave the app unresponsive.
+No unreleased changes yet.

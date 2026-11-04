@@ -1,0 +1,142 @@
+---
+title: "v2.0.6"
+---
+
+Released **2026-11-04**. Changes since [v2.0.5](/electrobun/guides/changelog/v2-0-5/).
+
+## A new native GPU UI engine
+
+Electrobun UI now uses a Zig engine for its retained document tree, CSS, layout,
+text, input, and rendering. It replaces the earlier experimental TypeScript UI
+implementation and draws into native GPU surfaces without a browser renderer.
+**Electrobun UI remains experimental:** its APIs and supported HTML/CSS subset
+can change between releases.
+
+- Build native interfaces with JSX or HTML, CSS stylesheets, and reactive
+  signals, stores, and effects. The TypeScript document facade supports DOM-style
+  element creation, attributes, queries, and events. Browser DOM and native UI
+  share the Warren renderer and reactivity primitives.
+- Added CSS selectors and cascading styles, nesting, layers, custom properties,
+  media/supports rules, and support for Tailwind v4 output within the engine's
+  supported CSS subset. Layout and rendering include block/inline, flex and grid
+  layout, inline text,
+  scrolling, form controls, transitions and animations, gradients, shadows,
+  rounded borders, transforms, and backdrop effects. The
+  [HTML/CSS reference](/electrobun/apis/ui/html-css/) describes the supported
+  subset and its limits.
+- Native hosts now cover **macOS, Windows, and Linux X11**, on x64 and ARM64.
+  Windows adds native text input and IME handling, UI Automation accessibility,
+  and transparent GPU windows through DirectComposition. Linux adds XIM input,
+  clipboard integration, scaling, frame pacing, and focus handling. macOS
+  retains its native text, input, and accessibility integration.
+- Windows and Linux use portable font and image implementations, including
+  PNG, JPEG, GIF, BMP, and SVG support. These are not a complete replacement for
+  browser text shaping or image support; see the
+  [platform limitations](/electrobun/guides/electrobun-ui/#current-limitations).
+  Linux does not yet expose the engine's accessibility tree through a native
+  accessibility bridge, and GPU-window transparency depends on the host path.
+- Use the native UI from Bun or Cottontail through `electrobun/main/ui`, or
+  directly from Zig. The new [`bun-ui`](/electrobun/guides/electrobun-ui/) and
+  [`zig-ui`](/electrobun/apis/ui/zig/) starter templates demonstrate both paths.
+  The existing `ui-wgpu`, `ui-color-picker`, and `ui-launcher` templates now use
+  the new engine.
+
+See the [Electrobun UI guide](/electrobun/guides/electrobun-ui/),
+[component reference](/electrobun/apis/ui/components/), and
+[events reference](/electrobun/apis/ui/events/).
+
+## Updates without retained full tar archives
+
+- Replaced the retained original update tar with a small archive recipe. The
+  updater reconstructs the exact original tar in memory from the installed
+  application's files, checks their contents, and applies delta patches against
+  those original bytes.
+- Patch output and full-download fallback stream into a staged application.
+  The existing replacement, relaunch, and rollback flow remains in place.
+  Rollback covers failures during replacement; relaunch does not verify
+  application health. Updates still need disk space for staging and replacement,
+  and reconstruction
+  uses RAM; this removes the duplicate full tar archives rather than the staged
+  application.
+- Added an additional `*-update-v2.json` manifest carrying the original tar's
+  SHA-256 and byte size. The legacy manifest remains available with its existing
+  format for older clients. New clients fall back to the legacy manifest
+  when the newer file returns HTTP 404.
+- Existing installations can migrate from an old cached archive or use a full
+  download when an exact patch base cannot be reconstructed. Missing or unusable
+  patches also retain full-download fallback.
+- Fixed streamed patch buffering and valid large Zstandard FSE-table handling,
+  plus Linux file-permission and Windows filesystem edge cases in update
+  preparation. Fallback failures retain diagnostics explaining why patching or
+  download preparation failed.
+
+See [Updates](/electrobun/guides/updates/) for publication and migration details,
+and the [Updater API](/electrobun/apis/updater/) for the application-side flow.
+
+## Native UI and webview fixes
+
+- Fixed a crash when closing a window containing mounted native UI. The UI now
+  detaches before its native GPU view is destroyed.
+- Fixed UI lock inversions during creation, destruction, and native callbacks,
+  and made lock acquisition fair so repeated rendering cannot starve queued
+  application work.
+- Fixed Windows rendering delaying real mouse and keyboard input. Frame
+  scheduling also preserves updates for hidden and minimized windows and
+  rejects stale work after a UI is detached or replaced.
+- Fixed style lifetime errors that could crash the UI while moving the pointer
+  across elements with hover styles.
+- Frame waits no longer force a GPU readback just to observe a rendered frame.
+- Fixed stale Linux focus events repeatedly stealing focus between native UI
+  windows and leaving the application unresponsive.
+- Fixed Linux CEF initial navigation overwriting an immediate `loadURL` or
+  `loadHTML` call.
+- Fixed macOS WKWebView navigation rules blocking child iframes when the main
+  document uses a restrictive allowlist. Native bridge access and custom
+  preloads are now restricted to the main frame; embedded pages communicate
+  with their parent through `postMessage`.
+
+## Toolchain and validation
+
+- Pairs **Hutch 0.29.0** with **Cottontail 0.7.3**. Bun remains **1.4.4**.
+  Hutch publishes optional updater integrity metadata alongside the legacy
+  metadata, keeping older updater clients compatible.
+- Expanded native UI unit, lifetime, input, platform, and visible-desktop
+  coverage. Release checks now include the UI engine and Kitchen Sink
+  typechecking.
+- Expanded install/update tests to cover multi-hop delta updates, migration from
+  the previous archive layout, forced full-download fallback, relaunch,
+  cleanup, and uninstall across all six platform/architecture targets.
+- Improved resize and fullscreen observations, screenshot analysis, and timeout
+  diagnostics in the test harness. Interrupted compiler downloads now retry
+  with bounded timeouts.
+
+## Migration notes
+
+```bash
+npm install --save-dev electrobun@2.0.6
+npx electrobun dev
+```
+
+Update an explicit `electrobun.version` in `hutch.config.ts` to `2.0.6`.
+If your project has a `// @hutch` pragma, use
+`cli=0.29.0 cottontail=0.7.3`, or remove the pragma when using the npm bootstrap
+to select the release's paired tools. Direct Hutch users can run `hutch upgrade`.
+
+Applications using the earlier experimental native UI should follow the
+[UI migration guidance](/electrobun/guides/electrobun-ui/) and updated templates:
+the old custom element/layout APIs have been replaced by the DOM/HTML/CSS
+surface. Ordinary webview interfaces continue to use their existing web
+frameworks.
+
+Update servers must use **HTTPS**, except for loopback HTTP used in local
+development. HTTPS redirects cannot downgrade to HTTP. Loopback redirects that
+remain HTTP must stay on the same origin; upgrading to HTTPS is allowed.
+Keep the legacy update manifest
+available while supporting applications with older updater clients.
+
+For macOS apps that previously called Electrobun's native bridge from an
+iframe, move those calls into the parent frame and relay requests with
+`postMessage`.
+
+[Release](https://github.com/blackboardsh/electrobun/releases/tag/v2.0.6) ·
+[All changes since v2.0.5](https://github.com/blackboardsh/electrobun/compare/v2.0.5...v2.0.6)

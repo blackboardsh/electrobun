@@ -5,7 +5,8 @@ description: "Build GPU-rendered UI in a Zig main process: Zig state, HTML templ
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Electrobun UI is experimental and macOS-only today. APIs may change between releases.
+Electrobun UI is experimental on macOS, Windows, and Linux (X11). APIs may
+change between releases.
 </Aside>
 
 A Zig main process can use the same UI engine as TypeScript apps, compiled
@@ -23,7 +24,7 @@ hutch electrobun init my-app --template=zig-ui
 
 The Electrobun Zig SDK ships the engine's source next to `electrobun.zig`
 (`.hutch/devkit/zig-sdk/ui/root.zig`). Your `build.zig` adds it as the
-`electrobun_ui` module and links the system frameworks it uses. The `zig-ui`
+`electrobun_ui` module and links system frameworks when targeting macOS. The `zig-ui`
 template's `build.zig` does this; copy it as is. With `bundleWGPU: true`,
 the app bundle includes Dawn, which the engine renders through.
 
@@ -31,6 +32,7 @@ At runtime you create a window and a full-window WGPU view with the Zig SDK,
 then mount your app into the view:
 
 ```zig
+const std = @import("std");
 const electrobun = @import("electrobun");
 const ui = @import("electrobun_ui");
 
@@ -43,7 +45,8 @@ fn run(core: *electrobun.Core, bundle_paths: *const electrobun.BundlePaths) !voi
     const view = (try core.getWGPUViewPointer(view_id)) orelse return error.NoWGPUView;
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dawn = try std.fmt.bufPrintSentinel(&buf, "{s}/libwebgpu_dawn.dylib", .{bundle_paths.exe_dir}, 0);
+    const dawn = try std.fmt.bufPrintSentinel(&buf, "{s}/{s}",
+        .{ bundle_paths.exe_dir, electrobun.wgpu_library_name }, 0);
 
     _ = try ui.electrobun.mountApp(App, &state, .{ .view = view, .dawn_path = dawn });
 }
@@ -145,9 +148,12 @@ Pass `.components = true` to `mountApp` to add the `eb-*` stylesheet.
 | `dawn_path` | `?[:0]const u8` | `null` | Path to `libwebgpu_dawn`; the bundle puts it next to the executable. |
 | `components` | `bool` | `false` | Add the built-in `eb-*` component stylesheet. |
 | `css` | `[]const []const u8` | `&.{}` | Extra stylesheets, applied after `style`. |
-| `dark` | `?bool` | `null` | Force the color scheme (`null` follows the system). |
+| `dark` | `?bool` | `null` | Set the color scheme; `null` keeps the engine default (light). Call `setDark` to follow application or system preferences explicitly. |
+| `transparent` | `bool` | `false` | Keep unpainted canvas pixels transparent when the native surface supports alpha. |
 
 `mountApp` returns a handle with `setDark(bool)` and `destroy()`.
+The [platform support and limitations](/electrobun/apis/ui/overview/#platform-support)
+are the same as for TypeScript apps.
 
 ## Threads
 

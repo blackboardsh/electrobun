@@ -5,7 +5,7 @@ description: "Pointer, keyboard, focus, text editing, and accessibility in Elect
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Electrobun UI is experimental and macOS-only today.
+Electrobun UI is experimental on macOS, Windows, and Linux (X11).
 </Aside>
 
 Input is handled natively by the UI engine: it hit-tests, updates `:hover` /
@@ -71,8 +71,12 @@ from the focused element bubble to it), or use `GlobalShortcut` from
 - caret movement with the arrow keys, Home/End, and vertical movement in
   textareas;
 - selection with Shift and with the mouse;
-- Cmd+A, Cmd+C/X/V (system clipboard), Cmd+Z undo, Cmd+Shift+Z or Cmd+Y redo;
-- input methods (IME) with marked text, and emoji/CJK through font fallback;
+- system clipboard and editing shortcuts: Cmd+A/C/X/V/Z on macOS and
+  Ctrl+A/C/X/V/Z on Windows/Linux, with Shift+Z or Y for redo;
+- input methods with marked text through the native macOS text system,
+  Windows IMM32, or Linux XIM;
+- font fallback, including supported color emoji; see the
+  [portable text limitations](/electrobun/apis/ui/html-css/#text);
 - `placeholder`, `maxlength`, `readonly`, `disabled`, and password masking.
 
 ## Scrolling and dragging
@@ -84,8 +88,12 @@ useful for frameless and transparent windows; mark interactive children
 
 ## Accessibility
 
-The engine builds an accessibility tree from the DOM and exposes it to
-VoiceOver through NSAccessibility. Roles come from semantics (`button`,
+The engine builds an accessibility tree from the DOM. macOS exposes it through
+NSAccessibility (including VoiceOver), and Windows uses UI Automation. Linux
+does not yet expose this tree to native assistive technology;
+`ui.accessibilityTree()` remains available for inspection on every platform.
+
+Roles come from semantics (`button`,
 links, inputs by type, headings, lists, images, `select`, `dialog`, `nav`,
 `main`, `form`, `hr`, tables) or an explicit `role` attribute. Names come from
 text content, `<label>`, `aria-label`, `alt`, or `title`;

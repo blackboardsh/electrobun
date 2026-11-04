@@ -16,7 +16,8 @@ building them for every platform. The application-side API lives in the
 ## Configure The Release Host
 
 Point `release.baseUrl` at the directory where every target's artifacts will
-be uploaded:
+be uploaded. Use an HTTPS URL without credentials, query parameters, or a
+fragment:
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
@@ -32,6 +33,11 @@ export default {
   },
 } satisfies ElectrobunConfig;
 ```
+
+For local packaged-update tests, HTTP is also accepted on `localhost`,
+`127.0.0.1`, or `[::1]`. Remote and LAN HTTP hosts are not supported by the
+2.0.6 preparation helper. Artifact redirects cannot downgrade HTTPS to HTTP;
+redirects that stay on HTTP must keep the same loopback host and port.
 
 A stable macOS ARM64 build checks `stable-macos-arm64-update-v2.json`; a
 canary Windows x64 build checks `canary-win-x64-update-v2.json`. These manifests
@@ -68,6 +74,27 @@ exact payload against the manifest; it is not a signature of the manifest.
 Serve updates over HTTPS and sign distributed
 applications with the platform's normal code-signing system when authenticity
 is required.
+
+## Upgrading to the 2.0.6 updater
+
+Archive recipes and streamed update preparation are available in Electrobun
+2.0.6 on macOS, Windows, and Linux. Build your next app release with Electrobun
+2.0.6 or later and its paired Hutch version, keeping the app identity unchanged.
+Continue publishing at the URL embedded in existing installations so those
+clients can discover the release.
+
+If existing clients use a remote HTTP host, publish a bridge release at that
+host with an HTTPS `release.baseUrl` embedded in the new app. Keep the old host
+available for those clients while publishing subsequent releases at the HTTPS
+host. Simply redirecting an HTTP base URL to HTTPS does not satisfy the new
+helper's base-URL validation.
+
+The update into that release is performed by the updater already installed on
+the user's machine. The new preparation flow takes effect when the upgraded
+app downloads a subsequent update. Fresh installations start with an archive
+recipe; installations upgraded from a release that retained a tar can migrate
+that tar during their next update preparation. Test both the first upgrade and
+a subsequent update from the upgraded app.
 
 The identity fields used by Electrobun 1.x (`version`, `hash`, `platform`, and
 `arch`) remain at the top level, and `stable` remains the main release channel.

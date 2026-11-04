@@ -5,8 +5,8 @@ description: "The HTML elements and CSS features Electrobun UI supports."
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Electrobun UI is experimental and macOS-only today. The supported subset grows
-between releases.
+Electrobun UI is experimental on macOS, Windows, and Linux (X11). The
+supported subset grows between releases.
 </Aside>
 
 Electrobun UI implements a stable, practical subset of HTML and CSS — what app
@@ -33,8 +33,8 @@ applies a small user-agent stylesheet with browser-like defaults.
 | `details`, `summary` | Toggle open on click. |
 | `dialog` | Shown when it has the `open` attribute. |
 | `progress` | Track box; style the bar with CSS. |
-| `img` | `data:` URLs and file paths (no network). PNG/JPEG/GIF/... via ImageIO. |
-| `svg` | Inline SVG, rasterized with CoreGraphics (follows `currentColor`). |
+| `img` | `data:` URLs and file paths (no network). PNG, JPEG, GIF, and BMP work across platforms; macOS uses ImageIO and can decode additional system-supported formats. |
+| `svg` | Inline SVG with `currentColor`, rasterized through CoreGraphics on macOS and the portable rasterizer on Windows/Linux. |
 | `table`, `tr`, `td`, `th` | Laid out as flex rows — fine for simple data, not full table layout. |
 
 Elements that don't render: `head`, `script`, `style`, `template`, `title`,
@@ -111,6 +111,12 @@ Elements that don't render: `head`, `script`, `style`, `template`, `title`,
 | `word-break`, `overflow-wrap` | ✓ |
 | `text-overflow: ellipsis`, `line-clamp` / `-webkit-line-clamp` | ✓ |
 | `caret-color`, `accent-color` | ✓ |
+
+Windows and Linux use the portable OpenType text backend, with font fallback,
+ligatures, kerning, and supported color-emoji formats. Bidirectional reordering,
+complex-script shaping (such as Arabic and Indic), and variable-font instances
+are not implemented there. macOS uses CoreText by default. Font coverage depends
+on the fonts installed on the system.
 
 ## Motion
 
