@@ -1,6 +1,7 @@
 """Desktop-level smoke checks. Never substitutes a DOM capture for visible pixels."""
 import ctypes
 from concurrent.futures import Future
+import itertools
 import json
 import math
 import os
@@ -680,12 +681,27 @@ class TextFrameTimeout(TextObservationTimeout):
     """This frame is unknown; another timely captured frame may still prove the check."""
 
 
-def recognize_text(image, *, config, timeout, command):
+def _recognize_text_images(images, *, config, timeout, command):
     """Bound and reap one OCR process without changing the application's environment."""
+    if not images:
+        raise ValueError('Text OCR requires at least one image')
     deadline = time.monotonic() + timeout
     with tempfile.TemporaryDirectory(prefix='desktop-smoke-ocr-') as directory:
-        path = Path(directory) / 'frame.png'
-        image.save(path)
+        paths = []
+        for index, image in enumerate(images):
+            if time.monotonic() >= deadline:
+                raise TextFrameTimeout('Text OCR exhausted its frame budget preparing images')
+            path = Path(directory) / f'frame-{index}.png'
+            image.save(path)
+            paths.append(path)
+        path = paths[0]
+        if len(paths) > 1:
+            if time.monotonic() >= deadline:
+                raise TextFrameTimeout('Text OCR exhausted its frame budget preparing images')
+            # Tesseract accepts one image path per line and separates output
+            # pages with form feed: https://tesseract-ocr.github.io/tessdoc/FAQ
+            path = Path(directory) / 'images.txt'
+            path.write_text(''.join(str(image_path) + '\n' for image_path in paths), encoding='utf-8')
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TextFrameTimeout('Text OCR exhausted its frame budget preparing an image')
@@ -701,12 +717,27 @@ def recognize_text(image, *, config, timeout, command):
         return result.stdout
 
 
+def recognize_text(image, *, config, timeout, command):
+    return _recognize_text_images([image], config=config, timeout=timeout, command=command)
+
+
+def recognize_text_batch(images, *, config, timeout, command):
+    output = _recognize_text_images(images, config=config, timeout=timeout, command=command)
+    # Separators occur BETWEEN pages, including empty ones. Dropping an empty
+    # trailing page would make a complete negative scan indistinguishable from
+    # truncated output. Never accept partial or extra output as evidence.
+    pages = output.split('\f')
+    if len(pages) != len(images):
+        raise RuntimeError(f'Text OCR returned {len(pages)} pages for {len(images)} images')
+    return pages
+
+
 def normalized_text(value):
     return ''.join(value.casefold().split())
 
 
 def image_has_text(image, expected, recognize, *, deadline, observation=None,
-                   clock=None, regions=None, cancelled=None):
+                   clock=None, regions=None, cancelled=None, recognize_batch=None):
     """Inspect one fixed image; incomplete OCR can never establish absence."""
     clock = clock or time.monotonic
     regions = regions or ocr_regions
@@ -724,7 +755,17 @@ def image_has_text(image, expected, recognize, *, deadline, observation=None,
 
     try:
         check_cancelled()
-        for region, _, config, _, _ in regions(image):
+        if recognize_batch is None:
+            groups = ((config, [region]) for region, _, config, _, _ in regions(image))
+        else:
+            # Keep the initial sparse-text pass and original region order.
+            # Consecutive same-config bands share one process/model load.
+            remaining_regions = iter(regions(image))
+            first = next(remaining_regions, None)
+            groups = itertools.chain([] if first is None else [(first[2], [first[0]])],
+                ((config, [region[0] for region in group]) for config, group
+                 in itertools.groupby(remaining_regions, key=lambda region: region[2])))
+        for config, images in groups:
             check_cancelled()
             remaining = deadline - clock()
             if remaining <= 0:
@@ -732,9 +773,15 @@ def image_has_text(image, expected, recognize, *, deadline, observation=None,
             # pytesseract's timeout=0 means unbounded: never start a pass with
             # an exhausted budget. File preparation can also take time, so
             # check the clock again after the subprocess returns.
-            observation['ocrPasses'] += 1
+            observation['ocrPasses'] += len(images)
             try:
-                parts.append(recognize(region, config=config, timeout=remaining))
+                if len(images) == 1:
+                    texts = [recognize(images[0], config=config, timeout=remaining)]
+                else:
+                    texts = recognize_batch(images, config=config, timeout=remaining)
+                    if len(texts) != len(images):
+                        raise RuntimeError('Text OCR batch did not return every region')
+                parts.extend(texts)
             except RuntimeError as error:
                 # Preserve compatibility with injected pytesseract recognizers.
                 # Only its documented timeout is a recoverable unknown frame.
@@ -763,7 +810,7 @@ def image_has_text(image, expected, recognize, *, deadline, observation=None,
 
 class TextAnalysis:
     """One immutable frame; its private result never updates driver state."""
-    def __init__(self, image, expected, recognize, *, deadline, clock, regions):
+    def __init__(self, image, expected, recognize, *, deadline, clock, regions, recognize_batch=None):
         self.future = Future()
         self.cancelled = threading.Event()
 
@@ -772,7 +819,7 @@ class TextAnalysis:
             try:
                 found = image_has_text(image, expected, recognize, deadline=deadline,
                                        observation=evidence, clock=clock, regions=regions,
-                                       cancelled=self.cancelled)
+                                       cancelled=self.cancelled, recognize_batch=recognize_batch)
             except Exception as failure:
                 error = failure
             self.future.set_result((found, evidence, error, clock()))
@@ -797,7 +844,7 @@ class TextAnalysis:
 def observe_text(expected, capture, recognize, *, present=True, response_timeout=45,
                  analysis_timeout=120, frame_analysis_timeout=20, interval=0.5, observation=None,
                  require_running=None, clock=None, sleep=None, regions=None,
-                 start_analysis=None):
+                 start_analysis=None, recognize_batch=None):
     """Observe timely desktop frames; bound slow OCR separately from UI response.
 
     A frame must finish capture inside the response window. Its OCR may finish
@@ -894,7 +941,7 @@ def observe_text(expected, capture, recognize, *, present=True, response_timeout
                     'startedSeconds': clock() - started, 'deadlineSeconds': frame_deadline - started})
                 final_attempt = capture_closed
                 future = start_analysis(image, expected, recognize, deadline=frame_deadline,
-                                        clock=clock, regions=regions)
+                                        clock=clock, regions=regions, recognize_batch=recognize_batch)
                 pending = (future, index, image, frame_deadline)
                 # Pick up an immediately completed analysis before waiting.
                 continue
@@ -999,9 +1046,14 @@ def inspect_app(plan):
                 return recognize_text(image, config=config, timeout=timeout,
                                       command=pytesseract.pytesseract.tesseract_cmd)
 
+            def recognize_batch(images, *, config, timeout):
+                return recognize_text_batch(images, config=config, timeout=timeout,
+                                            command=pytesseract.pytesseract.tesseract_cmd)
+
             return observe_text(expected, capture_text, recognize,
                                 present=present, response_timeout=limit, analysis_timeout=120,
-                                observation=observation, require_running=require_running)
+                                observation=observation, require_running=require_running,
+                                recognize_batch=recognize_batch)
         finally:
             try:
                 with (output / 'text-observations.jsonl').open('a', encoding='utf-8') as log:

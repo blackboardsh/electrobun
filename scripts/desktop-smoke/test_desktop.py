@@ -200,6 +200,110 @@ class TextSubprocessTests(unittest.TestCase):
                 desktop.recognize_text(Mock(), config='--psm 11', timeout=2, command='tesseract')
 
 
+class TextBatchTests(unittest.TestCase):
+    def test_batch_preserves_order_and_empty_middle_and_last_pages(self):
+        images = [Mock() for _ in range(4)]
+        saved_paths = []
+
+        def process(argv, **options):
+            saved_paths.extend(Path(argv[1]).read_text().splitlines())
+            self.assertEqual(options['env']['OMP_THREAD_LIMIT'], '1')
+            return SimpleNamespace(returncode=0, stdout='first\n\f\fthird\n\f', stderr='')
+
+        with patch.object(desktop.subprocess, 'run', side_effect=process) as run:
+            result = desktop.recognize_text_batch(images, config='--psm 6', timeout=2, command='tesseract')
+        self.assertEqual(result, ['first\n', '', 'third\n', ''])
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual([Path(path).name for path in saved_paths], [f'frame-{i}.png' for i in range(4)])
+        for image, path in zip(images, saved_paths):
+            image.save.assert_called_once_with(Path(path))
+        self.assertFalse(Path(saved_paths[0]).parent.exists())
+
+    def test_missing_or_extra_output_pages_cannot_prove_absence(self):
+        for output in ['', 'one\ftwo\fextra']:
+            with self.subTest(output=output):
+                with patch.object(desktop, '_recognize_text_images', return_value=output):
+                    with self.assertRaisesRegex(RuntimeError, 'pages for 2 images'):
+                        desktop.recognize_text_batch([Mock(), Mock()], config='--psm 6', timeout=2, command='tesseract')
+
+    def test_expired_batch_preparation_stops_saving_and_never_launches_ocr(self):
+        clock = [0]
+        images = [Mock() for _ in range(4)]
+        images[0].save.side_effect = lambda path: clock.__setitem__(0, 2)
+        with patch.object(desktop.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(desktop.subprocess, 'run') as run:
+            with self.assertRaises(desktop.TextFrameTimeout):
+                desktop.recognize_text_batch(images, config='--psm 6', timeout=1, command='tesseract')
+        images[0].save.assert_called_once()
+        for image in images[1:]:
+            image.save.assert_not_called()
+        run.assert_not_called()
+
+    def test_batch_errors_and_timeouts_never_become_negative_evidence(self):
+        regions = lambda frame: [('first', 0, 'sparse', 1, 0),
+                                 ('second', 0, 'band', 1, 0), ('third', 0, 'band', 1, 0)]
+        for failure in [desktop.TextFrameTimeout('batch timed out'), RuntimeError('missing page')]:
+            evidence = {}
+            with self.subTest(failure=failure), self.assertRaises(type(failure)):
+                desktop.image_has_text('frame', 'Portal', lambda *args, **kwargs: '',
+                    deadline=time.monotonic() + 5, regions=regions, observation=evidence,
+                    recognize_batch=Mock(side_effect=failure))
+            self.assertIsNone(evidence['present'])
+            self.assertFalse(evidence['ocrComplete'])
+
+    def test_consecutive_configs_preserve_every_region_and_complete_negative_scan(self):
+        calls = []
+        regions = [('one', 0, 'sparse', 1, 0), ('two', 0, 'band', 1, 0),
+                   ('three', 120, 'band', 1, 0), ('four', 0, 'button', 1, 0), ('five', 0, 'band', 1, 0)]
+        def single(image, **options):
+            calls.append((options['config'], [image]))
+            return image
+        def batch(images, **options):
+            calls.append((options['config'], images))
+            return images
+        evidence = {}
+        self.assertFalse(desktop.image_has_text('frame', 'Portal', single, recognize_batch=batch,
+            deadline=time.monotonic() + 5, regions=lambda frame: regions, observation=evidence))
+        self.assertEqual(calls, [('sparse', ['one']), ('band', ['two', 'three']),
+                                 ('button', ['four']), ('band', ['five'])])
+        self.assertEqual(evidence['ocrText'], 'one\ntwo\nthree\nfour\nfive')
+        self.assertEqual(evidence['ocrPasses'], 5)
+        self.assertTrue(evidence['ocrComplete'])
+
+    def test_cross_region_match_keeps_original_joined_text_semantics(self):
+        regions = lambda frame: [('Rendered', 0, 'sparse', 1, 0),
+                                 ('in a', 0, 'band', 1, 0), ('Portal', 120, 'band', 1, 0)]
+        self.assertTrue(desktop.image_has_text('frame', 'Rendered in a Portal', lambda image, **kwargs: image,
+            recognize_batch=lambda images, **kwargs: images, deadline=time.monotonic() + 5, regions=regions))
+
+    def test_batch_uses_remaining_deadline_and_late_negative_output_is_unknown(self):
+        clock, evidence, budgets = [0], {}, []
+        def single(image, **options):
+            clock[0] += 2
+            return ''
+        def batch(images, **options):
+            budgets.append(options['timeout'])
+            clock[0] += 3
+            return ['', '']
+        with self.assertRaises(desktop.TextFrameTimeout):
+            desktop.image_has_text('frame', 'Portal', single, recognize_batch=batch,
+                deadline=5, clock=lambda: clock[0], observation=evidence,
+                regions=lambda frame: [('first', 0, 'sparse', 1, 0),
+                    ('second', 0, 'band', 1, 0), ('third', 0, 'band', 1, 0)])
+        self.assertEqual(budgets, [3])
+        self.assertIsNone(evidence['present'])
+        self.assertFalse(evidence['ocrComplete'])
+
+    def test_first_positive_pass_never_generates_or_ocr_scans_later_regions(self):
+        def regions(frame):
+            yield 'Portal', 0, 'sparse', 1, 0
+            self.fail('Positive sparse-text result must short-circuit region generation')
+        batch = Mock()
+        self.assertTrue(desktop.image_has_text('frame', 'Portal', lambda image, **kwargs: image,
+            recognize_batch=batch, deadline=time.monotonic() + 5, regions=regions))
+        batch.assert_not_called()
+
+
 class TextResponseTests(unittest.TestCase):
     def observe(self, frames, *, present=False, capture_costs=(), ocr_costs=(),
                 response=15, analysis=120, interval=0.5, error=None, crash_after_ocr=False,
@@ -221,7 +325,7 @@ class TextResponseTests(unittest.TestCase):
         def recognize(frame, *, config, timeout):
             return frame
 
-        def start_analysis(frame, expected, recognize, *, deadline, clock, regions):
+        def start_analysis(frame, expected, recognize, *, deadline, clock, regions, recognize_batch=None):
             self.assertTrue(not jobs or jobs[-1].done(), 'only one OCR analysis may run at a time')
             reads.append((frame, deadline - clock()))
             found = expected in frame
@@ -494,7 +598,7 @@ class TextActionTests(unittest.TestCase):
 
         owner = threading.get_ident()
 
-        def start_analysis(image, expected, recognize, *, deadline, clock, regions):
+        def start_analysis(image, expected, recognize, *, deadline, clock, regions, recognize_batch=None):
             self.assertEqual(threading.get_ident(), owner)
             value = recognize(image, config='--psm 11', timeout=deadline - clock())
             found = expected in value
