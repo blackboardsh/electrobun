@@ -8,28 +8,34 @@ namespace {
 void testFrameSchedule() {
     electrobun::UIFrameSchedule schedule;
     assert(!schedule.ready());
+    assert(schedule.activeFlight() == 0);
     assert(!schedule.queue(1));
     schedule.request();
     assert(schedule.ready());
     assert(!schedule.queue(0));
     assert(schedule.queue(1));
+    assert(schedule.activeFlight() == 1);
     assert(!schedule.ready());
     assert(!schedule.queue(2));
 
     // An unrelated WM_PAINT before the queued wake must not consume its flight.
     assert(schedule.beginPaint() == 0);
+    assert(schedule.beginTimer(1) == 0);
     assert(!schedule.finishPaint(1));
     assert(!schedule.acceptWake(2));
     assert(schedule.acceptWake(1));
+    assert(schedule.beginTimer(2) == 0);
     assert(!schedule.acceptWake(1));
     assert(schedule.beginPaint() == 1);
     assert(schedule.beginPaint() == 0);
+    assert(schedule.beginTimer(1) == 0);
     assert(!schedule.finishPaint(2));
 
     // Requests made during a frame coalesce, but survive its completion.
     for (unsigned count = 0; count < 100; ++count) schedule.request();
     assert(!schedule.ready());
     assert(schedule.finishPaint(1));
+    assert(schedule.activeFlight() == 0);
     assert(schedule.ready());
     assert(!schedule.finishPaint(1));
     assert(schedule.queue(2));
@@ -43,13 +49,20 @@ void testFrameSchedule() {
     schedule.request();
     assert(schedule.queue(10));
     assert(schedule.cancel(10));
+    assert(schedule.activeFlight() == 0);
+    assert(schedule.beginTimer(10) == 0);
     schedule.request();
     assert(schedule.queue(11));
     assert(!schedule.acceptWake(10));
     assert(!schedule.cancel(10));
     assert(!schedule.finishPaint(10));
+    assert(schedule.beginTimer(10) == 0);
     assert(schedule.acceptWake(11));
-    assert(schedule.beginPaint() == 11);
+    assert(schedule.beginTimer(10) == 0);
+    assert(schedule.activeFlight() == 11);
+    assert(schedule.beginTimer(11) == 11);
+    assert(schedule.beginTimer(11) == 0);
+    assert(schedule.beginPaint() == 0);
     assert(schedule.finishPaint(11));
 
     // A retired attachment gets a fresh state and a globally fresh token.
@@ -101,8 +114,10 @@ struct FrameProbe {
     bool animate = false;
     unsigned legacyFrames = 0;
     unsigned wakes = 0;
-    unsigned paints = 0;
-    unsigned hiddenPaints = 0;
+    unsigned frames = 0;
+    unsigned paintFrames = 0;
+    unsigned timerFrames = 0;
+    unsigned hiddenFrames = 0;
     ULONG_PTR clickToken = 0;
     unsigned downs = 0;
     unsigned ups = 0;
@@ -117,6 +132,20 @@ void queueFrame(HWND window, FrameProbe& probe) {
 
 void requestFrame(HWND window, FrameProbe& probe) {
     probe.schedule.request();
+    queueFrame(window, probe);
+}
+
+void renderFrame(HWND window, FrameProbe& probe, uint64_t token, bool timer) {
+    if (token == 0) return;
+    KillTimer(window, static_cast<UINT_PTR>(token));
+    ++probe.frames;
+    if (timer) ++probe.timerFrames;
+    else ++probe.paintFrames;
+    if (!IsWindowVisible(window) || IsIconic(GetAncestor(window, GA_ROOT))) {
+        ++probe.hiddenFrames;
+    }
+    if (probe.animate) probe.schedule.request();
+    assert(probe.schedule.finishPaint(token));
     queueFrame(window, probe);
 }
 
@@ -137,7 +166,7 @@ LRESULT CALLBACK frameWindowProc(HWND window, UINT message, WPARAM wParam,
         if (message == frameWakeMessage) {
             if (probe->schedule.acceptWake(static_cast<uint64_t>(wParam))) {
                 ++probe->wakes;
-                assert(electrobun::requestLowPriorityUIFrame(window));
+                assert(electrobun::requestLowPriorityUIFrame(window, static_cast<uint64_t>(wParam)));
             }
             return 0;
         }
@@ -145,16 +174,12 @@ LRESULT CALLBACK frameWindowProc(HWND window, UINT message, WPARAM wParam,
             PAINTSTRUCT paint{};
             BeginPaint(window, &paint);
             EndPaint(window, &paint);
-            const uint64_t token = probe->schedule.beginPaint();
-            if (token != 0) {
-                ++probe->paints;
-                if (!IsWindowVisible(window) || IsIconic(GetAncestor(window, GA_ROOT))) {
-                    ++probe->hiddenPaints;
-                }
-                if (probe->animate) probe->schedule.request();
-                assert(probe->schedule.finishPaint(token));
-                queueFrame(window, *probe);
-            }
+            renderFrame(window, *probe, probe->schedule.beginPaint(), false);
+            return 0;
+        }
+        if (message == WM_TIMER) {
+            renderFrame(window, *probe,
+                        probe->schedule.beginTimer(static_cast<uint64_t>(wParam)), true);
             return 0;
         }
         if ((message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) &&
@@ -243,7 +268,9 @@ void testMouseUnderFrames(HWND window, FrameProbe& probe) {
     probe.animate = true;
     requestFrame(window, probe);
     injectClick(window, probe, paintClickToken);
-    const unsigned firstPaint = probe.paints;
+    const unsigned firstFrame = probe.frames;
+    const unsigned firstPaint = probe.paintFrames;
+    const unsigned firstTimer = probe.timerFrames;
     unsigned messages = 0;
     while (probe.ups == 0 && messages < 32) {
         MSG message{};
@@ -252,8 +279,10 @@ void testMouseUnderFrames(HWND window, FrameProbe& probe) {
         ++messages;
     }
     assert(probe.downs == 1 && probe.ups == 1);
-    assert(probe.paints == firstPaint);
-    assert(pumpUntil([&]() { return probe.paints >= firstPaint + 3; }, 1000));
+    assert(probe.frames == firstFrame);
+    assert(pumpUntil([&]() { return probe.frames >= firstFrame + 3; }, 1000));
+    assert(probe.paintFrames >= firstPaint + 3);
+    assert(probe.timerFrames == firstTimer);
     probe.animate = false;
     drainMessages();
     std::printf("Windows frame fairness: 256 posted render callbacks starved the old click; "
@@ -266,25 +295,103 @@ void testHiddenFrameRecovery(HWND window, HWND parent, FrameProbe& probe, int hi
     ShowWindow(parent, hideCommand);
     drainMessages();
     assert(!IsWindowVisible(window) || IsIconic(parent));
-    const unsigned hiddenBefore = probe.hiddenPaints;
-    const unsigned paintsBefore = probe.paints;
+    const unsigned hiddenBefore = probe.hiddenFrames;
+    const unsigned framesBefore = probe.frames;
     requestFrame(window, probe);
     // UI.nextFrame may be awaited before showing a window. Rendering must
     // complete while hidden/minimized; restoration cannot rescue the flight.
-    assert(pumpUntil([&]() { return probe.paints > paintsBefore; }, 1000));
-    assert(probe.hiddenPaints > hiddenBefore);
+    assert(pumpUntil([&]() { return probe.frames > framesBefore; }, 1000));
+    assert(probe.hiddenFrames > hiddenBefore);
     ShowWindow(parent, SW_RESTORE);
     SetForegroundWindow(parent);
     SetFocus(parent);
 
     // A completed deferred frame must not leave the scheduler wedged: a fresh
     // request should also reach a paint after the window becomes visible.
-    const unsigned resumedPaints = probe.paints;
+    const unsigned resumedFrames = probe.frames;
     requestFrame(window, probe);
-    assert(pumpUntil([&]() { return probe.paints > resumedPaints; }, 1000));
+    assert(pumpUntil([&]() { return probe.frames > resumedFrames; }, 1000));
     drainMessages();
-    std::printf("Windows %s child internal paint: completed before restore; restored frames=%u\n",
-                description, probe.paints - resumedPaints);
+    std::printf("Windows %s child frame: completed before restore; restored frames=%u\n",
+                description, probe.frames - resumedFrames);
+}
+
+void acceptPostedWake(HWND window, FrameProbe& probe, uint64_t flight) {
+    MSG wake{};
+    assert(PeekMessageW(&wake, window, frameWakeMessage, frameWakeMessage, PM_REMOVE));
+    assert(static_cast<uint64_t>(wake.wParam) == flight);
+    dispatch(wake);
+    assert(probe.schedule.activeFlight() == flight);
+}
+
+void testHideAfterWake(HWND window, HWND parent, FrameProbe& probe) {
+    drainMessages();
+    assert(IsWindowVisible(window) && !IsIconic(parent));
+    const unsigned framesBefore = probe.frames;
+    const unsigned hiddenBefore = probe.hiddenFrames;
+    requestFrame(window, probe);
+    // Only retrieve the wake, leaving its OS-generated paint unprocessed.
+    // A watchdog armed only for already-hidden windows would miss this race.
+    acceptPostedWake(window, probe, probe.schedule.activeFlight());
+    assert(probe.frames == framesBefore);
+    ShowWindow(parent, SW_HIDE);
+    assert(!IsWindowVisible(window));
+    assert(probe.frames == framesBefore);
+    assert(pumpUntil([&]() { return probe.frames > framesBefore; }, 1000));
+    assert(probe.hiddenFrames > hiddenBefore);
+    ShowWindow(parent, SW_RESTORE);
+    SetForegroundWindow(parent);
+    SetFocus(parent);
+    drainMessages();
+    std::puts("Windows child hidden after frame wake: completed before restore");
+}
+
+MSG takeDueFrameTimer(HWND window, uint64_t flight) {
+    MSG timer{};
+    const ULONGLONG deadline = GetTickCount64() + 1000;
+    while (!PeekMessageW(&timer, window, WM_TIMER, WM_TIMER, PM_REMOVE)) {
+        assert(GetTickCount64() < deadline && "Frame watchdog timer never became due");
+        Sleep(1);
+    }
+    assert(static_cast<uint64_t>(timer.wParam) == flight);
+    return timer;
+}
+
+void testStaleTimer(HWND window, HWND parent, FrameProbe& probe) {
+    ShowWindow(parent, SW_HIDE);
+    drainMessages();
+    const unsigned framesBefore = probe.frames;
+    requestFrame(window, probe);
+    const uint64_t oldFlight = probe.schedule.activeFlight();
+    acceptPostedWake(window, probe, oldFlight);
+
+    // Capture an actual due timer without dispatching it. KillTimer cannot
+    // revoke a timer message which the message loop has already retrieved.
+    MSG staleTimer = takeDueFrameTimer(window, oldFlight);
+    assert(probe.frames == framesBefore);
+    KillTimer(window, static_cast<UINT_PTR>(oldFlight));
+    assert(probe.schedule.cancel(oldFlight));
+
+    requestFrame(window, probe);
+    const uint64_t newFlight = probe.schedule.activeFlight();
+    assert(newFlight != oldFlight);
+    acceptPostedWake(window, probe, newFlight);
+    dispatch(staleTimer);
+    assert(probe.frames == framesBefore);
+    assert(probe.schedule.activeFlight() == newFlight);
+    // The newer watchdog must still be armed. Fetch it explicitly so an old
+    // pending paint cannot mask accidental cancellation of the newer timer.
+    MSG currentTimer = takeDueFrameTimer(window, newFlight);
+    assert(probe.frames == framesBefore);
+    dispatch(currentTimer);
+    assert(probe.frames == framesBefore + 1);
+    assert(probe.schedule.activeFlight() == 0);
+
+    ShowWindow(parent, SW_RESTORE);
+    SetForegroundWindow(parent);
+    SetFocus(parent);
+    drainMessages();
+    std::puts("Windows stale watchdog timer: rejected without consuming the newer flight");
 }
 
 void testRealWindowsFrames() {
@@ -319,9 +426,9 @@ void testRealWindowsFrames() {
     assert(child);
     assert(!IsWindowVisible(window) && !IsWindowVisible(child));
     requestFrame(child, childProbe);
-    assert(pumpUntil([&]() { return childProbe.paints == 1; }, 1000));
-    assert(childProbe.hiddenPaints == 1);
-    std::puts("Windows never-shown child internal paint: completed before first ShowWindow");
+    assert(pumpUntil([&]() { return childProbe.frames == 1; }, 1000));
+    assert(childProbe.hiddenFrames == 1);
+    std::puts("Windows never-shown child frame: completed before first ShowWindow");
 
     ShowWindow(window, SW_SHOW);
     assert(SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0,
@@ -334,6 +441,8 @@ void testRealWindowsFrames() {
     testMouseUnderFrames(window, probe);
     testHiddenFrameRecovery(child, window, childProbe, SW_HIDE, "hidden-window");
     testHiddenFrameRecovery(child, window, childProbe, SW_MINIMIZE, "minimized-window");
+    testHideAfterWake(child, window, childProbe);
+    testStaleTimer(child, window, childProbe);
 
     assert(DestroyWindow(window));
     assert(UnregisterClassW(name, instance));
