@@ -195,23 +195,29 @@ pub const PatchReader = struct {
     fn fill(reader: *Io.Reader) Io.Reader.Error!usize {
         const self: *PatchReader = @fieldParentPtr("interface", reader);
         if (self.err != null) return error.ReadFailed;
-        const count = self.next() catch |err| {
+        // peek/take can request contiguous bytes across diff/literal records
+        // while a suffix is still unread. Append without discarding that tail.
+        const unread = reader.end - reader.seek;
+        std.debug.assert(unread < reader.buffer.len);
+        @memmove(reader.buffer[0..unread], reader.buffer[reader.seek..reader.end]);
+        reader.seek = 0;
+        reader.end = unread;
+        const count = self.next(reader.buffer[unread..]) catch |err| {
             self.err = err;
             return error.ReadFailed;
         };
         if (count == 0) return error.EndOfStream;
-        reader.seek = 0;
-        reader.end = count;
+        reader.end += count;
         return 0;
     }
 
-    fn next(self: *PatchReader) !usize {
+    fn next(self: *PatchReader, destination: []u8) !usize {
         if (self.finished) return 0;
         while (true) {
             try self.io.checkCancel();
             if (self.diff_remaining > 0) {
-                const count: usize = @intCast(@min(self.diff_remaining, chunk_bytes));
-                const output = self.output_buffer[0..count];
+                const count: usize = @intCast(@min(self.diff_remaining, destination.len));
+                const output = destination[0..count];
                 const old = self.old_buffer[0..count];
                 try self.diff.readAll(output);
                 @memset(old, 0);
@@ -233,8 +239,8 @@ pub const PatchReader = struct {
                 return count;
             }
             if (self.extra_remaining > 0) {
-                const count: usize = @intCast(@min(self.extra_remaining, chunk_bytes));
-                try self.extra.readAll(self.output_buffer[0..count]);
+                const count: usize = @intCast(@min(self.extra_remaining, destination.len));
+                try self.extra.readAll(destination[0..count]);
                 self.extra_remaining -= count;
                 self.new_position += count;
                 return count;
@@ -539,6 +545,30 @@ test "stream patch pull reader uses an immutable memory source and validates EOF
         try std.testing.expectEqual(expected, try reader.interface.takeByte());
     }
     try std.testing.expect(!reader.finished);
+    try std.testing.expectError(error.EndOfStream, reader.interface.takeByte());
+    try std.testing.expect(reader.finished);
+    try std.testing.expect(reader.err == null);
+}
+
+test "stream patch pull reader preserves unread bytes across segment boundaries" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const bytes = try testPatch(allocator, &.{ .{ 3, 2, -3 }, .{ 3, 0, 0 } }, &.{ 1, 0, 255, 0, 0, 0 }, "!?", 8, true);
+    defer allocator.free(bytes);
+    try tmp.dir.writeFile(io, .{ .sub_path = "patch", .data = bytes });
+    const patch_file = try tmp.dir.openFile(io, "patch", .{});
+    defer patch_file.close(io);
+    var source: MemorySource = .{ .bytes = "abc" };
+    var reader: PatchReader = undefined;
+    try reader.init(allocator, io, patch_file, source.source());
+    defer reader.deinit();
+    try std.testing.expectEqual(@as(u8, 'b'), try reader.interface.takeByte());
+    // Refill with two unread diff bytes, then span literal bytes and the next
+    // diff record. Byte-at-a-time and readSliceShort consumers miss this case.
+    try std.testing.expectEqualStrings("bb!?a", try reader.interface.take(5));
+    try std.testing.expectEqualStrings("bc", try reader.interface.take(2));
     try std.testing.expectError(error.EndOfStream, reader.interface.takeByte());
     try std.testing.expect(reader.finished);
     try std.testing.expect(reader.err == null);
