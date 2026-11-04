@@ -23,6 +23,7 @@ const template = @import("template.zig");
 const layout = @import("layout.zig");
 const font = @import("text/font.zig");
 const lock_timing = @import("lock_timing.zig");
+const ReentrantLock = @import("reentrant_lock.zig").ReentrantLock;
 
 const gpa = std.heap.c_allocator;
 
@@ -30,8 +31,7 @@ const gpa = std.heap.c_allocator;
 // Locking: the app thread and the host's main thread share each UI.
 // ---------------------------------------------------------------------------
 
-var lock_owner = std.atomic.Value(u64).init(0);
-var lock_depth: u32 = 0;
+var ui_lock: ReentrantLock = .{};
 // Only the outermost owner accesses these. Print after releasing the UI lock
 // so stderr backpressure does not itself stall frames or synthetic input.
 var lock_acquired_at: f64 = 0;
@@ -43,36 +43,34 @@ fn threadId() u64 {
 
 /// Recursive lock around all UI state (exported for in-process hosts).
 pub fn lock() void {
-    const me = threadId();
-    if (lock_owner.load(.acquire) == me) {
-        lock_depth += 1;
-        return;
-    }
     const wait_started = if (lock_timing.enabled()) lock_timing.now() else 0;
-    var spins: u32 = 0;
-    while (lock_owner.cmpxchgWeak(0, me, .acquire, .monotonic) != null) {
-        spins += 1;
-        if (spins > 64) std.Thread.yield() catch {} else std.atomic.spinLoopHint();
-    }
-    lock_depth = 1;
+    if (!ui_lock.lock()) return;
     lock_acquired_at = if (wait_started != 0) lock_timing.now() else 0;
     lock_wait_seconds = if (wait_started != 0) lock_acquired_at - wait_started else 0;
 }
 
 pub fn unlock() void {
-    lock_depth -= 1;
-    if (lock_depth == 0) {
-        // mutations from the app thread schedule a frame on the host
-        for (instances.items) |maybe| if (maybe) |inst| {
+    if (!ui_lock.isOutermost()) {
+        ui_lock.unlock();
+        return;
+    }
+    // Keep the outer acquisition held while notifying the host. A callback
+    // that reenters the C ABI must not flush again or release our ownership.
+    // A callback may create or destroy UIs. Re-read the array after each
+    // callback because creation can move its storage; notify only instances
+    // that existed when this outer unlock started.
+    const notification_count = instances.items.len;
+    for (0..notification_count) |index| {
+        if (instances.items[index]) |inst| {
             if (inst.request_frame) |f| if (inst.ui.doc.needs_paint or inst.ui.wantsFrames()) f(inst.request_frame_ctx);
-        };
-        const owner = lock_owner.load(.monotonic);
-        const waited = lock_wait_seconds;
-        const held = if (lock_acquired_at != 0) lock_timing.now() - lock_acquired_at else 0;
-        lock_owner.store(0, .release);
-        if (waited > 0.010 or held > 0.010) {
-            std.debug.print("[ebui lock] thread={d} wait={d:.1} ms hold={d:.1} ms\n", .{ owner - 1, waited * 1000, held * 1000 });
         }
+    }
+    const owner = threadId();
+    const waited = lock_wait_seconds;
+    const held = if (lock_acquired_at != 0) lock_timing.now() - lock_acquired_at else 0;
+    ui_lock.unlock();
+    if (waited > 0.010 or held > 0.010) {
+        std.debug.print("[ebui lock] thread={d} wait={d:.1} ms hold={d:.1} ms\n", .{ owner - 1, waited * 1000, held * 1000 });
     }
 }
 
@@ -1400,7 +1398,7 @@ test "host dispatch enters the event thread before taking the UI lock" {
 
         fn operation(h: *@This()) void {
             h.operation_thread = threadId();
-            h.operation_locked = lock_owner.load(.acquire) == threadId() and lock_depth > 0;
+            h.operation_locked = ui_lock.isOwnedByCurrentThread();
         }
 
         fn worker(h: *@This()) void {
@@ -1439,7 +1437,7 @@ test "c abi: synthetic input dispatches outside the lock and rechecks UI lifetim
 
         fn dispatch(callback: ThreadCallback, ctx: ?*anyopaque) callconv(.c) void {
             dispatched += 1;
-            dispatched_unlocked = dispatched_unlocked and lock_owner.load(.acquire) != threadId();
+            dispatched_unlocked = dispatched_unlocked and !ui_lock.isOwnedByCurrentThread();
             if (destroy_before_callback) ebui_destroy(ui_id);
             callback(ctx);
         }
@@ -1463,4 +1461,63 @@ test "c abi: synthetic input dispatches outside the lock and rechecks UI lifetim
     Host.destroy_before_callback = true;
     ebui_text_input(id, "gone".ptr, 4);
     try std.testing.expect(get(id) == null);
+}
+
+test "c abi: outer unlock retains ownership across frame callback reentry and UI growth" {
+    const Host = struct {
+        calls: usize = 0,
+        tail_calls: usize = 0,
+        id: u32,
+        tail_id: u32,
+        created: std.ArrayList(u32) = .empty,
+        fn requestFrame(ctx: ?*anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.calls += 1;
+            // Bound a regression to one extra callback instead of recursing
+            // indefinitely when the outer unlock incorrectly drops depth.
+            if (self.calls != 1) return;
+            lock();
+            unlock();
+            const old_capacity = instances.capacity;
+            while (instances.items.len <= old_capacity) {
+                const created = ebui_create_headless();
+                std.debug.assert(created != 0);
+                self.created.append(std.testing.allocator, created) catch @panic("test allocation failed");
+            }
+            // Both removals must be visible to the outer notification pass,
+            // even though growth replaced the backing array during callback.
+            ebui_destroy(self.id);
+            ebui_destroy(self.tail_id);
+        }
+        fn requestTail(ctx: ?*anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.tail_calls += 1;
+        }
+    };
+    const id = ebui_create_headless();
+    try std.testing.expect(id != 0);
+    defer ebui_destroy(id);
+    const tail_id = ebui_create_headless();
+    try std.testing.expect(tail_id != 0);
+    defer ebui_destroy(tail_id);
+    var host: Host = .{ .id = id, .tail_id = tail_id };
+    defer {
+        for (host.created.items) |created| ebui_destroy(created);
+        host.created.deinit(std.testing.allocator);
+    }
+    lock();
+    const inst = get(id).?;
+    inst.ui.doc.needs_paint = true;
+    inst.request_frame = Host.requestFrame;
+    inst.request_frame_ctx = &host;
+    const tail = get(tail_id).?;
+    tail.ui.doc.needs_paint = true;
+    tail.request_frame = Host.requestTail;
+    tail.request_frame_ctx = &host;
+    unlock();
+    try std.testing.expectEqual(@as(usize, 1), host.calls);
+    try std.testing.expectEqual(@as(usize, 0), host.tail_calls);
+    try std.testing.expect(host.created.items.len > 0);
+    try std.testing.expect(get(id) == null);
+    try std.testing.expect(get(tail_id) == null);
 }
