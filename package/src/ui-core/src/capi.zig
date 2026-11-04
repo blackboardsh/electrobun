@@ -22,6 +22,7 @@ const reactive = @import("reactive.zig");
 const template = @import("template.zig");
 const layout = @import("layout.zig");
 const font = @import("text/font.zig");
+const lock_timing = @import("lock_timing.zig");
 
 const gpa = std.heap.c_allocator;
 
@@ -31,6 +32,10 @@ const gpa = std.heap.c_allocator;
 
 var lock_owner = std.atomic.Value(u64).init(0);
 var lock_depth: u32 = 0;
+// Only the outermost owner accesses these. Print after releasing the UI lock
+// so stderr backpressure does not itself stall frames or synthetic input.
+var lock_acquired_at: f64 = 0;
+var lock_wait_seconds: f64 = 0;
 
 fn threadId() u64 {
     return @as(u64, std.Thread.getCurrentId()) + 1;
@@ -43,12 +48,15 @@ pub fn lock() void {
         lock_depth += 1;
         return;
     }
+    const wait_started = if (lock_timing.enabled()) lock_timing.now() else 0;
     var spins: u32 = 0;
     while (lock_owner.cmpxchgWeak(0, me, .acquire, .monotonic) != null) {
         spins += 1;
         if (spins > 64) std.Thread.yield() catch {} else std.atomic.spinLoopHint();
     }
     lock_depth = 1;
+    lock_acquired_at = if (wait_started != 0) lock_timing.now() else 0;
+    lock_wait_seconds = if (wait_started != 0) lock_acquired_at - wait_started else 0;
 }
 
 pub fn unlock() void {
@@ -58,7 +66,13 @@ pub fn unlock() void {
         for (instances.items) |maybe| if (maybe) |inst| {
             if (inst.request_frame) |f| if (inst.ui.doc.needs_paint or inst.ui.wantsFrames()) f(inst.request_frame_ctx);
         };
+        const owner = lock_owner.load(.monotonic);
+        const waited = lock_wait_seconds;
+        const held = if (lock_acquired_at != 0) lock_timing.now() - lock_acquired_at else 0;
         lock_owner.store(0, .release);
+        if (waited > 0.010 or held > 0.010) {
+            std.debug.print("[ebui lock] thread={d} wait={d:.1} ms hold={d:.1} ms\n", .{ owner - 1, waited * 1000, held * 1000 });
+        }
     }
 }
 

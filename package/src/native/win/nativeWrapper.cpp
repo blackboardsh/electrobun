@@ -3258,6 +3258,33 @@ public:
 
 
 
+static bool uiHostDebug();
+static double uiMonotonicSeconds();
+
+// Opt-in diagnostics separate time waiting for the native message loop from
+// time spent executing a synchronous UI operation on that loop.
+class UIDispatchTiming {
+    double started = 0;
+public:
+    explicit UIDispatchTiming(double queued) {
+        if (queued == 0) return;
+        started = uiMonotonicSeconds();
+        const double waitMs = (started - queued) * 1000.0;
+        if (waitMs >= 10) {
+            fprintf(stderr, "[ebui host] dispatch_sync queue %.1f ms thread=%lu\n",
+                    waitMs, GetCurrentThreadId());
+        }
+    }
+    ~UIDispatchTiming() {
+        if (started == 0) return;
+        const double elapsedMs = (uiMonotonicSeconds() - started) * 1000.0;
+        if (elapsedMs >= 10) {
+            fprintf(stderr, "[ebui host] dispatch_sync execution %.1f ms thread=%lu\n",
+                    elapsedMs, GetCurrentThreadId());
+        }
+    }
+};
+
 class MainThreadDispatcher {
 private:
     static HWND g_messageWindow;
@@ -3284,12 +3311,14 @@ public:
         if (is_main_thread() || !g_messageWindow) {
             return func();
         }
+        const double queuedAt = uiHostDebug() ? uiMonotonicSeconds() : 0;
         
         if constexpr (std::is_void_v<ReturnType>) {
             auto promise = std::make_shared<std::promise<void>>();
             auto future = promise->get_future();
             
-            auto task = new std::function<void()>([func = std::forward<Func>(func), promise]() {
+            auto task = new std::function<void()>([func = std::forward<Func>(func), promise, queuedAt]() {
+                UIDispatchTiming timing(queuedAt);
                 try {
                     func();
                     promise->set_value();
@@ -3311,7 +3340,8 @@ public:
             auto promise = std::make_shared<std::promise<ReturnType>>();
             auto future = promise->get_future();
             
-            auto task = new std::function<void()>([func = std::forward<Func>(func), promise]() {
+            auto task = new std::function<void()>([func = std::forward<Func>(func), promise, queuedAt]() {
+                UIDispatchTiming timing(queuedAt);
                 try {
                     promise->set_value(func());
                 } catch (...) {
@@ -9259,8 +9289,11 @@ static bool uiHostDebug() {
 }
 
 static double uiMonotonicSeconds() {
-    static LARGE_INTEGER freq = {};
-    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    static const LARGE_INTEGER freq = [] {
+        LARGE_INTEGER value = {};
+        QueryPerformanceFrequency(&value);
+        return value;
+    }();
     LARGE_INTEGER counter;
     QueryPerformanceCounter(&counter);
     return (double)counter.QuadPart / (double)freq.QuadPart;

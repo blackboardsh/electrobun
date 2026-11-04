@@ -9,6 +9,10 @@ on:
         required: true
   workflow_dispatch:
     inputs:
+      windows_native_ui_only:
+        description: Run only Cottontail and Bun CEF suites on Windows with Native UI timing
+        type: boolean
+        default: false
       linux_updater_only:
         description: Run only the Linux x64 install/update/uninstall lifecycle and native updater tests
         type: boolean
@@ -47,7 +51,7 @@ jobs:
         # also fails on the hosted macOS 26 Intel image (IconServices).
         # Related runner graphics issue:
         # https://github.com/actions/runner-images/issues/14751
-        include: ${{ fromJSON(inputs.macos_intel_only && '[{"runner":"macos-15-intel","arch":"x64"}]' || inputs.windows_arm_only && '[{"runner":"windows-11-arm","arch":"arm64"}]' || inputs.linux_updater_only && '[{"runner":"ubuntu-24.04","arch":"x64"}]' || '[{"runner":"macos-14","arch":"arm64"},{"runner":"macos-15-intel","arch":"x64"},{"runner":"ubuntu-24.04","arch":"x64"},{"runner":"ubuntu-24.04-arm","arch":"arm64"},{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]') }}
+        include: ${{ fromJSON(inputs.macos_intel_only && '[{"runner":"macos-15-intel","arch":"x64"}]' || inputs.windows_arm_only && '[{"runner":"windows-11-arm","arch":"arm64"}]' || inputs.windows_native_ui_only && '[{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]' || inputs.linux_updater_only && '[{"runner":"ubuntu-24.04","arch":"x64"}]' || '[{"runner":"macos-14","arch":"arm64"},{"runner":"macos-15-intel","arch":"x64"},{"runner":"ubuntu-24.04","arch":"x64"},{"runner":"ubuntu-24.04-arm","arch":"arm64"},{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 330
     env:
@@ -257,9 +261,35 @@ jobs:
           mkdir -p "$RUNNER_TEMP/electrobun-macos-crash-reports"
           touch "$RUNNER_TEMP/electrobun-macos-crash-reports/suite-started"
 
+      - name: Build focused Windows CEF variants
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.windows_native_ui_only
+        working-directory: package
+        run: hutch dev:matrix --build-only --with=cottontail:cef,bun:cef --jobs=1
+
+      - name: Run focused Windows CEF tests
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.windows_native_ui_only
+        timeout-minutes: 45
+        working-directory: kitchen
+        shell: pwsh
+        env:
+          HUTCH_ELECTROBUN_DEVKIT_ROOT: ${{ github.workspace }}/package/dist
+          AUTO_RUN: '1'
+          EBUI_HOST_DEBUG: '1'
+        run: |
+          # Preserve the full suite prelude before Native UI, and run desktop
+          # variants one at a time, as in the release VM suite.
+          $failedVariants = @()
+          foreach ($variant in @('cottontail:cef', 'bun:cef')) {
+            hutch scripts/kitchen-matrix.ts --launch-only "--with=$variant" --timeout=1200
+            if ($LASTEXITCODE -ne 0) { $failedVariants += $variant }
+          }
+          if ($failedVariants.Count -gt 0) {
+            throw "Windows CEF tests failed: $($failedVariants -join ', ')"
+          }
+
       - name: Run full VM suite (macOS and Windows desktop)
         timeout-minutes: 300
-        if: runner.os != 'Linux'
+        if: runner.os != 'Linux' && !(runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.windows_native_ui_only)
         working-directory: package
         run: hutch test:vm
 

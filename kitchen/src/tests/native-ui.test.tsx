@@ -61,16 +61,21 @@ export const nativeUiTests = [
 					try {
 						log(`cycle ${i}: attach`);
 						ui = createUI(win, { css: animated, components: true });
+						log(`cycle ${i}: render`);
 						let submits = 0;
 						ui.render(() => <form onSubmit={() => submits++} style="margin: 12px">
 							<input id="entry" class="eb-input" />
 							<div class="pulse" />
 						</form>);
+						log(`cycle ${i}: await initial frame`);
 						await ui.nextFrame();
 						log(`cycle ${i}: input`);
 						await ui.simulate.click(ui.querySelector("#entry")!);
+						log(`cycle ${i}: type`);
 						await ui.simulate.type("pending frame");
+						log(`cycle ${i}: submit`);
 						await ui.simulate.key("Enter");
+						log(`cycle ${i}: verify input`);
 						ui.document.pump();
 						expect(submits).toBe(1);
 					} finally {
