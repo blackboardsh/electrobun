@@ -17,6 +17,11 @@ result with instanced SDF quads through Dawn (WebGPU). Your app code drives it
 with fine-grained reactivity, so an update touches exactly the nodes that
 changed.
 
+![Electrobun UI Kitchen Sink on macOS showing buttons, cards, tabs, gradients, and backdrop blur](../assets/ui/components-macos.png)
+
+*Kitchen Sink on macOS: HTML/CSS components rendered directly by the native
+GPU UI engine.*
+
 ```text
 your JSX + signals/stores (electrobun/main/ui)
         ↓  one DOM mutation per changed binding, batched over FFI
@@ -142,6 +147,11 @@ positioned over elements so they participate in the layout; see
 [anchoring native views](/electrobun/apis/ui/overview/#anchoring-native-views).
 To put Electrobun UI *inside* web content instead, use the
 [`<electrobun-ui>` tag](/electrobun/apis/ui/ui-tag/).
+
+![The ui-wgpu template on macOS with a GPU-rendered counter, a Mandelbrot WGPUView, and an embedded BrowserView](../assets/ui/native-views-macos.png)
+
+*The `ui-wgpu` template on macOS combines GPU-rendered app controls, a custom
+WebGPU scene, and a native webview anchored to the UI layout.*
 
 ## Migrating from the 2.0.5 prototype
 

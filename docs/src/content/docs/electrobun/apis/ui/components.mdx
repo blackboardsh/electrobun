@@ -22,6 +22,11 @@ createUIWindow({ title: "App", components: true }, () => <App />);
 Wrap your app in `class="eb-app"` to get the base font, colors, and
 `box-sizing: border-box`.
 
+![Built-in Electrobun UI components in Kitchen Sink on macOS, including buttons, badges, cards, tabs, and a progress bar](../../assets/ui/components-macos.png)
+
+*The built-in component stylesheet in Kitchen Sink on macOS. The controls,
+text, gradients, shadows, and backdrop blur are rendered by Electrobun UI.*
+
 ## Theming
 
 Everything is driven by `--eb-*` custom properties on `:root`. Override any of
@@ -198,6 +203,11 @@ inside a `position: relative` parent and show it with `<Show>`.
 
 The overlay blurs what's behind it with `backdrop-filter`. Render it inside a
 `<Show>` (optionally in a `<Portal>`) to open and close it.
+
+![A centered Electrobun UI dialog with Cancel and Confirm buttons over a blurred Kitchen Sink window on macOS](../../assets/ui/dialog-macos.png)
+
+*Kitchen Sink on macOS: a dialog rendered through a `Portal` over the blurred
+GPU-rendered interface.*
 
 ## Disclosure
 
