@@ -9349,18 +9349,28 @@ static std::string uiUtf8(const std::wstring& s) {
 // wgpuViewRequestFrame marks the view; the pacing thread waits for the next
 // DWM composition and posts one short paint request per marked view. Heavy
 // rendering runs from OS-generated WM_PAINT, below real mouse/keyboard input
-// in Windows' queue ordering. Keeping the flight through actual painting
-// prevents an animation from continually posting work ahead of input.
+// in Windows' queue ordering. A low-priority timer completes frames when
+// Windows suppresses painting (including never-shown child windows). Keeping
+// the flight through actual rendering prevents an animation from continually
+// posting work ahead of input.
 static std::mutex g_uiFrameMutex;
 static std::condition_variable g_uiFrameCv;
 static std::map<uint32_t, electrobun::UIFrameSchedule> g_uiFrames;
 static uint64_t g_uiNextFrameFlight = 1;
 
-static void uiRetireFrameSchedule(uint32_t id) {
+// Main thread. KillTimer does not remove an already-generated WM_TIMER;
+// unique flight IDs also prevent that stale message from rendering a new UI.
+static void uiRetireFrameSchedule(uint32_t id, HWND window) {
+    uint64_t flight = 0;
     {
         std::lock_guard<std::mutex> lock(g_uiFrameMutex);
-        g_uiFrames.erase(id);
+        auto it = g_uiFrames.find(id);
+        if (it != g_uiFrames.end()) {
+            flight = it->second.activeFlight();
+            g_uiFrames.erase(it);
+        }
     }
+    if (window && flight != 0) KillTimer(window, static_cast<UINT_PTR>(flight));
     g_uiFrameCv.notify_one();
 }
 
@@ -9445,7 +9455,7 @@ static void uiFrameThread() {
                     auto it = g_uiFrames.find(id);
                     if (it == g_uiFrames.end() || !it->second.acceptWake(flight)) continue;
                 }
-                if (!electrobun::requestLowPriorityUIFrame(view->hwnd)) {
+                if (!electrobun::requestLowPriorityUIFrame(view->hwnd, flight)) {
                     uiRetireFrameFlight(id, flight);
                 }
             }
@@ -9464,23 +9474,42 @@ static void uiScheduleFrame(uint32_t webviewId) {
     g_uiFrameCv.notify_one();
 }
 
-static void uiPaintFrame(WGPUView* view) {
+// A zero timerFlight means an ordinary WM_PAINT. Timer delivery must claim
+// the exact pending flight before it may render or cancel that flight's timer.
+static bool uiPaintFrame(WGPUView* view, uint64_t timerFlight = 0) {
     const uint32_t id = view->webviewId;
+    const HWND window = view->hwnd;
+    const bool defer = view->ui.inFrame;
     uint64_t flight = 0;
+    uint64_t timerToCancel = 0;
     {
         std::lock_guard<std::mutex> lock(g_uiFrameMutex);
-        if (view->ui.inFrame) {
+        auto it = g_uiFrames.find(id);
+        if (timerFlight != 0) {
+            if (it == g_uiFrames.end() || !it->second.beginTimer(timerFlight)) return false;
+            flight = timerToCancel = timerFlight;
+            if (defer) {
+                // Another (unscheduled) resize frame can run a nested message
+                // loop. Release this claimed flight and request a later one.
+                it->second.finishPaint(flight);
+                it->second.request();
+            }
+        } else if (defer) {
             // A native nested message loop may consume a paint while a GPU
             // frame is active. Preserve the request instead of losing it.
+            if (it != g_uiFrames.end()) timerToCancel = it->second.activeFlight();
             g_uiFrames[id].deferPaint();
-        } else {
-            auto it = g_uiFrames.find(id);
-            if (it != g_uiFrames.end()) flight = it->second.beginPaint();
+        } else if (it != g_uiFrames.end()) {
+            timerToCancel = it->second.activeFlight();
+            flight = it->second.beginPaint();
         }
     }
-    if (view->ui.inFrame) {
+    // Cancel before entering renderer callbacks, which can pump nested native
+    // messages. A visible paint is never delayed until the timer expires.
+    if (timerToCancel != 0) KillTimer(window, static_cast<UINT_PTR>(timerToCancel));
+    if (defer) {
         g_uiFrameCv.notify_one();
-        return;
+        return true;
     }
     uiRunFrame(view);
     if (flight != 0) {
@@ -9489,6 +9518,7 @@ static void uiPaintFrame(WGPUView* view) {
         if (it != g_uiFrames.end()) it->second.finishPaint(flight);
     }
     g_uiFrameCv.notify_one();
+    return true;
 }
 
 // ---- input method (IMM32) ----
@@ -10540,6 +10570,9 @@ static LRESULT CALLBACK uiViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         uiPaintFrame(view);
         return 0;
     }
+    case WM_TIMER:
+        if (wParam != 0 && uiPaintFrame(view, static_cast<uint64_t>(wParam))) return 0;
+        break;
     case WM_SIZE:
     case WM_DPICHANGED_AFTERPARENT:
         // draw at the new size now, so live resizes don't show stale frames
@@ -10658,6 +10691,7 @@ static LRESULT CALLBACK uiViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         uiShortcut(view, "a", 2);
         return 0;
     case WM_NCDESTROY: {
+        uiRetireFrameSchedule(view->webviewId, hwnd);
         RemovePropW(hwnd, kUIViewProp);
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)original);
         view->ui.installed = false;
@@ -10688,7 +10722,7 @@ static void uiInstallInput(WGPUView* view) {
 
 static void uiUninstallInput(WGPUView* view) {
     if (!view->ui.installed) {
-        uiRetireFrameSchedule(view->webviewId);
+        uiRetireFrameSchedule(view->webviewId, view->hwnd);
         return;
     }
     uiCompleteComposition(view);
@@ -10703,7 +10737,7 @@ static void uiUninstallInput(WGPUView* view) {
     view->ui.highSurrogate = 0;
     // Retire after composition teardown, whose callbacks can request a frame.
     // The WGPU view may stay alive and accept a fresh UI attachment later.
-    uiRetireFrameSchedule(view->webviewId);
+    uiRetireFrameSchedule(view->webviewId, view->hwnd);
 }
 
 ELECTROBUN_EXPORT void wgpuViewCompositionRelease(AbstractView* abstractView);
