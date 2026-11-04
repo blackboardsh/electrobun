@@ -809,6 +809,8 @@ def observe_text(expected, capture, recognize, *, present=True, response_timeout
     frames have a smaller OCR budget so a complex stale frame cannot consume
     the entire analysis window. Once capture closes, the final eligible frame
     may use the remaining budget, including all regions required for absence.
+    Absence waits for that final frame before starting OCR: a complete negative
+    scan is expensive and must not be discarded and restarted on a newer frame.
     """
     for name, value in (('response_timeout', response_timeout),
                         ('analysis_timeout', analysis_timeout),
@@ -882,7 +884,8 @@ def observe_text(expected, capture, recognize, *, present=True, response_timeout
             # if its earlier attempt started while new captures were possible.
             retry_final = (capture_closed and not final_attempt and latest is not None
                            and latest[0] == analyzed_index and samples[analyzed_index].get('ocrError'))
-            if pending is None and latest is not None and (latest[0] > analyzed_index or retry_final):
+            if (pending is None and latest is not None and (present or capture_closed)
+                    and (latest[0] > analyzed_index or retry_final)):
                 index, image = latest
                 samples[index]['analysisStartedSeconds'] = clock() - started
                 frame_deadline = analysis_deadline if capture_closed else min(
