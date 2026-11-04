@@ -79,9 +79,10 @@ class TextObservationTests(unittest.TestCase):
         for error in (RuntimeError('Tesseract process timeout'), OSError('OCR unavailable')):
             with self.subTest(error=error):
                 run = self.inspect_image(['', error])
-                with self.assertRaises(type(error)) as raised:
+                expected_type = desktop.TextFrameTimeout if isinstance(error, RuntimeError) else type(error)
+                with self.assertRaises(expected_type) as raised:
                     run.inspect()
-                self.assertIs(raised.exception, error)
+                self.assertEqual(str(raised.exception), str(error))
                 self.assertEqual(len(run.calls), 2)
                 self.assertIsNone(run.observation['present'])
                 self.assertFalse(run.observation['ocrComplete'])
@@ -165,10 +166,44 @@ class TextAnalysisThreadTests(unittest.TestCase):
             worker.close(2)
 
 
+class TextSubprocessTests(unittest.TestCase):
+    def test_image_preparation_cannot_start_ocr_with_an_expired_budget(self):
+        with patch.object(desktop.time, 'monotonic', side_effect=[0, 2]), \
+                patch.object(desktop.subprocess, 'run') as run:
+            with self.assertRaises(desktop.TextFrameTimeout):
+                desktop.recognize_text(Mock(), config='--psm 11', timeout=1, command='tesseract')
+        run.assert_not_called()
+
+    def test_ocr_thread_limit_is_scoped_to_child_and_timeout_reaps_it(self):
+        image = Mock()
+        original = os.environ.get('OMP_THREAD_LIMIT')
+        with patch.object(desktop.subprocess, 'run', side_effect=subprocess.TimeoutExpired('ocr', 2)) as run:
+            with self.assertRaises(desktop.TextFrameTimeout):
+                desktop.recognize_text(image, config='--psm 11', timeout=2, command='tesseract')
+        argv, options = run.call_args.args[0], run.call_args.kwargs
+        self.assertEqual(argv[0], 'tesseract')
+        self.assertEqual(argv[2:], ['stdout', '--psm', '11'])
+        self.assertEqual(options['env']['OMP_THREAD_LIMIT'], '1')
+        self.assertEqual(os.environ.get('OMP_THREAD_LIMIT'), original)
+        self.assertGreater(options['timeout'], 0)
+        self.assertLessEqual(options['timeout'], 2)
+        self.assertFalse(Path(argv[1]).parent.exists(), 'temporary image must be cleaned on timeout')
+
+    def test_ocr_process_errors_remain_fatal_and_success_returns_text(self):
+        with patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(
+                returncode=0, stdout='Rendered in a Portal', stderr='')):
+            self.assertEqual(desktop.recognize_text(Mock(), config='--psm 11', timeout=2,
+                command='tesseract'), 'Rendered in a Portal')
+        with patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(
+                returncode=1, stdout='', stderr='Missing language data')):
+            with self.assertRaisesRegex(RuntimeError, 'Missing language data'):
+                desktop.recognize_text(Mock(), config='--psm 11', timeout=2, command='tesseract')
+
+
 class TextResponseTests(unittest.TestCase):
     def observe(self, frames, *, present=False, capture_costs=(), ocr_costs=(),
                 response=15, analysis=120, interval=0.5, error=None, crash_after_ocr=False,
-                cleanup_error=None):
+                cleanup_error=None, frame_analysis=120, complete=True, respect_timeouts=True):
         clock, captures, reads, sleeps, observation = [0.0], [], [], [], {}
         frame_values = iter(frames)
         jobs = []
@@ -190,9 +225,14 @@ class TextResponseTests(unittest.TestCase):
             self.assertTrue(not jobs or jobs[-1].done(), 'only one OCR analysis may run at a time')
             reads.append((frame, deadline - clock()))
             found = expected in frame
+            cost = next(ocr_costs, 0)
+            failure = error
+            if respect_timeouts and cost > deadline - clock():
+                cost = deadline - clock()
+                failure = desktop.TextFrameTimeout('Tesseract process exceeded its frame budget')
             evidence = {'ocrPasses': 1, 'present': None if error else found,
-                        'ocrComplete': not error and not found}
-            job = DeferredTextAnalysis(clock, clock() + next(ocr_costs, 0), (found, evidence, error))
+                        'ocrComplete': complete and not error and not found}
+            job = DeferredTextAnalysis(clock, clock() + cost, (found, evidence, failure))
             if cleanup_error:
                 job.close = Mock(side_effect=cleanup_error)
             jobs.append(job)
@@ -209,6 +249,7 @@ class TextResponseTests(unittest.TestCase):
         def run():
             return desktop.observe_text('Portal', capture, recognize, present=present,
                 response_timeout=response, analysis_timeout=analysis, interval=interval,
+                frame_analysis_timeout=frame_analysis,
                 observation=observation, clock=lambda: clock[0], sleep=sleep,
                 require_running=health, regions=lambda frame: [(frame, 0, '--psm 11', 1, 0)],
                 start_analysis=start_analysis)
@@ -281,6 +322,47 @@ class TextResponseTests(unittest.TestCase):
         self.assertFalse(run.observation['samples'][-1]['eligible'])
         self.assertLess(run.observation['elapsedSeconds'], 120)
 
+    def test_hung_early_frames_cannot_hide_a_later_timely_portal_frame(self):
+        # The ARM runner showed the portal at27s, while OCR of the first
+        # pre-dialog screenshot used up the entire120s analysis window.
+        run = self.observe(['not yet open'] * 55 + ['Portal'], present=True,
+            response=45, frame_analysis=20, ocr_costs=[120, 120, 3])
+        self.assertEqual(run.run(), 'Portal')
+        self.assertEqual(run.observation['elapsedSeconds'], 43)
+        self.assertLessEqual(run.observation['responseObservedSeconds'], 45)
+        self.assertEqual(run.reads, [('not yet open', 20), ('not yet open', 20), ('Portal', 20)])
+        first = run.observation['samples'][0]
+        self.assertIsNone(first['present'])
+        self.assertFalse(first['ocrComplete'])
+        self.assertIn('frame', first['ocrError'])
+
+    def test_final_timely_frame_keeps_remaining_budget_for_complete_absence_analysis(self):
+        run = self.observe(['Portal', 'closed'], frame_analysis=20, ocr_costs=[120, 76])
+        self.assertEqual(run.run(), 'closed')
+        self.assertEqual(run.reads, [('Portal', 20), ('closed', 100)])
+        self.assertEqual(run.observation['elapsedSeconds'], 96)
+        self.assertLess(run.observation['responseObservedSeconds'], 15)
+
+    def test_timeout_and_incomplete_ocr_can_never_prove_absence(self):
+        for options in ({'ocr_costs': [120] * 10}, {'complete': False}):
+            with self.subTest(options=options):
+                run = self.observe(['closed'], frame_analysis=20, **options)
+                with self.assertRaises(desktop.TextObservationTimeout):
+                    run.run()
+                self.assertNotIn('matchedSample', run.observation)
+                self.assertEqual(run.observation['outcome'], 'failed')
+
+    def test_only_eligible_frame_can_receive_one_final_retry_after_early_timeout(self):
+        run = self.observe(['closed'], frame_analysis=20, response=15,
+            capture_costs=[14], interval=2, ocr_costs=[120, 40])
+        self.assertEqual(run.run(), 'closed')
+        self.assertEqual(run.captures, ['closed'])
+        self.assertEqual(run.observation['responseObservedSeconds'], 14)
+        self.assertEqual(run.reads, [('closed', 20), ('closed', 85)])
+        self.assertEqual(run.observation['elapsedSeconds'], 75)
+        self.assertEqual(len(run.observation['samples'][0]['analysisAttempts']), 2)
+        self.assertNotIn('ocrError', run.observation['samples'][0])
+
     def test_late_capture_cannot_replace_or_invalidate_an_earlier_matching_frame(self):
         run = self.observe(['Portal', 'closed'], present=True, capture_costs=[0, 16], ocr_costs=[2])
         self.assertEqual(run.run(), 'Portal')
@@ -319,7 +401,7 @@ class TextResponseTests(unittest.TestCase):
         self.assertNotIn('matchedSample', run.observation)
 
     def test_unfinished_analysis_is_cancelled_and_cannot_revise_a_deadline_failure(self):
-        run = self.observe(['closed'], ocr_costs=[121])
+        run = self.observe(['closed'], ocr_costs=[121], respect_timeouts=False)
         with self.assertRaisesRegex(desktop.TextObservationTimeout, 'analysis deadline'):
             run.run()
         before = json.dumps(run.observation)
@@ -390,7 +472,7 @@ class TextActionTests(unittest.TestCase):
             self.assertEqual(threading.get_ident(), owner)
             value = recognize(image, config='--psm 11', timeout=deadline - clock())
             found = expected in value
-            cost = 2 if len(reads) == 1 or never_changes else 76
+            cost = 2 if len(reads) == 1 or never_changes else 16
             return DeferredTextAnalysis(clock, clock() + cost,
                 (found, {'present': found, 'ocrPasses': 1, 'ocrComplete': not found}, None))
 
@@ -416,6 +498,8 @@ class TextActionTests(unittest.TestCase):
                 patches.enter_context(patch.object(desktop, 'ocr_regions',
                     side_effect=lambda image: [(image, 0, '--psm 11', 1, 0)]))
                 patches.enter_context(patch.object(desktop, 'TextAnalysis', side_effect=start_analysis))
+                patches.enter_context(patch.object(desktop, 'recognize_text',
+                    side_effect=lambda image, config, timeout, command: recognize(image, config=config, timeout=timeout)))
                 if never_changes:
                     with self.assertRaisesRegex(desktop.TextObservationTimeout, 'capture deadline'):
                         desktop.inspect_app(plan)
@@ -446,7 +530,7 @@ class TextActionTests(unittest.TestCase):
                 self.assertTrue(result['ok'])
                 self.assertGreater(len(evidence['samples']), 2)
                 self.assertEqual(evidence['responseObservedSeconds'], 2)
-                self.assertEqual(evidence['elapsedSeconds'], 78)
+                self.assertEqual(evidence['elapsedSeconds'], 18)
                 self.assertIn('visible-response-to-input', result['checks'])
                 prefix = 'visible-text:' if present else 'occluded-text:'
                 self.assertIn(prefix + 'Rendered in a Portal', result['checks'])
