@@ -6,8 +6,10 @@ import math
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -674,6 +676,31 @@ class TextObservationTimeout(AssertionError):
     pass
 
 
+class TextFrameTimeout(TextObservationTimeout):
+    """This frame is unknown; another timely captured frame may still prove the check."""
+
+
+def recognize_text(image, *, config, timeout, command):
+    """Bound and reap one OCR process without changing the application's environment."""
+    deadline = time.monotonic() + timeout
+    with tempfile.TemporaryDirectory(prefix='desktop-smoke-ocr-') as directory:
+        path = Path(directory) / 'frame.png'
+        image.save(path)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TextFrameTimeout('Text OCR exhausted its frame budget preparing an image')
+        try:
+            result = subprocess.run([command, str(path), 'stdout', *shlex.split(config)],
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                timeout=remaining, env={**os.environ, 'OMP_THREAD_LIMIT': '1'},
+                creationflags=0x08000000 if sys.platform == 'win32' else 0)
+        except subprocess.TimeoutExpired as error:
+            raise TextFrameTimeout('Tesseract process exceeded its frame budget') from error
+        if result.returncode:
+            raise RuntimeError(f'Tesseract exited {result.returncode}: {result.stderr[-2048:]}')
+        return result.stdout
+
+
 def normalized_text(value):
     return ''.join(value.casefold().split())
 
@@ -701,21 +728,28 @@ def image_has_text(image, expected, recognize, *, deadline, observation=None,
             check_cancelled()
             remaining = deadline - clock()
             if remaining <= 0:
-                raise TextObservationTimeout('Text OCR exceeded its analysis deadline')
+                raise TextFrameTimeout('Text OCR exceeded its frame deadline')
             # pytesseract's timeout=0 means unbounded: never start a pass with
             # an exhausted budget. File preparation can also take time, so
             # check the clock again after the subprocess returns.
             observation['ocrPasses'] += 1
-            parts.append(recognize(region, config=config, timeout=remaining))
+            try:
+                parts.append(recognize(region, config=config, timeout=remaining))
+            except RuntimeError as error:
+                # Preserve compatibility with injected pytesseract recognizers.
+                # Only its documented timeout is a recoverable unknown frame.
+                if str(error) != 'Tesseract process timeout':
+                    raise
+                raise TextFrameTimeout(str(error)) from error
             observation['ocrText'] = '\n'.join(parts)[-4096:]
             check_cancelled()
             if clock() >= deadline:
-                raise TextObservationTimeout('Text OCR exceeded its analysis deadline')
+                raise TextFrameTimeout('Text OCR exceeded its frame deadline')
             if needle in normalized_text('\n'.join(parts)):
                 observation['present'] = True
                 return True
         if clock() >= deadline:
-            raise TextObservationTimeout('Text OCR exceeded its analysis deadline')
+            raise TextFrameTimeout('Text OCR exceeded its frame deadline')
         if not observation['ocrPasses']:
             raise RuntimeError('Text OCR produced no regions')
         observation.update(ocrComplete=True, present=False)
@@ -761,7 +795,7 @@ class TextAnalysis:
 
 
 def observe_text(expected, capture, recognize, *, present=True, response_timeout=45,
-                 analysis_timeout=120, interval=0.5, observation=None,
+                 analysis_timeout=120, frame_analysis_timeout=20, interval=0.5, observation=None,
                  require_running=None, clock=None, sleep=None, regions=None,
                  start_analysis=None):
     """Observe timely desktop frames; bound slow OCR separately from UI response.
@@ -771,10 +805,14 @@ def observe_text(expected, capture, recognize, *, present=True, response_timeout
     showed. Neither an OCR error nor an image captured late can pass the check.
     The caller owns every GUI/capture operation. One OCR worker analyzes a
     fixed image while fresh captures replace the latest eligible image. Only
-    that latest image and the active analysis image remain in memory.
+    that latest image and the active analysis image remain in memory. Early
+    frames have a smaller OCR budget so a complex stale frame cannot consume
+    the entire analysis window. Once capture closes, the final eligible frame
+    may use the remaining budget, including all regions required for absence.
     """
     for name, value in (('response_timeout', response_timeout),
-                        ('analysis_timeout', analysis_timeout), ('interval', interval)):
+                        ('analysis_timeout', analysis_timeout),
+                        ('frame_analysis_timeout', frame_analysis_timeout), ('interval', interval)):
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f'{name} must be finite and positive')
     clock, sleep = clock or time.monotonic, sleep or time.sleep
@@ -786,9 +824,11 @@ def observe_text(expected, capture, recognize, *, present=True, response_timeout
     samples = []
     pending, latest = None, None
     analyzed_index = -1
+    final_attempt = False
     next_capture = started
     observation.update(expected=expected, condition='present' if present else 'absent',
                        responseTimeoutSeconds=response_timeout, analysisTimeoutSeconds=analysis_timeout,
+                       frameAnalysisTimeoutSeconds=frame_analysis_timeout,
                        samples=samples, outcome='pending')
 
     def response_expired():
@@ -798,17 +838,26 @@ def observe_text(expected, capture, recognize, *, present=True, response_timeout
     try:
         while True:
             if pending is not None and pending[0].done():
-                future, index, image = pending
+                future, index, image, frame_deadline = pending
                 found, evidence, error, completed = future.result()
+                samples[index]['analysisAttempts'][-1].update(evidence, finishedSeconds=completed - started)
                 samples[index].update(evidence)
                 samples[index]['analysisFinishedSeconds'] = completed - started
                 pending, analyzed_index = None, index
-                if error is not None:
+                if error is not None and not isinstance(error, TextFrameTimeout):
                     raise error
                 require_running()
                 if clock() >= analysis_deadline or completed >= analysis_deadline:
                     raise TextObservationTimeout('Text observation exceeded its analysis deadline')
-                if found == present:
+                if error is None and completed >= frame_deadline:
+                    error = TextFrameTimeout('Text OCR exceeded its frame deadline')
+                if error is not None:
+                    samples[index].update(present=None, ocrComplete=False, ocrError=str(error))
+                    samples[index]['analysisAttempts'][-1].update(
+                        present=None, ocrComplete=False, ocrError=str(error))
+                else:
+                    samples[index].pop('ocrError', None)
+                if error is None and found == present and (present or evidence.get('ocrComplete') is True):
                     observation.update(outcome='passed', matchedSample=index,
                                        responseObservedSeconds=samples[index]['captureFinishedSeconds'])
                     return image
@@ -828,12 +877,22 @@ def observe_text(expected, capture, recognize, *, present=True, response_timeout
                         latest = (len(samples) - 1, captured_image)
                     del captured_image
                     next_capture = clock() + interval
-            if pending is None and latest is not None and latest[0] > analyzed_index:
+            capture_closed = clock() >= response_deadline
+            # A timed-out final frame can get one full remaining-budget pass
+            # if its earlier attempt started while new captures were possible.
+            retry_final = (capture_closed and not final_attempt and latest is not None
+                           and latest[0] == analyzed_index and samples[analyzed_index].get('ocrError'))
+            if pending is None and latest is not None and (latest[0] > analyzed_index or retry_final):
                 index, image = latest
                 samples[index]['analysisStartedSeconds'] = clock() - started
-                future = start_analysis(image, expected, recognize, deadline=analysis_deadline,
+                frame_deadline = analysis_deadline if capture_closed else min(
+                    analysis_deadline, clock() + frame_analysis_timeout)
+                samples[index].setdefault('analysisAttempts', []).append({
+                    'startedSeconds': clock() - started, 'deadlineSeconds': frame_deadline - started})
+                final_attempt = capture_closed
+                future = start_analysis(image, expected, recognize, deadline=frame_deadline,
                                         clock=clock, regions=regions)
-                pending = (future, index, image)
+                pending = (future, index, image, frame_deadline)
                 # Pick up an immediately completed analysis before waiting.
                 continue
             if clock() >= response_deadline and pending is None:
@@ -851,7 +910,7 @@ def observe_text(expected, capture, recognize, *, present=True, response_timeout
         if pending is not None:
             cleanup_started = clock()
             try:
-                observation['ocrCleanupComplete'] = pending[0].close(max(0, analysis_deadline - clock()) + 2)
+                observation['ocrCleanupComplete'] = pending[0].close(max(0, pending[3] - clock()) + 2)
             except Exception as error:
                 observation['ocrCleanupComplete'] = False
                 observation['ocrCleanupError'] = str(error)
@@ -933,7 +992,11 @@ def inspect_app(plan):
             return image
 
         try:
-            return observe_text(expected, capture_text, pytesseract.image_to_string,
+            def recognize(image, *, config, timeout):
+                return recognize_text(image, config=config, timeout=timeout,
+                                      command=pytesseract.pytesseract.tesseract_cmd)
+
+            return observe_text(expected, capture_text, recognize,
                                 present=present, response_timeout=limit, analysis_timeout=120,
                                 observation=observation, require_running=require_running)
         finally:
