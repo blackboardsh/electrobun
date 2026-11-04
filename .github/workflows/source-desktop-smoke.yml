@@ -1,142 +1,51 @@
-name: Source desktop smoke diagnostics
+name: Saved desktop OCR replay diagnostics
 
 on:
   workflow_dispatch:
     inputs:
       runners:
-        description: Runner group to validate
-        type: choice
-        default: all
-        options:
-          - all
-          - macos-intel
-          - macos-linux
-          - macos-windows
-          - linux-arm64
-          - windows
-      scenarios:
-        description: Comma-separated scenario IDs for focused source diagnostics, or all
+        description: Accepted for compatibility; replay covers both Windows architectures
         type: string
-        default: all
-      native_ui_diagnostics:
-        description: Log native UI frame and input queue timings on Windows
-        type: boolean
-        default: false
+        default: windows
+      scenarios:
+        description: Accepted for compatibility; replay uses kitchen-native-ui
+        type: string
+        default: kitchen-native-ui
+      source_run:
+        description: Run containing the saved source smoke screenshots
+        type: string
+        default: '41794831289'
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  smoke:
-    env:
-      SMOKE_SCENARIOS: ${{ inputs.scenarios || 'all' }}
+  replay:
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        # Windows ARM uses x64 Python for pywinpty; Hutch and apps stay ARM64.
-        # Intel desktop validation uses macOS 15 because stock Cocoa fullscreen
-        # also fails on the hosted macOS 26 Intel image (IconServices).
-        # Related runner graphics issue:
-        # https://github.com/actions/runner-images/issues/14751
-        include: ${{ fromJSON(inputs.runners == 'macos-intel' && '[{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"}]' || inputs.runners == 'linux-arm64' && '[{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"}]' || inputs.runners == 'windows' && '[{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]' || inputs.runners == 'macos-linux' && '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"},{"runner":"ubuntu-24.04","platform":"linux-x64","python":"x64"},{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"}]' || inputs.runners == 'macos-windows' && '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"},{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]' || '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"},{"runner":"ubuntu-24.04","platform":"linux-x64","python":"x64"},{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"},{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]') }}
+        include:
+          - runner: windows-2025
+            platform: windows-x64
+          - runner: windows-11-arm
+            platform: windows-arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 240
+    env:
+      SOURCE_RUN: ${{ inputs.source_run }}
+      SOURCE_ARTIFACT: source-smoke-screenshots-${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-          submodules: recursive
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '24.22.1'
-      - name: Verify native macOS runner architecture
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          EXPECTED_ARCH: ${{ endsWith(matrix.platform, 'arm64') && 'arm64' || 'x64' }}
-        run: |
-          expected_machine=x86_64
-          if [[ "$EXPECTED_ARCH" == arm64 ]]; then expected_machine=arm64; fi
-          test "$(uname -m)" = "$expected_machine"
-          test "$(sysctl -in sysctl.proc_translated 2>/dev/null || true)" != 1
-          node -e 'if (process.arch !== process.env.EXPECTED_ARCH) throw new Error(`Expected native ${process.env.EXPECTED_ARCH} Node, got ${process.arch}`)'
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-          architecture: ${{ matrix.python }}
-      - name: Free disk space (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          echo "Disk space before cleanup:"
-          df -h /
-          # Remove large preinstalled software we don't need
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          echo "Disk space after cleanup:"
-          df -h /
-
-      - name: Free disk space (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          echo "Disk space before cleanup:"
-          df -h /
-          # Keep the selected Xcode, but remove the other full Xcode installs
-          # preloaded on GitHub's macOS image. Kitchen only needs the selected
-          # macOS SDK and its multiple signed bundles otherwise exhaust the
-          # runner disk while hdiutil creates the final image.
-          selected_xcode_root="$(cd "$(xcode-select -p)/../.." && pwd -P)"
-          case "$selected_xcode_root" in
-            /Applications/Xcode*.app) ;;
-            *)
-              echo "Refusing to remove Xcode installs: unexpected selected Xcode root: $selected_xcode_root" >&2
-              exit 1
-              ;;
-          esac
-          echo "Preserving selected Xcode: $selected_xcode_root"
-          for xcode_root in /Applications/Xcode_*.app; do
-            [[ -d "$xcode_root" && ! -L "$xcode_root" ]] || continue
-            resolved_xcode_root="$(cd "$xcode_root" && pwd -P)"
-            case "$resolved_xcode_root" in
-              /Applications/Xcode_*.app) ;;
-              *)
-                echo "Refusing to remove unexpected Xcode root: $resolved_xcode_root" >&2
-                exit 1
-                ;;
-            esac
-            if [[ "$resolved_xcode_root" != "$selected_xcode_root" ]]; then
-              echo "Removing unused Xcode: $resolved_xcode_root"
-              sudo rm -rf "$resolved_xcode_root"
-            fi
-          done
-          # Remove Xcode caches and simulators to free space.
-          rm -rf "$HOME/Library/Developer/Xcode/DerivedData" || true
-          rm -rf "$HOME/Library/Developer/Xcode/Archives" || true
-          rm -rf "$HOME/Library/Developer/Xcode/iOS DeviceSupport" || true
-          sudo rm -rf /Library/Developer/CoreSimulator/Caches || true
-          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes || true
-          # Clear common caches.
-          rm -rf "$HOME/Library/Caches" || true
-          rm -rf "$HOME/Library/Logs" || true
-          echo "Disk space after cleanup:"
-          df -h /
-
-      - name: Install Linux desktop tools
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libpipewire-0.3-dev build-essential cmake pkg-config libvulkan1 mesa-vulkan-drivers xvfb xauth openbox dbus-x11 xdotool scrot python3-tk tesseract-ocr
-      - name: Install macOS OCR
-        if: runner.os == 'macOS'
-        uses: ./.github/actions/install-macos-ocr
-      - name: Install Windows OCR
-        if: runner.os == 'Windows'
+          architecture: x64
+      - name: Install original Windows OCR toolchain
         shell: pwsh
         run: |
-          # Chocolatey can exit 0 after a feed timeout without installing the
-          # package, so retry until the binary itself runs.
           $tesseract = 'C:\Program Files\Tesseract-OCR\tesseract.exe'
           foreach ($attempt in 1..3) {
             choco install tesseract --yes --no-progress
@@ -145,131 +54,28 @@ jobs:
             Start-Sleep -Seconds (20 * $attempt)
           }
           "SMOKE_TESSERACT=$tesseract" >> $env:GITHUB_ENV
-      - name: Install desktop driver
-        run: python -m pip install -r scripts/desktop-smoke/requirements.txt
-      - name: Check desktop driver regressions
-        shell: bash
-        run: |
-          python scripts/desktop-smoke/test_desktop.py
-          python scripts/desktop-smoke/test_picker.py
-      - name: Prepare Windows desktop shell
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          # Windows ARM images can leave first-sign-in privacy setup covering
-          # all app windows and blocking Shell_NotifyIcon, even with Explorer
-          # running. Suppress that experience on this disposable CI machine.
-          # https://learn.microsoft.com/windows/client-management/mdm/policy-csp-privacy#disableprivacyexperience
-          foreach ($root in @('HKLM:', 'HKCU:')) {
-            $policy = "$root\SOFTWARE\Policies\Microsoft\Windows\OOBE"
-            New-Item -Path $policy -Force | Out-Null
-            New-ItemProperty -Path $policy -Name DisablePrivacyExperience -Value 1 -PropertyType DWord -Force | Out-Null
-          }
-          $runnerSession = (Get-Process -Id $PID).SessionId
-          $setupProcesses = Get-Process -Name UserOOBEBroker,CloudExperienceHostBroker,WWAHost -ErrorAction SilentlyContinue | Where-Object SessionId -eq $runnerSession
-          if ($setupProcesses) {
-            $setupProcesses | Stop-Process -Force
-            Start-Sleep -Seconds 3
-          }
-          # First-login setup can leave a Start menu flyout covering the apps.
-          Add-Type -AssemblyName System.Windows.Forms
-          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
-          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
-          Start-Sleep -Seconds 1
-          Add-Type @'
-          using System;
-          using System.Runtime.InteropServices;
-          public static class DesktopShell {
-            [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-            public static extern IntPtr FindWindow(string className, string title);
-          }
-          '@
-          Write-Host "Runner session: $((Get-Process -Id $PID).SessionId)"
-          if ([DesktopShell]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
-            Write-Host 'Starting Explorer for notification-area tests.'
-            Start-Process "$env:WINDIR\explorer.exe"
-          }
-          $deadline = (Get-Date).AddSeconds(30)
-          while ([DesktopShell]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
-            if ((Get-Date) -gt $deadline) {
-              throw 'Windows shell notification area is unavailable in the runner session.'
-            }
-            Start-Sleep -Milliseconds 500
-          }
-          Write-Host 'Windows shell notification area is ready.'
-
-      - uses: ./.github/actions/install-hutch
-        with:
-          channel: canary
-      - uses: ilammy/msvc-dev-cmd@v1
-        if: runner.os == 'Windows'
-        with:
-          arch: ${{ endsWith(matrix.platform, 'arm64') && 'arm64' || 'x64' }}
-      - name: Test Windows native input and frame scheduling
-        if: runner.os == 'Windows'
-        working-directory: package
-        # Run cheap real-SendInput and hidden/minimized-paint probes before
-        # compiling the devkit. No prebuilt native wrapper is needed here.
-        run: node scripts/test-windows-ui-native.js --frame-scheduling-desktop
-      - name: Build source devkit
-        working-directory: package
-        env:
-          ELECTROBUN_BUILD_ARCH: ${{ endsWith(matrix.platform, 'arm64') && 'arm64' || 'x64' }}
-        run: |
-          hutch run install
-          hutch build:dev
-      - name: Check native text bitmap (macOS)
-        if: runner.os == 'macOS'
-        working-directory: package
-        run: node scripts/run-bun-test.js src/sdks/main/__tests__/native-text-bitmap.test.ts
-      - name: Smoke source templates (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          XDG_SESSION_TYPE: x11
-          LIBGL_ALWAYS_SOFTWARE: '1'
-          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
-        run: |
-          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' bash -eo pipefail -c '
-            openbox > "$RUNNER_TEMP/openbox-smoke.log" 2>&1 &
-            mkdir -p "$RUNNER_TEMP/desktop-smoke-results"
-            python scripts/desktop-smoke/preflight.py "$RUNNER_TEMP/desktop-smoke-results" 2>&1 | tee "$RUNNER_TEMP/desktop-smoke-results/preflight.log"
-            node scripts/desktop-smoke/source-run.mjs "$RUNNER_TEMP/desktop-smoke-results"
-          '
-      - name: Smoke source templates (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/desktop-smoke-results"
-          python scripts/desktop-smoke/preflight.py "$RUNNER_TEMP/desktop-smoke-results" 2>&1 | tee "$RUNNER_TEMP/desktop-smoke-results/preflight.log"
-          node scripts/desktop-smoke/source-run.mjs "$RUNNER_TEMP/desktop-smoke-results"
-      - name: Smoke source templates (Windows)
-        if: runner.os == 'Windows'
+          python -m pip install Pillow==11.3.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Download original saved screenshots
         shell: pwsh
         env:
-          SMOKE_NATIVE_UI_DIAGNOSTICS: ${{ inputs.native_ui_diagnostics }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if ($env:SMOKE_NATIVE_UI_DIAGNOSTICS -eq 'true') { $env:EBUI_HOST_DEBUG = '1' }
-          $output = Join-Path $env:RUNNER_TEMP 'desktop-smoke-results'
-          New-Item -ItemType Directory -Force -Path $output | Out-Null
-          python scripts/desktop-smoke/preflight.py "$output" 2>&1 | Tee-Object -FilePath "$output/preflight.log"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/desktop-smoke/source-run.mjs "$output"
+          $source = Join-Path $env:RUNNER_TEMP 'ocr-source'
+          gh run download $env:SOURCE_RUN --repo $env:GITHUB_REPOSITORY --name $env:SOURCE_ARTIFACT --dir $source
           exit $LASTEXITCODE
-      - name: Upload screenshots and logs
+      - name: Replay complete negative OCR within original budget
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:RUNNER_TEMP 'ocr-source'
+          $output = Join-Path $env:RUNNER_TEMP 'ocr-replay'
+          python scripts/desktop-smoke/replay_ocr.py $source $output
+          exit $LASTEXITCODE
+      - name: Upload saved-frame OCR timings
         if: always()
-        id: artifact
         uses: actions/upload-artifact@v6
         with:
-          name: source-smoke-screenshots-${{ matrix.platform }}
-          retention-days: 30
+          name: saved-ocr-replay-${{ matrix.platform }}
+          path: ${{ runner.temp }}/ocr-replay/**
           if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/desktop-smoke-results/**
-            !${{ runner.temp }}/desktop-smoke-results/scratch-*/**
-      - name: Link screenshot artifact
-        if: always() && steps.artifact.outputs.artifact-url != ''
-        shell: bash
-        env:
-          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
-        run: echo "[Download screenshots and logs]($ARTIFACT_URL)" >> "$GITHUB_STEP_SUMMARY"
+          retention-days: 14
