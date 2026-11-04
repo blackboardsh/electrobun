@@ -9,6 +9,10 @@ on:
         required: true
   workflow_dispatch:
     inputs:
+      linux_updater_only:
+        description: Run only the Linux x64 install/update/uninstall lifecycle and native updater tests
+        type: boolean
+        default: false
       macos_intel_only:
         description: Run only native Intel macOS when verifying a platform-specific fix
         type: boolean
@@ -43,7 +47,7 @@ jobs:
         # also fails on the hosted macOS 26 Intel image (IconServices).
         # Related runner graphics issue:
         # https://github.com/actions/runner-images/issues/14751
-        include: ${{ fromJSON(inputs.macos_intel_only && '[{"runner":"macos-15-intel","arch":"x64"}]' || inputs.windows_arm_only && '[{"runner":"windows-11-arm","arch":"arm64"}]' || '[{"runner":"macos-14","arch":"arm64"},{"runner":"macos-15-intel","arch":"x64"},{"runner":"ubuntu-24.04","arch":"x64"},{"runner":"ubuntu-24.04-arm","arch":"arm64"},{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]') }}
+        include: ${{ fromJSON(inputs.macos_intel_only && '[{"runner":"macos-15-intel","arch":"x64"}]' || inputs.windows_arm_only && '[{"runner":"windows-11-arm","arch":"arm64"}]' || inputs.linux_updater_only && '[{"runner":"ubuntu-24.04","arch":"x64"}]' || '[{"runner":"macos-14","arch":"arm64"},{"runner":"macos-15-intel","arch":"x64"},{"runner":"ubuntu-24.04","arch":"x64"},{"runner":"ubuntu-24.04-arm","arch":"arm64"},{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 330
     env:
@@ -176,20 +180,27 @@ jobs:
         working-directory: package
         run: hutch run install
 
-      - name: Run full VM suite (Linux desktop)
+      - name: Run Linux desktop tests
         timeout-minutes: 300
         if: runner.os == 'Linux'
         working-directory: package
         shell: bash
         env:
           # Match the release template acceptance environment on virtual displays.
+          UPDATER_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_updater_only }}
           LIBGL_ALWAYS_SOFTWARE: '1'
           WEBKIT_DISABLE_DMABUF_RENDERER: '1'
         run: |
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' bash -e -c '
             openbox > "$RUNNER_TEMP/openbox.log" 2>&1 &
             vulkaninfo --summary
-            hutch test:vm
+            if [[ "$UPDATER_ONLY" == true ]]; then
+              hutch test:updater-lifecycle
+              cd src/extractor
+              ../../vendors/zig/zig build test
+            else
+              hutch test:vm
+            fi
           '
 
       - name: Prepare Windows desktop shell
@@ -326,6 +337,7 @@ jobs:
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-core-sync-*/**
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-kitchen-hang-*/**
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/updater-lifecycle-e2e-*/signals/**
+            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/updater-lifecycle-e2e-diagnostics-*/**
             ${{ runner.temp }}/electrobun-macos-crash-reports/**
             ${{ runner.temp }}/openbox.log
             kitchen/test-results/**

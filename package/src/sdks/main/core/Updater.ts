@@ -2178,12 +2178,13 @@ export async function withNativePreparationHelper(
 	}
 }
 
-async function executeNativePreparation(helper: string, args: readonly string[]): Promise<void> {
+export async function executeNativePreparation(helper: string, args: readonly string[]): Promise<void> {
 	const child = Bun.spawn([helper, ...args], {
 		stdio: ["ignore", "ignore", "pipe"],
 	});
 	// Drain concurrently so diagnostics cannot block the helper. Keep a bounded
-	// tail for failures rather than retaining download/extraction logs in RAM.
+	// tail rather than retaining download/extraction logs in RAM. A successful
+	// full fallback can still contain the reason its delta preparation failed.
 	const diagnostics = (async () => {
 		const reader = child.stderr.getReader();
 		const decoder = new TextDecoder();
@@ -2203,6 +2204,7 @@ async function executeNativePreparation(helper: string, args: readonly string[])
 	if (exitCode !== 0) {
 		throw new Error(`Native update preparation failed (${exitCode})${message ? `: ${message}` : ""}`);
 	}
+	if (message) console.warn(`[Updater] Native preparation diagnostics: ${message}`);
 }
 
 /** Stage the release without ever persisting a complete uncompressed tar. */

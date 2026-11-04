@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
 	existsSync,
 	mkdirSync,
@@ -16,6 +16,7 @@ import { ARCH, OS } from "../../../shared/platform";
 import {
 	Updater,
 	createNativeUpdatePlan,
+	executeNativePreparation,
 	prepareNativeUpdate,
 	resolveInstalledChannelRootForPlatform,
 	validatePreparedUpdate,
@@ -100,6 +101,34 @@ function fixture() {
 }
 
 describe("native streamed update preparation", () => {
+	test("reports successful fallback diagnostics with a bounded tail", async () => {
+		const warning = spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const reason = "Delta preparation unavailable (CorruptPatch); streaming the full update.";
+			await executeNativePreparation(process.execPath, ["-e", `process.stderr.write("x".repeat(20000) + ${JSON.stringify(reason)})`]);
+			expect(warning).toHaveBeenCalledTimes(1);
+			expect(warning.mock.calls[0]).toEqual([
+				`[Updater] Native preparation diagnostics: ${"x".repeat(8192 - reason.length)}${reason}`,
+			]);
+		} finally {
+			warning.mockRestore();
+		}
+	});
+
+	test("keeps quiet successful preparation quiet and retains failure diagnostics", async () => {
+		const warning = spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			await executeNativePreparation(process.execPath, ["-e", "process.exit(0)"]);
+			expect(warning).not.toHaveBeenCalled();
+			await expect(executeNativePreparation(process.execPath, ["-e", "process.stderr.write('ArchiveHashMismatch'); process.exitCode = 2"])).rejects.toThrow(
+				"Native update preparation failed (2): ArchiveHashMismatch",
+			);
+			expect(warning).not.toHaveBeenCalled();
+		} finally {
+			warning.mockRestore();
+		}
+	});
+
 	test("hands exact archive integrity to the bundled helper and accepts a staged result without a tar", async () => {
 		const f = fixture();
 		let executedHelper = "";

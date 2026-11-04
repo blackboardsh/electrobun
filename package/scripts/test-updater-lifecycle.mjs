@@ -1725,12 +1725,32 @@ try {
 	failure = error;
 	await logWindowsUpdateDiagnostics("Failure before cleanup");
 	console.error(`[updater-e2e] FAIL: ${error.stack || error}`);
-	// Cleanup removes the fixture tree. Preserve its small event/sentinel files
-	// separately so CI can explain a relaunch failure after uninstalling it.
+	console.error(`[updater-e2e] Artifact requests:\n${JSON.stringify(requests, null, 2)}`);
+	// Cleanup removes the fixture tree. Preserve bounded diagnostics separately
+	// so CI can explain a preparation or relaunch failure after uninstalling it.
 	if (existsSync(signalDirectory)) {
 		try {
 			const diagnosticsRoot = mkdtempSync(join(temporaryBase, "updater-lifecycle-e2e-diagnostics-"));
 			cpSync(signalDirectory, join(diagnosticsRoot, "signals"), { recursive: true });
+			writeFileSync(join(diagnosticsRoot, "artifact-requests.json"), `${JSON.stringify(requests, null, 2)}\n`);
+			const artifactSources = pathExists(releaseRoot)
+				? readdirSync(releaseRoot).map((label) => [join(releaseRoot, label), `releases/${label}`])
+				: [];
+			artifactSources.push([join(channelRoot, "self-extraction"), "self-extraction"]);
+			let remainingDiagnosticBytes = 64 * 1024 * 1024;
+			for (const [source, label] of artifactSources) {
+				if (!pathExists(source)) continue;
+				for (const name of readdirSync(source)) {
+					if (!name.endsWith(".patch") && !name.endsWith(".json")) continue;
+					const path = join(source, name);
+					const stat = lstatSync(path);
+					if (!stat.isFile() || stat.size > remainingDiagnosticBytes) continue;
+					const destination = join(diagnosticsRoot, label);
+					mkdirSync(destination, { recursive: true });
+					copyFileSync(path, join(destination, name));
+					remainingDiagnosticBytes -= stat.size;
+				}
+			}
 			// Keep the native manager's result before uninstall removes the app.
 			for (const path of resultFiles()) {
 				copyFileSync(path, join(diagnosticsRoot, "signals", basename(path)));
