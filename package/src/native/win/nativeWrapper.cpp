@@ -3258,8 +3258,23 @@ public:
 
 
 
-static bool uiHostDebug();
-static double uiMonotonicSeconds();
+// EBUI_HOST_DEBUG=1 logs the view's keyboard/IME messages to stderr.
+static bool uiHostDebug() {
+    static const bool on = getenv("EBUI_HOST_DEBUG") != nullptr;
+    return on;
+}
+
+static double uiMonotonicSeconds() {
+    static const LARGE_INTEGER freq = [] {
+        LARGE_INTEGER value = {};
+        QueryPerformanceFrequency(&value);
+        return value;
+    }();
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+    return (double)counter.QuadPart / (double)freq.QuadPart;
+}
+
 
 // Opt-in diagnostics separate time waiting for the native message loop from
 // time spent executing a synchronous UI operation on that loop.
@@ -9281,23 +9296,6 @@ ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
 // the main thread. Everything here runs on the main thread unless noted.
 
 static const wchar_t* kUIViewProp = L"ElectrobunUIView";
-
-// EBUI_HOST_DEBUG=1 logs the view's keyboard/IME messages to stderr.
-static bool uiHostDebug() {
-    static const bool on = getenv("EBUI_HOST_DEBUG") != nullptr;
-    return on;
-}
-
-static double uiMonotonicSeconds() {
-    static const LARGE_INTEGER freq = [] {
-        LARGE_INTEGER value = {};
-        QueryPerformanceFrequency(&value);
-        return value;
-    }();
-    LARGE_INTEGER counter;
-    QueryPerformanceCounter(&counter);
-    return (double)counter.QuadPart / (double)freq.QuadPart;
-}
 
 // The retained WGPU view for an id; main thread (views are removed there).
 static WGPUView* uiViewById(uint32_t webviewId) {
