@@ -77,6 +77,7 @@
 #include "../shared/windows_profile_paths.h"
 #include "../shared/windows_resource_paths.h"
 #include "../shared/windows_dpi.h"
+#include "../shared/windows_ui_frame_schedule.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
 #include "../shared/webview2_permissions.h"
@@ -3273,6 +3274,16 @@ static double uiMonotonicSeconds() {
     LARGE_INTEGER counter;
     QueryPerformanceCounter(&counter);
     return (double)counter.QuadPart / (double)freq.QuadPart;
+}
+
+static void uiLogInputDispatch(const MSG& message) {
+    if (!uiHostDebug() ||
+        !((message.message >= WM_MOUSEFIRST && message.message <= WM_MOUSELAST) ||
+          (message.message >= WM_KEYFIRST && message.message <= WM_KEYLAST))) return;
+    // MSG.time and GetTickCount share the wrapping 32-bit system clock.
+    const DWORD queuedMs = GetTickCount() - message.time;
+    fprintf(stderr, "[ebui host] input msg=0x%04x queue=%lu ms time=%lu thread=%lu\n",
+            message.message, queuedMs, message.time, GetCurrentThreadId());
 }
 
 
@@ -8907,6 +8918,7 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
             // Standard Windows message loop
             MSG msg;
             while (GetMessageW(&msg, NULL, 0, 0)) {
+                uiLogInputDispatch(msg);
                 if (g_hAccelTable && TranslateAcceleratorW(msg.hwnd, g_hAccelTable, &msg)) {
                     continue;
                 }
@@ -8942,6 +8954,7 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
             // Fall back to Windows message loop if CEF init fails
             MSG msg;
             while (GetMessageW(&msg, NULL, 0, 0)) {
+                uiLogInputDispatch(msg);
                 // Check for menu accelerators first
                 if (g_hAccelTable && TranslateAcceleratorW(msg.hwnd, g_hAccelTable, &msg)) {
                     continue;
@@ -8955,6 +8968,7 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
         // Use Windows message loop if CEF is not available
         MSG msg;
         while (GetMessageW(&msg, NULL, 0, 0)) {
+            uiLogInputDispatch(msg);
             // Check for menu accelerators first
             if (g_hAccelTable && TranslateAcceleratorW(msg.hwnd, g_hAccelTable, &msg)) {
                 continue;
@@ -9292,8 +9306,9 @@ ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
 // A UI view is a WGPUView whose child HWND is subclassed while the UI core's
 // handlers are installed: pointer, keyboard, IMM32 composition, cursor and
 // focus messages go to the handlers, and frames are paced by a helper thread
-// that waits for DWM composition (DwmFlush) and posts the frame callback to
-// the main thread. Everything here runs on the main thread unless noted.
+// that waits for DWM composition (DwmFlush) and requests an internal paint.
+// Windows services native input before the actual frame's WM_PAINT work.
+// Everything here runs on the main thread unless noted.
 
 static const wchar_t* kUIViewProp = L"ElectrobunUIView";
 
@@ -9332,18 +9347,33 @@ static std::string uiUtf8(const std::wstring& s) {
 // ---- frames ----
 //
 // wgpuViewRequestFrame marks the view; the pacing thread waits for the next
-// DWM composition and posts one frame per marked view. A view with a frame
-// posted but not yet run is not posted again (requests made meanwhile, or
-// from inside the frame, get the next vsync), so frames never stack up or
-// run re-entrantly.
-
-struct UIFrameState {
-    bool requested = false;
-    bool inFlight = false;
-};
+// DWM composition and posts one short paint request per marked view. Heavy
+// rendering runs from OS-generated WM_PAINT, below real mouse/keyboard input
+// in Windows' queue ordering. Keeping the flight through actual painting
+// prevents an animation from continually posting work ahead of input.
 static std::mutex g_uiFrameMutex;
 static std::condition_variable g_uiFrameCv;
-static std::map<uint32_t, UIFrameState> g_uiFrames;
+static std::map<uint32_t, electrobun::UIFrameSchedule> g_uiFrames;
+static uint64_t g_uiNextFrameFlight = 1;
+
+static void uiRetireFrameSchedule(uint32_t id) {
+    {
+        std::lock_guard<std::mutex> lock(g_uiFrameMutex);
+        g_uiFrames.erase(id);
+    }
+    g_uiFrameCv.notify_one();
+}
+
+// An old wakeup must not cancel a newly attached UI on the same WGPU view.
+static void uiRetireFrameFlight(uint32_t id, uint64_t flight) {
+    {
+        std::lock_guard<std::mutex> lock(g_uiFrameMutex);
+        auto it = g_uiFrames.find(id);
+        if (it == g_uiFrames.end() || !it->second.cancel(flight)) return;
+        g_uiFrames.erase(it);
+    }
+    g_uiFrameCv.notify_one();
+}
 
 static double uiRefreshInterval() {
     DEVMODEW mode = {};
@@ -9374,7 +9404,7 @@ static void uiFrameThread() {
             std::unique_lock<std::mutex> lock(g_uiFrameMutex);
             g_uiFrameCv.wait(lock, [] {
                 for (auto& [id, state] : g_uiFrames) {
-                    if (state.requested && !state.inFlight) return true;
+                    if (state.ready()) return true;
                 }
                 return false;
             });
@@ -9387,26 +9417,37 @@ static void uiFrameThread() {
             if (wait > 0) Sleep((DWORD)std::ceil(wait * 1000.0));
         }
         lastTick = uiMonotonicSeconds();
-        std::vector<uint32_t> ids;
+        std::vector<std::pair<uint32_t, uint64_t>> frames;
         {
             std::lock_guard<std::mutex> lock(g_uiFrameMutex);
             for (auto& [id, state] : g_uiFrames) {
-                if (state.requested && !state.inFlight) {
-                    state.requested = false;
-                    state.inFlight = true;
-                    ids.push_back(id);
-                }
+                if (!state.ready()) continue;
+                const uint64_t flight = g_uiNextFrameFlight++;
+                if (g_uiNextFrameFlight == 0) ++g_uiNextFrameFlight;
+                if (state.queue(flight)) frames.emplace_back(id, flight);
             }
         }
-        if (ids.empty() || !MainThreadDispatcher::message_window()) continue;
-        MainThreadDispatcher::dispatch_async([ids]() {
-            for (uint32_t id : ids) {
+        if (frames.empty()) continue;
+        if (!MainThreadDispatcher::message_window()) {
+            for (auto [id, flight] : frames) uiRetireFrameFlight(id, flight);
+            continue;
+        }
+        MainThreadDispatcher::dispatch_async([frames]() {
+            for (auto [id, flight] : frames) {
+                WGPUView* view = uiViewById(id);
+                if (!view || !view->hwnd || !IsWindow(view->hwnd) ||
+                    !view->ui.installed || !uiHandlersOf(view).frame) {
+                    uiRetireFrameFlight(id, flight);
+                    continue;
+                }
                 {
                     std::lock_guard<std::mutex> lock(g_uiFrameMutex);
                     auto it = g_uiFrames.find(id);
-                    if (it != g_uiFrames.end()) it->second.inFlight = false;
+                    if (it == g_uiFrames.end() || !it->second.acceptWake(flight)) continue;
                 }
-                if (WGPUView* view = uiViewById(id)) uiRunFrame(view);
+                if (!electrobun::requestLowPriorityUIFrame(view->hwnd)) {
+                    uiRetireFrameFlight(id, flight);
+                }
             }
         });
     }
@@ -9418,7 +9459,34 @@ static void uiScheduleFrame(uint32_t webviewId) {
     std::call_once(started, [] { std::thread(uiFrameThread).detach(); });
     {
         std::lock_guard<std::mutex> lock(g_uiFrameMutex);
-        g_uiFrames[webviewId].requested = true;
+        g_uiFrames[webviewId].request();
+    }
+    g_uiFrameCv.notify_one();
+}
+
+static void uiPaintFrame(WGPUView* view) {
+    const uint32_t id = view->webviewId;
+    uint64_t flight = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_uiFrameMutex);
+        if (view->ui.inFrame) {
+            // A native nested message loop may consume a paint while a GPU
+            // frame is active. Preserve the request instead of losing it.
+            g_uiFrames[id].deferPaint();
+        } else {
+            auto it = g_uiFrames.find(id);
+            if (it != g_uiFrames.end()) flight = it->second.beginPaint();
+        }
+    }
+    if (view->ui.inFrame) {
+        g_uiFrameCv.notify_one();
+        return;
+    }
+    uiRunFrame(view);
+    if (flight != 0) {
+        std::lock_guard<std::mutex> lock(g_uiFrameMutex);
+        auto it = g_uiFrames.find(id);
+        if (it != g_uiFrames.end()) it->second.finishPaint(flight);
     }
     g_uiFrameCv.notify_one();
 }
@@ -10469,7 +10537,7 @@ static LRESULT CALLBACK uiViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         return 1;
     case WM_PAINT: {
         ValidateRect(hwnd, nullptr);
-        uiScheduleFrame(view->webviewId);
+        uiPaintFrame(view);
         return 0;
     }
     case WM_SIZE:
@@ -10619,7 +10687,10 @@ static void uiInstallInput(WGPUView* view) {
 }
 
 static void uiUninstallInput(WGPUView* view) {
-    if (!view->ui.installed) return;
+    if (!view->ui.installed) {
+        uiRetireFrameSchedule(view->webviewId);
+        return;
+    }
     uiCompleteComposition(view);
     if (view->hwnd) {
         if (GetCapture() == view->hwnd) ReleaseCapture();
@@ -10630,6 +10701,9 @@ static void uiUninstallInput(WGPUView* view) {
     view->ui.originalProc = nullptr;
     view->ui.pointerInside = false;
     view->ui.highSurrogate = 0;
+    // Retire after composition teardown, whose callbacks can request a frame.
+    // The WGPU view may stay alive and accept a fresh UI attachment later.
+    uiRetireFrameSchedule(view->webviewId);
 }
 
 ELECTROBUN_EXPORT void wgpuViewCompositionRelease(AbstractView* abstractView);
@@ -10650,8 +10724,6 @@ static void uiHostViewRemoved(WGPUView* view) {
     wgpuViewCompositionRelease(view);
     uiA11yDisconnect(view->webviewId);
     uiUninstallInput(view);
-    std::lock_guard<std::mutex> lock(g_uiFrameMutex);
-    g_uiFrames.erase(view->webviewId);
 }
 
 // Synthetic UI input enters the event thread before taking the UI core lock:

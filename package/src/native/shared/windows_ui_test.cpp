@@ -19,6 +19,9 @@
 
 #ifdef _WIN32
 
+void runWindowsUIFrameScheduleTests();
+void runWindowsUIFrameScheduleDesktopTests();
+
 static LRESULT CALLBACK testWindowProc(
     HWND hwnd,
     UINT message,
@@ -124,6 +127,18 @@ static void testQueuedViewLifetime() {
 }
 
 int main(int argc, char** argv) {
+    const char* nativeWrapperPath = nullptr;
+    bool frameSchedulingDesktop = false;
+    for (int index = 1; index < argc; ++index) {
+        if (std::string(argv[index]) == "--frame-scheduling-desktop") {
+            frameSchedulingDesktop = true;
+        } else {
+            assert(!nativeWrapperPath && "Unexpected Windows UI test argument");
+            nativeWrapperPath = argv[index];
+        }
+    }
+    runWindowsUIFrameScheduleTests();
+    if (frameSchedulingDesktop) runWindowsUIFrameScheduleDesktopTests();
     testQueuedViewLifetime();
     const std::string mixedUtf8 =
         "Bulgarian: \xD0\x91\xD1\x8A\xD0\xBB\xD0\xB3\xD0\xB0\xD1\x80\xD1\x81\xD0\xBA\xD0\xB8; "
@@ -390,9 +405,9 @@ int main(int argc, char** argv) {
         std::wstring(1, static_cast<wchar_t>(0xD800)), invalidWideOutput));
     assert(invalidWideOutput.empty());
 
-    if (argc == 2) {
+    if (nativeWrapperPath) {
         std::wstring dllPath;
-        assert(electrobun::utf8ToWide(argv[1], dllPath));
+        assert(electrobun::utf8ToWide(nativeWrapperPath, dllPath));
         HMODULE module = LoadLibraryW(dllPath.c_str());
         if (!module) {
             std::fprintf(stderr, "LoadLibraryW failed: %lu\n", GetLastError());
