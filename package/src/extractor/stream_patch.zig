@@ -323,7 +323,10 @@ fn inspectFrame(io: Io, file: Io.File, offset: u64, length: u64) !FrameInfo {
 
 const Block = struct {
     source_buffer: [16 * 1024]u8,
-    limit_buffer: [512]u8,
+    // The pinned stdlib Zstd decoder's updateFseTable peeks up to 2048
+    // contiguous input bytes. A smaller buffer rejects valid compressed tables
+    // depending on patch contents, even when the output window is sufficient.
+    limit_buffer: [2048]u8,
     source: Io.File.Reader,
     limited: Io.Reader.Limited,
     decoder: zstd.Decompress,
@@ -350,7 +353,7 @@ const Block = struct {
     }
 
     fn read(self: *Block, bytes: []u8) !usize {
-        const count = self.decoder.reader.readSliceShort(bytes) catch return error.CorruptPatch;
+        const count = self.decoder.reader.readSliceShort(bytes) catch return self.decoder.err orelse error.CorruptPatch;
         self.hasher.update(bytes[0..count]);
         return count;
     }
@@ -593,6 +596,21 @@ test "stream patch is compatible with compressed output from zig-bsdiff 0.1.26" 
     try std.testing.expectEqualStrings(insertion, output[65536..][0..insertion.len]);
     for (old[0..65536], output[65536 + insertion.len ..]) |before, after|
         try std.testing.expectEqual(before ^ 4, after);
+}
+
+test "stream patch accepts a real compressed FSE table requiring more than 512 input bytes" {
+    const allocator = std.testing.allocator;
+    // The published producer turns 64 KiB of zeros into 300 sparse edits.
+    // Unlike RLE/predefined tables, this valid compressed diff frame requires
+    // the decoder to peek up to 2048 contiguous input bytes while parsing FSE.
+    const bytes = @embedFile("testdata/patch-fse-table.patch");
+    const old: [65536]u8 = @splat(0);
+    const output = try testApply(allocator, &old, bytes);
+    defer allocator.free(output);
+    try std.testing.expectEqual(old.len, output.len);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(output, &digest, .{});
+    try std.testing.expectEqualStrings("3dac171bc265ccd21d6bd9d0b0fc9551b246cf477b4d356abf7d08f619b22a28", &std.fmt.bytesToHex(digest, .lower));
 }
 
 test "stream patch consumes a large source and target within a fixed memory budget" {
