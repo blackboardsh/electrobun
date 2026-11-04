@@ -18,6 +18,10 @@ on:
         description: Comma-separated scenario IDs for focused source diagnostics, or all
         type: string
         default: all
+      native_ui_diagnostics:
+        description: Log native UI frame and input queue timings on Windows
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -201,6 +205,12 @@ jobs:
         if: runner.os == 'Windows'
         with:
           arch: ${{ endsWith(matrix.platform, 'arm64') && 'arm64' || 'x64' }}
+      - name: Test Windows native input and frame scheduling
+        if: runner.os == 'Windows'
+        working-directory: package
+        # Run cheap real-SendInput and hidden/minimized-paint probes before
+        # compiling the devkit. No prebuilt native wrapper is needed here.
+        run: node scripts/test-windows-ui-native.js --frame-scheduling-desktop
       - name: Build source devkit
         working-directory: package
         env:
@@ -236,7 +246,10 @@ jobs:
       - name: Smoke source templates (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          SMOKE_NATIVE_UI_DIAGNOSTICS: ${{ inputs.native_ui_diagnostics }}
         run: |
+          if ($env:SMOKE_NATIVE_UI_DIAGNOSTICS -eq 'true') { $env:EBUI_HOST_DEBUG = '1' }
           $output = Join-Path $env:RUNNER_TEMP 'desktop-smoke-results'
           New-Item -ItemType Directory -Force -Path $output | Out-Null
           python scripts/desktop-smoke/preflight.py "$output" 2>&1 | Tee-Object -FilePath "$output/preflight.log"

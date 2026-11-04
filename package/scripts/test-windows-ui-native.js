@@ -10,7 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { assertWindowsBinaryArchitecture } from "./windows-binary-architecture.mjs";
 import { msvcEnvironment } from "./windows-msvc-environment.mjs";
 
@@ -22,12 +22,20 @@ if (process.platform !== "win32") {
 const packageRoot = resolve(import.meta.dirname, "..");
 const compilerEnvironment = msvcEnvironment();
 const requireNativeWrapper = process.argv.includes("--require-native-wrapper");
+const frameSchedulingDesktop = process.argv.includes("--frame-scheduling-desktop");
 const source = join(
 	packageRoot,
 	"src",
 	"native",
 	"shared",
 	"windows_ui_test.cpp",
+);
+const frameScheduleSource = join(
+	packageRoot,
+	"src",
+	"native",
+	"shared",
+	"windows_ui_frame_schedule_test.cpp",
 );
 
 const temporaryRoot = realpathSync(tmpdir());
@@ -89,6 +97,7 @@ function resolveNativeWrapper() {
 			"windows_dialog_options.h",
 			"windows_dpi.h",
 			"windows_resource_paths.h",
+			"windows_ui_frame_schedule.h",
 			"windows_utf.h",
 		].map((name) => join(packageRoot, "src", "native", "shared", name)),
 	];
@@ -156,7 +165,8 @@ try {
 			"/D_UNICODE",
 			"/UNDEBUG",
 			source,
-			`/Fo${join(temporaryDirectory, "windows-ui-test.obj")}`,
+			frameScheduleSource,
+			`/Fo${temporaryDirectory}${sep}`,
 			`/Fe${binary}`,
 			"user32.lib",
 			"comctl32.lib",
@@ -177,6 +187,7 @@ try {
 	const nativeWrapper = resolveNativeWrapper();
 	if (nativeWrapper) assertWindowsBinaryArchitecture(nativeWrapper, process.arch);
 	const testArguments = nativeWrapper ? [nativeWrapper] : [];
+	if (frameSchedulingDesktop) testArguments.push("--frame-scheduling-desktop");
 	if (!nativeWrapper) {
 		if (requireNativeWrapper) {
 			throw new Error(
