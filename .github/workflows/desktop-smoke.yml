@@ -33,6 +33,10 @@ on:
         description: Comma-separated scenario IDs for diagnostics, or all
         type: string
         default: all
+      native_ui_diagnostics:
+        description: Log native UI lock, frame, and dispatch timing on Windows
+        type: boolean
+        default: false
       bunny_diagnostics:
         description: Trace the generated Bunny app on one selected Intel macOS or Windows x64 runner
         type: boolean
@@ -222,6 +226,13 @@ jobs:
           mkdir -p "$RUNNER_TEMP/desktop-smoke-results"
           python scripts/desktop-smoke/preflight.py "$RUNNER_TEMP/desktop-smoke-results" 2>&1 | tee "$RUNNER_TEMP/desktop-smoke-results/preflight.log"
           node scripts/desktop-smoke/run.mjs --version "$RELEASE_VERSION" --platform "$SMOKE_PLATFORM" --output "$RUNNER_TEMP/desktop-smoke-results" --scenarios "$SMOKE_SCENARIOS"
+      - name: Enable native UI timing diagnostics
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.native_ui_diagnostics
+        shell: pwsh
+        run: |
+          # The native flag is presence-based: even "0" enables it. Keep it
+          # absent from ordinary release runs by setting it only in this step.
+          "EBUI_HOST_DEBUG=1" >> $env:GITHUB_ENV
       - name: Smoke published templates (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
