@@ -1320,6 +1320,38 @@ test "c abi: commands, events, templates" {
     try std.testing.expectEqualStrings("bump", ev[5..9]);
 }
 
+test "c abi: range property and pointer events expose the painted value" {
+    const id = ebui_create_headless();
+    try std.testing.expect(id != 0);
+    defer ebui_destroy(id);
+    ebui_resize(id, 400, 300, 1);
+    const css = "body { margin: 0 } input { display: block; margin: 0; width: 200px; height: 16px }";
+    _ = ebui_add_stylesheet(id, css.ptr, css.len);
+    const slider = ebui_create_element(id, "input".ptr, 5);
+    ebui_set_attribute(id, slider, "type".ptr, 4, "range".ptr, 5);
+    ebui_insert_before(id, ebui_body(id), slider, 0);
+    ebui_bind_client_id(id, 42, slider);
+    ebui_set_value(id, slider, "25".ptr, 2);
+    _ = ebui_update(id, 0);
+    try std.testing.expect(ebui_listen(id, slider, @intFromEnum(events.EventType.input)));
+    try std.testing.expect(ebui_listen(id, slider, @intFromEnum(events.EventType.change)));
+    ebui_pointer(id, 1, 146, 8, 0, 0);
+    var length: usize = 0;
+    const value = ebui_get_value(id, slider, &length).?;
+    try std.testing.expectEqualStrings("75", value[0..length]);
+    var queue: [128]u8 = undefined;
+    const n = ebui_poll_events(id, &queue, queue.len);
+    try std.testing.expectEqual(@as(usize, 50), n);
+    try std.testing.expectEqual(@intFromEnum(events.EventType.input), queue[1]);
+    try std.testing.expectEqual(@as(u32, 42), std.mem.readInt(u32, queue[6..10], .little));
+    try std.testing.expectEqualStrings("75", queue[48..n]);
+    ebui_pointer(id, 2, 146, 8, 0, 0);
+    const n2 = ebui_poll_events(id, &queue, queue.len);
+    try std.testing.expectEqual(@as(usize, 50), n2);
+    try std.testing.expectEqual(@intFromEnum(events.EventType.change), queue[1]);
+    try std.testing.expectEqualStrings("75", queue[48..n2]);
+}
+
 test "c abi: watched rects are reported only when they change" {
     const id = ebui_create_headless();
     defer ebui_destroy(id);

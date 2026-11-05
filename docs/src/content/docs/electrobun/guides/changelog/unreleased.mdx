@@ -4,4 +4,14 @@ title: "Unreleased"
 
 Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
 
-No unreleased changes yet.
+## Native UI fixes
+
+- Range sliders now support clicking the track and dragging the thumb, including
+  dragging outside the control. Values respect `min`, `max`, and `step`, and
+  controlled values stay synchronized with the painted thumb and input events.
+
+## Validation
+
+- Hardened the Bunny desktop smoke test against neutral startup poses, ambiguous
+  tilt projections, and repainting behind transparent windows. It now verifies
+  the bunny's rotation and return to neutral within a bounded response deadline.

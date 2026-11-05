@@ -476,6 +476,160 @@ test "checkbox, label and typing" {
     try std.testing.expectEqual(t, ui.doc.focused);
 }
 
+test "range track clicks and captured drags update value and commit once" {
+    const ui = try testUi(
+        \\<style>body { margin: 0 } input { display: block; margin: 0; width: 200px; height: 16px }</style>
+        \\<input type="range" id="r" value="25">
+    );
+    defer ui.destroy();
+    const r = ui.doc.elementById("r");
+    var inputs = Counter{};
+    var changes = Counter{};
+    _ = try ui.ix.addListener(r, .input, Counter.cb, &inputs);
+    _ = try ui.ix.addListener(r, .change, Counter.cb, &changes);
+    ui.ix.pointerDown(146, 8, 0, .{});
+    try std.testing.expectEqualStrings("75", ui.ix.value(r));
+    try std.testing.expectEqual(r, ui.doc.focused);
+    try std.testing.expectEqual(@as(u32, 1), inputs.n);
+    try std.testing.expectEqual(@as(u32, 0), changes.n);
+    _ = try ui.update();
+    // Dragging away from the track keeps the original range captured.
+    ui.ix.pointerMove(250, 80, .{});
+    try std.testing.expectEqualStrings("100", ui.ix.value(r));
+    ui.ix.pointerMove(-50, 80, .{});
+    try std.testing.expectEqualStrings("0", ui.ix.value(r));
+    ui.ix.pointerUp(100, 80, 0, .{});
+    try std.testing.expectEqualStrings("50", ui.ix.value(r));
+    try std.testing.expectEqual(@as(u32, 4), inputs.n);
+    try std.testing.expectEqual(@as(u32, 1), changes.n);
+    ui.ix.pointerMove(190, 8, .{});
+    try std.testing.expectEqualStrings("50", ui.ix.value(r));
+    try std.testing.expectEqual(dom.null_id, ui.ix.drag_range);
+}
+
+test "range thumb grabs preserve offset and secondary clicks do not change it" {
+    const ui = try testUi(
+        \\<style>body { margin: 0 } input { display: block; margin: 0; width: 200px; height: 16px }</style>
+        \\<input type="range" id="r" value="50">
+    );
+    defer ui.destroy();
+    const r = ui.doc.elementById("r");
+    ui.ix.pointerDown(105, 8, 0, .{});
+    try std.testing.expectEqualStrings("50", ui.ix.value(r));
+    ui.ix.pointerMove(141, 8, .{});
+    try std.testing.expectEqualStrings("70", ui.ix.value(r));
+    ui.ix.pointerUp(141, 8, 0, .{});
+    ui.ix.pointerDown(10, 8, 2, .{});
+    ui.ix.pointerMove(50, 8, .{});
+    ui.ix.pointerUp(50, 8, 2, .{});
+    try std.testing.expectEqualStrings("70", ui.ix.value(r));
+}
+
+test "range controlled values share min max and step rules with painting" {
+    const ui = try testUi(
+        \\<style>body { margin: 0 } input { display: block; margin: 0; width: 200px; height: 16px }</style>
+        \\<input type="range" id="r" min="10" max="20" step="2" value="10">
+    );
+    defer ui.destroy();
+    const r = ui.doc.elementById("r");
+    try ui.ix.setValue(r, "15");
+    try std.testing.expectEqualStrings("16", ui.ix.value(r));
+    try std.testing.expectEqualStrings("16", ui.doc.node(r).getAttr(ui.doc.atoms.value).?);
+    try std.testing.expect(!ui.ix.edits.contains(r));
+    _ = try ui.update();
+    var thumb_found = false;
+    for (ui.dl.cmds.items) |cmd| switch (cmd) {
+        .rect => |rect| if (rect.rect.w == 16 and rect.rect.h == 16) {
+            try std.testing.expectApproxEqAbs(@as(f32, 110.4), rect.rect.x, 0.01);
+            thumb_found = true;
+        },
+        else => {},
+    };
+    try std.testing.expect(thumb_found);
+    ui.ix.pointerDown(190, 8, 0, .{});
+    ui.ix.pointerUp(190, 8, 0, .{});
+    try std.testing.expectEqualStrings("20", ui.ix.value(r));
+    try ui.doc.setAttribute(r, "step", "0.25");
+    try ui.ix.setValue(r, "12.37");
+    try std.testing.expectEqualStrings("12.25", ui.ix.value(r));
+    try ui.doc.setAttribute(r, "step", "any");
+    try ui.ix.setValue(r, "12.375");
+    try std.testing.expectEqualStrings("12.375", ui.ix.value(r));
+    try ui.ix.setValue(r, "1000");
+    try std.testing.expectEqualStrings("20", ui.ix.value(r));
+    try ui.ix.setValue(r, "nan");
+    try std.testing.expectEqualStrings("15", ui.ix.value(r));
+    try ui.doc.setAttribute(r, "max", "5");
+    try ui.ix.setValue(r, "15");
+    try std.testing.expectEqualStrings("10", ui.ix.value(r));
+}
+
+test "range disabled and prevented presses do not start a drag" {
+    const ui = try testUi(
+        \\<style>body { margin: 0 } input { display: block; margin: 0; width: 200px; height: 16px }</style>
+        \\<input type="range" id="r" value="25" disabled>
+    );
+    defer ui.destroy();
+    const r = ui.doc.elementById("r");
+    ui.ix.pointerDown(146, 8, 0, .{});
+    ui.ix.pointerMove(192, 8, .{});
+    ui.ix.pointerUp(192, 8, 0, .{});
+    try std.testing.expectEqualStrings("25", ui.ix.value(r));
+    try ui.doc.removeAttribute(r, "disabled");
+    const Prevent = struct {
+        fn cb(_: ?*anyopaque, ev: *events.Event) void {
+            ev.preventDefault();
+        }
+    };
+    _ = try ui.ix.addListener(r, .pointerdown, Prevent.cb, null);
+    ui.ix.pointerDown(146, 8, 0, .{});
+    ui.ix.pointerMove(192, 8, .{});
+    ui.ix.pointerUp(192, 8, 0, .{});
+    try std.testing.expectEqualStrings("25", ui.ix.value(r));
+    try std.testing.expectEqual(dom.null_id, ui.ix.drag_range);
+}
+
+test "range drag follows CSS transforms and ancestor scrolling" {
+    const ui = try testUi(
+        \\<style>body { margin: 0 } #s { position: relative; width: 400px; height: 120px; overflow: auto }
+        \\#content { height: 300px } input { position: absolute; left: 20px; top: 100px; display: block; margin: 0;
+        \\width: 200px; height: 16px; transform-origin: 0 0; transform: translateX(10px) scaleX(1.5) }</style>
+        \\<div id="s"><div id="content"><input type="range" id="r" value="25"></div></div>
+    );
+    defer ui.destroy();
+    const r = ui.doc.elementById("r");
+    const s = ui.doc.elementById("s");
+    _ = ui.ix.scrollBy(s, 0, 80);
+    _ = try ui.update();
+    try std.testing.expectEqual(r, ui.ix.hitTest(249, 28));
+    ui.ix.pointerDown(249, 28, 0, .{});
+    try std.testing.expectEqualStrings("75", ui.ix.value(r));
+    ui.ix.pointerMove(500, 200, .{});
+    try std.testing.expectEqualStrings("100", ui.ix.value(r));
+    ui.ix.pointerUp(500, 200, 0, .{});
+}
+
+test "range removal during input releases its captured drag" {
+    const ui = try testUi(
+        \\<style>body { margin: 0 } input { display: block; margin: 0; width: 200px; height: 16px }</style>
+        \\<input type="range" id="r" value="25">
+    );
+    defer ui.destroy();
+    const r = ui.doc.elementById("r");
+    const Remove = struct {
+        fn cb(ctx: ?*anyopaque, ev: *events.Event) void {
+            const owner: *Ui = @ptrCast(@alignCast(ctx.?));
+            owner.destroyNode(ev.target);
+        }
+    };
+    _ = try ui.ix.addListener(r, .input, Remove.cb, ui);
+    ui.ix.pointerDown(146, 8, 0, .{});
+    ui.ix.pointerMove(250, 80, .{});
+    ui.ix.pointerUp(250, 80, 0, .{});
+    try std.testing.expectEqual(dom.null_id, ui.ix.drag_range);
+    try std.testing.expect(ui.doc.get(r) == null);
+}
+
 test "wheel scrolls overflow containers" {
     const ui = try testUi(
         \\<style>body { margin: 0 } .s { height: 100px; overflow: auto } .c { height: 500px }</style>
@@ -620,7 +774,6 @@ test "select popup" {
     ui.ix.pointerUp(o[0] + 2, o[1] + 2, 0, .{});
     try std.testing.expectEqualStrings("a", ui.ix.value(sel));
 }
-
 
 test "nowrap shrink-to-fit boxes fit their text" {
     // spaces in nowrap text are not break opportunities, so they count

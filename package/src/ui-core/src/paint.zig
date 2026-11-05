@@ -10,6 +10,7 @@ const layout = @import("layout.zig");
 const inline_mod = @import("inline.zig");
 const font = @import("text/font.zig");
 const props = @import("css/properties.zig");
+const range_mod = @import("range.zig");
 
 const Allocator = std.mem.Allocator;
 const Document = dom.Document;
@@ -587,10 +588,7 @@ pub const Painter = struct {
                 return;
             }
             if (std.ascii.eqlIgnoreCase(t, "range")) {
-                const min = attrF(n, w.min) orelse 0;
-                const max = attrF(n, w.max) orelse 100;
-                const val = attrF(n, w.value) orelse (min + max) / 2;
-                const frac = std.math.clamp((val - min) / @max(0.0001, max - min), 0, 1);
+                const frac = range_mod.Range.fromNode(doc, it.node).fraction();
                 const track_h: f32 = 4;
                 const ty = content.y + (content.h - track_h) / 2;
                 try p.dl.push(.{ .rect = .{ .rect = .{ .x = content.x, .y = ty, .w = content.w, .h = track_h }, .radii = Corners.all(2), .color = Color.hex(0xd0d0d0) } });

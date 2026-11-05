@@ -8,6 +8,7 @@ const style_mod = @import("style.zig");
 const layout = @import("layout.zig");
 const paint = @import("paint.zig");
 const inline_mod = @import("inline.zig");
+const range_mod = @import("range.zig");
 const TextOffset = inline_mod.TextOffset;
 
 const Allocator = std.mem.Allocator;
@@ -194,6 +195,11 @@ pub const Interaction = struct {
     cursor: Cursor = .default,
     /// selecting text with the mouse in a text control
     drag_select: NodeId = null_id,
+    /// Range controls keep receiving a drag after the pointer leaves the track.
+    drag_range: NodeId = null_id,
+    range_start_value: f64 = 0,
+    range_drag_offset: f32 = 0,
+    range_value_buf: [128]u8 = undefined,
     keyboard_focus: bool = false,
     next_serial: u32 = 0,
     /// open <select> popup: the select, its listbox overlay and highlighted index
@@ -241,6 +247,7 @@ pub const Interaction = struct {
 
     /// Remove all listeners of a node (when it is destroyed).
     pub fn removeNodeListeners(ix: *Interaction, node: NodeId) void {
+        if (ix.drag_range == node) ix.drag_range = null_id;
         var i: usize = 0;
         while (i < ix.listeners.items.len) {
             if (ix.listeners.items[i].node == node) _ = ix.listeners.swapRemove(i) else i += 1;
@@ -304,6 +311,53 @@ pub const Interaction = struct {
         return ix.bodyOrRoot();
     }
 
+    fn isRange(ix: *Interaction, id: NodeId) bool {
+        return range_mod.isRange(ix.doc, id);
+    }
+
+    fn rangeOf(ix: *Interaction, id: NodeId) range_mod.Range {
+        return range_mod.Range.fromNode(ix.doc, id);
+    }
+
+    const RangeGeometry = struct { x: f32, start: f32, travel: f32, thumb: f32 };
+
+    fn rangeGeometry(ix: *Interaction, id: NodeId, x: f32, y: f32) ?RangeGeometry {
+        const n = ix.doc.get(id) orelse return null;
+        const box = layout.boxOfNode(n) orelse return null;
+        var i = ix.dl.hits.items.len;
+        while (i > 0) {
+            i -= 1;
+            const hit = ix.dl.hits.items[i];
+            if (hit.node != id) continue;
+            const content = hit.rect.inset(box.border.add(box.padding));
+            const thumb = @max(0, @min(16, content.h));
+            if (content.w <= thumb) return null;
+            return .{ .x = hit.inv.apply(.{ .x = x, .y = y }).x, .start = content.x + thumb / 2, .travel = content.w - thumb, .thumb = thumb };
+        }
+        return null;
+    }
+
+    fn writeRangeValue(ix: *Interaction, id: NodeId, value_in: f64) !bool {
+        const changed = ix.rangeOf(id).value != value_in;
+        var buf: [128]u8 = undefined;
+        const value_text = std.fmt.bufPrint(&buf, "{d}", .{value_in}) catch
+            try std.fmt.bufPrint(&buf, "{e}", .{value_in});
+        if (std.mem.eql(u8, ix.doc.node(id).getAttr(ix.doc.atoms.value) orelse "", value_text)) return false;
+        try ix.doc.setAttribute(id, "value", value_text);
+        ix.requestFrame();
+        return changed;
+    }
+
+    fn moveRange(ix: *Interaction, id: NodeId, x: f32, y: f32) void {
+        if (!ix.isRange(id) or ix.doc.node(id).hasAttr(ix.doc.atoms.disabled)) {
+            ix.drag_range = null_id;
+            return;
+        }
+        const g = ix.rangeGeometry(id, x, y) orelse return;
+        const value_in = ix.rangeOf(id).atFraction((g.x - g.start - ix.range_drag_offset) / g.travel);
+        if (ix.writeRangeValue(id, value_in) catch false) _ = ix.fire(.input, id);
+    }
+
     fn bodyOrRoot(ix: *Interaction) NodeId {
         const root = ix.doc.documentElement();
         if (root == null_id) return null_id;
@@ -354,7 +408,10 @@ pub const Interaction = struct {
             }
         }
         var ev = Event{ .type = .pointermove, .target = target, .x = x, .y = y, .buttons = ix.buttons, .mods = mods };
-        _ = ix.dispatch(&ev);
+        const proceed = ix.dispatch(&ev);
+        if (proceed and ix.drag_range != null_id and ix.buttons & 1 != 0) {
+            ix.moveRange(ix.drag_range, x, y);
+        }
         ix.updateCursor(target);
     }
 
@@ -458,8 +515,18 @@ pub const Interaction = struct {
             const focus_target = ix.focusableAncestor(target);
             ix.keyboard_focus = false;
             if (focus_target != null_id) ix.focus(focus_target, false) else ix.blur();
+            if (ix.isRange(focus_target) and !ix.doc.node(focus_target).hasAttr(ix.doc.atoms.disabled)) {
+                const range = ix.rangeOf(focus_target);
+                if (ix.rangeGeometry(focus_target, x, y)) |g| {
+                    ix.drag_range = focus_target;
+                    ix.range_start_value = range.value;
+                    const center = g.start + g.travel * range.fraction();
+                    ix.range_drag_offset = if (@abs(g.x - center) <= g.thumb / 2) g.x - center else 0;
+                    ix.moveRange(focus_target, x, y);
+                }
+            }
             // caret placement / selection start in text controls
-            if (focus_target != null_id and layout.isTextInput(ix.doc, focus_target)) {
+            if (focus_target != null_id and ix.doc.get(focus_target) != null and layout.isTextInput(ix.doc, focus_target)) {
                 if (ix.editState(focus_target)) |e| {
                     if (ix.offsetAtPoint(focus_target, x, y)) |off| {
                         e.caret = off;
@@ -485,11 +552,19 @@ pub const Interaction = struct {
         ix.doc.active = null_id;
         ix.down_target = null_id;
         ix.drag_select = null_id;
+        ix.drag_range = null_id;
     }
 
     pub fn pointerUp(ix: *Interaction, x: f32, y: f32, button: u8, mods: Modifiers) void {
         ix.pointer_x = x;
         ix.pointer_y = y;
+        if (button == 0 and ix.drag_range != null_id) {
+            const range = ix.drag_range;
+            ix.moveRange(range, x, y);
+            ix.drag_range = null_id;
+            if (ix.isRange(range) and !ix.doc.node(range).hasAttr(ix.doc.atoms.disabled) and
+                ix.rangeOf(range).value != ix.range_start_value) _ = ix.fire(.change, range);
+        }
         ix.buttons &= ~(@as(u8, 1) << @intCast(@min(button, 7)));
         const target = ix.hitTest(x, y);
         var ev = Event{ .type = .pointerup, .target = target, .x = x, .y = y, .button = button, .buttons = ix.buttons, .mods = mods };
@@ -1032,6 +1107,8 @@ pub const Interaction = struct {
 
     /// Current value of a text control.
     pub fn value(ix: *Interaction, id: NodeId) []const u8 {
+        if (ix.isRange(id)) return std.fmt.bufPrint(&ix.range_value_buf, "{d}", .{ix.rangeOf(id).value}) catch
+            (std.fmt.bufPrint(&ix.range_value_buf, "{e}", .{ix.rangeOf(id).value}) catch "");
         if (ix.edits.get(id)) |e| return e.text.items;
         const doc = ix.doc;
         if (doc.node(id).tag == doc.atoms.select) {
@@ -1171,6 +1248,11 @@ pub const Interaction = struct {
     }
 
     pub fn setValue(ix: *Interaction, id: NodeId, v: []const u8) !void {
+        if (ix.isRange(id)) {
+            const range = ix.rangeOf(id);
+            _ = try ix.writeRangeValue(id, range.sanitize(range_mod.number(v) orelse range.midpoint()));
+            return;
+        }
         const e = try ix.editState(id);
         if (std.mem.eql(u8, e.text.items, v)) return;
         e.text.clearRetainingCapacity();
