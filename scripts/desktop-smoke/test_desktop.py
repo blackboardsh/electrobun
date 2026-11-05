@@ -1520,6 +1520,17 @@ class BunnyRotationTests(unittest.TestCase):
         self.assertLess(difference, 0.01)
         self.assertEqual(desktop.bunny_rotation_difference(before, before, self.reference), 0)
 
+    def test_opposite_diagonal_rotations_can_share_the_same_final_projection(self):
+        lower_right = self.frame('linux-x64-lower-right.png')
+        moving = self.frame('linux-x64-in-transition.png')
+        upper_left = self.frame('linux-x64-upper-left.png')
+        # These real captures show an input response, followed by an almost
+        # identical front-face projection at the opposite diagonal. Flipping
+        # both rotation signs can preserve the projected body geometry. The
+        # scenario therefore needs a centered pose between tilted poses.
+        self.assertGreater(desktop.bunny_rotation_difference(lower_right, moving, self.reference), 0.2)
+        self.assertLess(desktop.bunny_rotation_difference(lower_right, upper_left, self.reference), 0.02)
+
     def test_animated_background_and_detached_sparks_cannot_pass_for_rotation(self):
         from PIL import ImageChops, ImageDraw, ImageStat
         before = self.frame('windows-arm64-center.png')

@@ -1,10 +1,10 @@
 // Real published templates; each interaction names an observable UI response.
 export const templateScenarios = [
-  { id: 'bunny', title: 'Bunny', readyImage: 'src/mainview/assets/bunny.png', actions: [
-    // The initial pose can already be neutral when image decoding beats RPC
-    // startup. Opposite corners demand real rotation in both directions.
+  { id: 'bunny', title: 'Bunny', readyImage: 'src/mainview/assets/bunny.png', initialPointer: [0.5, 0.5], actions: [
+    // Start neutral, verify a tilt, then return to neutral. Opposite diagonal
+    // tilts can project the same silhouette, so they cannot prove input failed.
     { move: [0.9, 0.9], expectBunnyRotation: true },
-    { move: [0.1, 0.1], expectBunnyRotation: true },
+    { move: [0.5, 0.5], expectBunnyRotation: true },
   ] },
   { id: 'zig-wgpu', title: 'Zig WGPU', gpuRegion: [0.08, 0.25, 0.60, 0.85], readyText: 'Surface ready', actions: [
     { click: 'Toggle', expectText: 'Julia', expectChange: true },

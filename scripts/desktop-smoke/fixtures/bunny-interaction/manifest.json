@@ -49,6 +49,45 @@
       "artifactPath": "bunny/03-03-interaction-window.png",
       "originalOutcome": "passed",
       "sha256": "489da37401c6c0e8e8e0f67031e6765d401a2a8162b5f32eed276ab56a3dd17e"
+    },
+    {
+      "file": "linux-x64-lower-right.png",
+      "platform": "linux-x64",
+      "runId": 41942098874,
+      "runAttempt": 1,
+      "jobId": 126965204018,
+      "artifactId": 13376647820,
+      "artifactPath": "bunny/06-02-bunny-rotation-window.png",
+      "originalOutcome": "failed",
+      "harnessSha": "f5b5af58",
+      "note": "The second input visibly animated, but opposite-diagonal equal-magnitude rotations settled to almost identical front-face silhouettes. Use center then tilt then center for distinct projected geometry.",
+      "sha256": "222296785eeaa0b437f6b96c47334e4037cae398287671a8c2097d6765e9d323"
+    },
+    {
+      "file": "linux-x64-in-transition.png",
+      "platform": "linux-x64",
+      "runId": 41942098874,
+      "runAttempt": 1,
+      "jobId": 126965204018,
+      "artifactId": 13376647820,
+      "artifactPath": "bunny/07-03-bunny-rotation-window.png",
+      "originalOutcome": "failed",
+      "harnessSha": "f5b5af58",
+      "note": "The second input visibly animated, but opposite-diagonal equal-magnitude rotations settled to almost identical front-face silhouettes. Use center then tilt then center for distinct projected geometry.",
+      "sha256": "4170689158cd8b5ed8b3182d75137f1508c805ae73d881a110c8b05fa9456c84"
+    },
+    {
+      "file": "linux-x64-upper-left.png",
+      "platform": "linux-x64",
+      "runId": 41942098874,
+      "runAttempt": 1,
+      "jobId": 126965204018,
+      "artifactId": 13376647820,
+      "artifactPath": "bunny/21-03-bunny-rotation-window.png",
+      "originalOutcome": "failed",
+      "harnessSha": "f5b5af58",
+      "note": "The second input visibly animated, but opposite-diagonal equal-magnitude rotations settled to almost identical front-face silhouettes. Use center then tilt then center for distinct projected geometry.",
+      "sha256": "2125eed89d8246e55de186cb94e92762594c18c411b97f487a80ddc7d76c0d55"
     }
   ]
 }

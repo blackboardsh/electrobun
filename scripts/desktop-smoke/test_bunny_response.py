@@ -1,13 +1,16 @@
 """Bounded observation of real input, independent of desktop timing."""
 import math
 import unittest
+from unittest.mock import patch
 
+import desktop
 from desktop import observe_bunny_rotation
 
 
 class BunnyResponseTests(unittest.TestCase):
     def run_observation(self, frames, *, timeout=3, capture_cost=0, analysis_cost=0,
-                        initial_time=0, started=None, running=lambda: None):
+                        initial_time=0, started=None, running=lambda: None,
+                        require_rotation=True):
         now = [initial_time]
         pending = iter(frames)
         last = [0]
@@ -32,7 +35,7 @@ class BunnyResponseTests(unittest.TestCase):
             return observe_bunny_rotation(0, None, capture, compare=compare,
                 clock=lambda: now[0], sleep=sleep, started=started,
                 response_timeout=timeout, observation=evidence,
-                require_running=running)
+                require_running=running, require_rotation=require_rotation)
 
         return run, evidence, now
 
@@ -97,6 +100,30 @@ class BunnyResponseTests(unittest.TestCase):
             run()
         self.assertEqual(evidence['samples'], [])
         self.assertEqual(evidence['error'], 'app exited')
+
+    def test_startup_settles_without_requiring_an_arbitrary_initial_pose_change(self):
+        run, evidence, _ = self.run_observation([0], require_rotation=False)
+        self.assertEqual(run(), 0)
+        self.assertEqual(evidence['matchedSample'], 2)
+        self.assertFalse(evidence['requireRotation'])
+        run, evidence, _ = self.run_observation([AssertionError('No bunny')], require_rotation=False)
+        with self.assertRaises(AssertionError):
+            run()
+        self.assertEqual(evidence['outcome'], 'failed')
+
+    def test_reference_and_prior_frames_are_not_rescanned_for_each_comparison(self):
+        now = [0]
+        frames = iter([0.3, 0.3, 0.3])
+        evidence = {}
+        def sleep(seconds):
+            now[0] += seconds
+        with patch.object(desktop, 'bunny_silhouette', side_effect=lambda frame, reference, cache: frame) as recognize, \
+                patch.object(desktop, 'bunny_mask_difference', side_effect=lambda left, right: abs(left - right)):
+            self.assertEqual(observe_bunny_rotation(0, 'reference', lambda sample: next(frames),
+                clock=lambda: now[0], sleep=sleep, observation=evidence), 0.3)
+        self.assertEqual([call.args[0] for call in recognize.call_args_list], [0, 0.3, 0.3, 0.3])
+        caches = [call.kwargs['cache'] for call in recognize.call_args_list]
+        self.assertTrue(all(cache is caches[0] for cache in caches))
 
 
 if __name__ == '__main__':
