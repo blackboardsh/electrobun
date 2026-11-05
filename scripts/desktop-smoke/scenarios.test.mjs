@@ -6,7 +6,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { kitchenScenarios } from "./scenarios.mjs";
+import { kitchenScenarios, templateScenarios } from "./scenarios.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const kitchenSrc = join(root, "kitchen", "src");
@@ -29,6 +29,19 @@ for (const { path, text } of kitchenFiles) {
 		definitions.set(match[2], { path, text });
 	}
 }
+
+test("Bunny input demands opposite nonneutral poses and measures the bunny itself", () => {
+	const bunny = templateScenarios.find(({ id }) => id === "bunny");
+	assert.ok(bunny.readyImage);
+	assert.equal(bunny.actions.length, 2);
+	for (const action of bunny.actions) {
+		assert.equal(action.expectBunnyRotation, true);
+		assert.equal(action.expectChange, undefined, "transparent desktop pixels cannot prove rotation");
+		assert.ok(action.move.every(value => value > 0 && value < 1 && Math.abs(value - 0.5) >= 0.3));
+	}
+	assert.ok(bunny.actions[0].move.every((value, axis) =>
+		(value - 0.5) * (bunny.actions[1].move[axis] - 0.5) < 0));
+});
 
 function visibleLabels(scenario) {
 	return [

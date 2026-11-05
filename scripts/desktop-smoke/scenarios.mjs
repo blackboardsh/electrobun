@@ -1,8 +1,10 @@
 // Real published templates; each interaction names an observable UI response.
 export const templateScenarios = [
   { id: 'bunny', title: 'Bunny', readyImage: 'src/mainview/assets/bunny.png', actions: [
-    { move: [0.5, 0.5], expectChange: true },
-    { move: [0.9, 0.9], expectChange: true },
+    // The initial pose can already be neutral when image decoding beats RPC
+    // startup. Opposite corners demand real rotation in both directions.
+    { move: [0.9, 0.9], expectBunnyRotation: true },
+    { move: [0.1, 0.1], expectBunnyRotation: true },
   ] },
   { id: 'zig-wgpu', title: 'Zig WGPU', gpuRegion: [0.08, 0.25, 0.60, 0.85], readyText: 'Surface ready', actions: [
     { click: 'Toggle', expectText: 'Julia', expectChange: true },

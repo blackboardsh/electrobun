@@ -151,6 +151,7 @@ jobs:
         shell: bash
         run: |
           python scripts/desktop-smoke/test_desktop.py
+          python scripts/desktop-smoke/test_bunny_response.py
           python scripts/desktop-smoke/test_picker.py
       - name: Prepare Windows desktop shell
         if: runner.os == 'Windows'

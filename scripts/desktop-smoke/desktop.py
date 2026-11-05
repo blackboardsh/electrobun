@@ -457,8 +457,8 @@ def rendered_surface(frame, region):
     return max(ImageStat.Stat(frame.crop(box).convert('RGB')).stddev) >= 10
 
 
-def bunny_rendered(frame, reference):
-    """Match the published Bunny silhouette, not pixels behind its transparent window."""
+def bunny_silhouette(frame, reference):
+    """Find Bunny's solid body in window coordinates, excluding the transparent background."""
     from PIL import Image, ImageChops
 
     def components(image):
@@ -536,8 +536,35 @@ def bunny_rendered(frame, reference):
         intersection = sum(ImageChops.darker(expected, observed).getdata())
         union = sum(ImageChops.lighter(expected, observed).getdata())
         if union and intersection / union >= 0.45 and has_eye(component, box):
-            return True
-    return False
+            mask = Image.new('L', frame.size)
+            for x, y in component:
+                mask.putpixel((x, y), 255)
+            return mask
+    return None
+
+
+def bunny_rendered(frame, reference):
+    """Match the published Bunny silhouette, not pixels behind its transparent window."""
+    return bunny_silhouette(frame, reference) is not None
+
+
+def bunny_rotation_difference(before, after, reference):
+    """Compare recognized body geometry, without counting sparks or desktop animation.
+
+    Keep masks in window coordinates: normalizing each body to the same bounds
+    would discard the visible compression and skew caused by 3D rotation.
+    Missing Bunny pixels cannot count as a successful response to input.
+    """
+    from PIL import ImageChops
+    if before.size != after.size:
+        raise AssertionError('Bunny window size changed during rotation observation')
+    initial = bunny_silhouette(before, reference)
+    current = bunny_silhouette(after, reference)
+    if initial is None or current is None:
+        raise AssertionError('Bunny silhouette is missing during rotation observation')
+    changed = sum(ImageChops.difference(initial, current).getdata())
+    union = sum(ImageChops.lighter(initial, current).getdata())
+    return changed / union
 
 
 def counter_region(frame):
@@ -970,6 +997,59 @@ def observe_text(expected, capture, recognize, *, present=True, response_timeout
             observation['lastScreenshot'] = samples[-1].get('screenshot')
 
 
+def observe_bunny_rotation(before, reference, capture, *, require_running=lambda: None,
+                           response_timeout=15, interval=0.25, observation=None,
+                           started=None, clock=time.monotonic, sleep=time.sleep,
+                           compare=None):
+    """Observe one real pointer move; never retry input or count desktop changes."""
+    observation = observation if observation is not None else {}
+    started = clock() if started is None else started
+    deadline = started + response_timeout
+    compare = compare or (lambda left, right: bunny_rotation_difference(left, right, reference))
+    observation.update(responseTimeoutSeconds=response_timeout, minimumDifference=0.05,
+                       maximumSettlingDifference=0.02, requiredSettledSamples=3, samples=[])
+    previous, settled = None, 0
+    try:
+        while clock() < deadline:
+            require_running()
+            sample = {'captureStartedSeconds': clock() - started}
+            observation['samples'].append(sample)
+            frame = capture(sample)
+            sample['captureFinishedSeconds'] = clock() - started
+            if clock() >= deadline:
+                sample['eligible'] = False
+                break
+            sample['eligible'] = True
+            try:
+                difference = compare(before, frame)
+                frame_difference = compare(previous, frame) if previous is not None else None
+                if not math.isfinite(difference) or (frame_difference is not None and not math.isfinite(frame_difference)):
+                    raise AssertionError('Bunny silhouette difference is not finite')
+                if difference >= 0.05:
+                    settled = settled + 1 if frame_difference is not None and frame_difference <= 0.02 else 1
+                else:
+                    settled = 0
+                sample.update(difference=difference, frameDifference=frame_difference, settledSamples=settled)
+                previous = frame
+            except AssertionError as error:
+                # An absent/occluded body or resize never counts as rotation.
+                sample['recognitionError'] = str(error)
+                previous, settled = None, 0
+            sample['analysisFinishedSeconds'] = clock() - started
+            if clock() >= deadline:
+                break
+            if settled >= 3:
+                observation.update(outcome='passed', matchedSample=len(observation['samples']) - 1)
+                return frame
+            sleep(min(interval, max(0, deadline - clock())))
+        raise AssertionError(f'Bunny did not visibly rotate and settle within {response_timeout} seconds')
+    except Exception as error:
+        observation.update(outcome='failed', error=str(error))
+        raise
+    finally:
+        observation['elapsedSeconds'] = clock() - started
+
+
 def inspect_app(plan):
     import pyautogui as gui
     import pytesseract
@@ -1157,6 +1237,8 @@ def inspect_app(plan):
             cursor_readings = []
             for index, action in enumerate(plan['actions']):
                 refresh_bounds()
+                action_started = time.monotonic()
+                action_started_epoch = time.time()
                 if 'click' in action:
                     for label in [action['click'], *action.get('aliases', [])]:
                         try:
@@ -1278,8 +1360,24 @@ def inspect_app(plan):
                 if 'absentText' in action:
                     await_text(action['absentText'], limit=15, present=False)
                     checks.append('occluded-text:' + action['absentText'])
-                time.sleep(action.get('settle', 1))
-                after = capture(f'{index + 2:02d}-interaction')
+                if action.get('expectBunnyRotation'):
+                    observation = {'action': index, 'target': action['move'],
+                                   'startedAtEpochSeconds': action_started_epoch}
+                    result.setdefault('bunnyRotationObservations', []).append(observation)
+
+                    def capture_rotation(sample):
+                        image = capture(f'{index + 2:02d}-bunny-rotation')
+                        sample.update(screenshot=shots[-1],
+                                      windowScreenshot=shots[-1].replace('.png', '-window.png'),
+                                      pointer=list(gui.position()), windowBounds=list(rect))
+                        return image
+
+                    after = observe_bunny_rotation(before, reference, capture_rotation,
+                        require_running=require_running, observation=observation, started=action_started)
+                    checks.extend(['visible-bunny-rotation', 'visible-response-to-input'])
+                else:
+                    time.sleep(action.get('settle', 1))
+                    after = capture(f'{index + 2:02d}-interaction')
                 if action.get('expectChange'):
                     difference = ImageStat.Stat(ImageChops.difference(before.convert('RGB'), after.convert('RGB')))
                     if active_diagnostics:

@@ -1490,6 +1490,69 @@ class BunnyReadinessTests(unittest.TestCase):
         self.assertNotIn('visible-response-to-input', run.result['checks'])
 
 
+class BunnyRotationTests(unittest.TestCase):
+    def setUp(self):
+        from PIL import Image
+        reference_path = Path(__file__).resolve().parents[2] / 'templates/bunny/src/mainview/assets/bunny.png'
+        with Image.open(reference_path) as reference:
+            self.reference = reference.convert('RGBA')
+        self.fixtures = Path(__file__).parent / 'fixtures/bunny-interaction'
+
+    def frame(self, name):
+        from PIL import Image
+        with Image.open(self.fixtures / name) as frame:
+            return frame.convert('RGB')
+
+    def test_real_windows_rotations_change_recognized_body_geometry(self):
+        before = self.frame('windows-arm64-before.png')
+        center = self.frame('windows-arm64-center.png')
+        corner = self.frame('windows-arm64-corner.png')
+        # Captured successful inputs change 47% and 36% of the body union,
+        # comfortably above the observer's 5% threshold without desktop pixels.
+        self.assertGreater(desktop.bunny_rotation_difference(before, center, self.reference), 0.2)
+        self.assertGreater(desktop.bunny_rotation_difference(center, corner, self.reference), 0.2)
+
+    def test_failed_center_input_does_not_count_antialiasing_as_rotation(self):
+        before = self.frame('windows-x64-neutral-before.png')
+        after = self.frame('windows-x64-neutral-after.png')
+        difference = desktop.bunny_rotation_difference(before, after, self.reference)
+        # The actual failed pair differs by one body pixel, not a rotation.
+        self.assertLess(difference, 0.01)
+        self.assertEqual(desktop.bunny_rotation_difference(before, before, self.reference), 0)
+
+    def test_animated_background_and_detached_sparks_cannot_pass_for_rotation(self):
+        from PIL import ImageChops, ImageDraw, ImageStat
+        before = self.frame('windows-arm64-center.png')
+        after = before.copy()
+        body = desktop.bunny_silhouette(before, self.reference)
+        self.assertIsNotNone(body)
+        left, top, right, bottom = body.getbbox()
+        draw = ImageDraw.Draw(after)
+        # Simulate another app repainting behind Bunny's transparent window.
+        draw.rectangle((0, 0, left - 8, after.height - 1), fill=(55, 65, 75))
+        draw.rectangle((right + 8, 0, after.width - 1, after.height - 1), fill=(75, 55, 65))
+        # Random sparkle dots are not the connected rabbit body.
+        draw.ellipse((right + 10, top + 4, right + 14, top + 8), fill='white')
+        draw.ellipse((left - 16, bottom - 8, left - 12, bottom - 4), fill='white')
+        self.assertGreater(max(ImageStat.Stat(ImageChops.difference(before, after)).mean), 0.1)
+        self.assertEqual(desktop.bunny_rotation_difference(before, after, self.reference), 0)
+
+    def test_disappearance_and_unpainted_baseline_are_not_rotation(self):
+        from PIL import Image
+        frame = self.frame('windows-arm64-center.png')
+        blank = Image.new('RGB', frame.size, 'black')
+        for before, after in [(frame, blank), (blank, frame), (blank, blank)]:
+            with self.subTest(before_painted=before is frame, after_painted=after is frame):
+                with self.assertRaisesRegex(AssertionError, 'silhouette is missing'):
+                    desktop.bunny_rotation_difference(before, after, self.reference)
+
+    def test_changed_capture_dimensions_do_not_count_as_rotation(self):
+        from PIL import Image
+        frame = self.frame('windows-arm64-center.png')
+        with self.assertRaisesRegex(AssertionError, 'window size changed'):
+            desktop.bunny_rotation_difference(frame, Image.new('RGB', (200, 200)), self.reference)
+
+
 class SurfaceImageTests(unittest.TestCase):
     def test_visible_controls_do_not_hide_a_blank_gpu_surface(self):
         from PIL import Image, ImageDraw

@@ -1,0 +1,54 @@
+{
+  "description": "Unmodified window crops from the Electrobun 2.0.6 published desktop smoke run. The Windows x64 first move to the window center failed the generic image-change check despite an already neutral Bunny; Windows ARM64 captured successful rotations.",
+  "runId": 41922436993,
+  "runAttempt": 1,
+  "version": "2.0.6",
+  "releaseSha": "c9e637c4e8acc8d53fc4a1703346196b004a00d8",
+  "fixtures": [
+    {
+      "file": "windows-x64-neutral-before.png",
+      "platform": "windows-x64",
+      "jobId": 126952399530,
+      "artifactId": 13376125605,
+      "artifactPath": "bunny/02-rendered-window.png",
+      "originalOutcome": "failed",
+      "sha256": "b25225e0e66b9c0c1148faa893e3e93282ca21e89394aa2771ac82a5bfd97a21"
+    },
+    {
+      "file": "windows-x64-neutral-after.png",
+      "platform": "windows-x64",
+      "jobId": 126952399530,
+      "artifactId": 13376125605,
+      "artifactPath": "bunny/03-02-interaction-window.png",
+      "originalOutcome": "failed",
+      "sha256": "fe61ffe39a4ec2b8c95494769b65691a80583936e01eeccc72d1713465e2ed0d"
+    },
+    {
+      "file": "windows-arm64-before.png",
+      "platform": "windows-arm64",
+      "jobId": 126952399761,
+      "artifactId": 13376262023,
+      "artifactPath": "bunny/01-rendered-window.png",
+      "originalOutcome": "passed",
+      "sha256": "cf168ad5996957ec308dc299d93679dce59e95a64d1282183f0ca56322d47b73"
+    },
+    {
+      "file": "windows-arm64-center.png",
+      "platform": "windows-arm64",
+      "jobId": 126952399761,
+      "artifactId": 13376262023,
+      "artifactPath": "bunny/02-02-interaction-window.png",
+      "originalOutcome": "passed",
+      "sha256": "73e1a4d1a30475e52a2e979d6594b97fead0227d9932e36eecb6a5740c4f7563"
+    },
+    {
+      "file": "windows-arm64-corner.png",
+      "platform": "windows-arm64",
+      "jobId": 126952399761,
+      "artifactId": 13376262023,
+      "artifactPath": "bunny/03-03-interaction-window.png",
+      "originalOutcome": "passed",
+      "sha256": "489da37401c6c0e8e8e0f67031e6765d401a2a8162b5f32eed276ab56a3dd17e"
+    }
+  ]
+}

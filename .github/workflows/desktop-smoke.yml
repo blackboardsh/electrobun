@@ -148,6 +148,7 @@ jobs:
         run: |
           python scripts/desktop-smoke/test_preflight.py
           python scripts/desktop-smoke/test_desktop.py
+          python scripts/desktop-smoke/test_bunny_response.py
           python scripts/desktop-smoke/test_picker.py
           node --test scripts/desktop-smoke/scenarios.test.mjs scripts/desktop-smoke/bunny-diagnostics.test.mjs scripts/desktop-smoke/bunny-source-overlay.test.mjs scripts/bunny-spark.test.mjs
       - name: Prepare Windows desktop shell
