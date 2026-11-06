@@ -4,6 +4,23 @@ title: "Unreleased"
 
 Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
 
+## Updater manifest fix
+
+- Hutch now writes one `<channel>-<os>-<arch>-update.json` per target, including
+  the uncompressed tar's SHA-256 and byte size as `artifact.tarSha256` and
+  `artifact.tarSize`. It no longer generates a separate `*-update-v2.json`.
+  The manifest remains `schemaVersion: 1`.
+- The Updater API requests only `*-update.json`. Older manifests that omit both
+  integrity fields still work; supplied fields are validated together. Streamed
+  downloads, hash-named patch chains, and full-download fallback are unchanged.
+- **Update-host cleanup:** If you uploaded `*-update-v2.json` to your servers,
+  publish the new canonical `*-update.json` and its full archive and patches,
+  then delete the old `<channel>-<os>-<arch>-update-v2.json` files and purge any
+  cached copies. Those URLs must return HTTP `404` so previously released
+  clients that probe v2 can fall back to `update.json`. Leaving an old v2 file
+  in place can hide newer releases from those clients. Keep the current
+  `update.json`, full archives, and retained patches.
+
 ## Native UI fixes
 
 - Range sliders now support clicking the track and dragging the thumb, including

@@ -434,7 +434,7 @@ export function addUpdateArtifactCacheBuster(
 	return `${artifactUrl}?cache=${transactionId}`;
 }
 
-/** Validate the v2 update metadata before any artifact is fetched. */
+/** Validate update metadata before any artifact is fetched. */
 export function validateUpdateManifest(
 	document: unknown,
 	expected: ManifestExpectation,
@@ -1811,21 +1811,11 @@ async function checkForUpdateOperation(): Promise<UpdateInfo> {
 	const platformPrefix = getPlatformPrefix(info.channel, currentOS, currentArch);
 	const cacheBuster = randomBytes(8).toString("hex");
 	const manifestBase = `${info.baseUrl.replace(/\/+$/, "")}/${platformPrefix}`;
-	let updateInfoUrl = `${manifestBase}-update-v2.json?${cacheBuster}`;
+	const updateInfoUrl = `${manifestBase}-update.json?${cacheBuster}`;
 	try {
-		let response = await fetch(updateInfoUrl, {
+		const response = await fetch(updateInfoUrl, {
 			signal: AbortSignal.timeout(30_000),
 		});
-		// Existing clients require the exact legacy document shape. New releases
-		// publish the archive digest separately; only absence permits legacy use.
-		const legacyManifest = response.status === 404;
-		if (legacyManifest) {
-			await response.body?.cancel();
-			updateInfoUrl = `${manifestBase}-update.json?${cacheBuster}`;
-			response = await fetch(updateInfoUrl, {
-				signal: AbortSignal.timeout(30_000),
-			});
-		}
 		if (!response.ok) {
 			throw new Error(`HTTP ${response.status}`);
 		}
@@ -1845,9 +1835,6 @@ async function checkForUpdateOperation(): Promise<UpdateInfo> {
 			platform: currentOS,
 			arch: currentArch,
 		});
-		if (!legacyManifest && manifest.artifact.tarSha256 === undefined) {
-			throw new Error("Invalid update manifest: archive integrity metadata is required");
-		}
 		checkedManifest = manifest;
 		let ready = false;
 		try {

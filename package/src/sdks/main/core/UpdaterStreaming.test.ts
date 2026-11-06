@@ -159,6 +159,25 @@ describe("native streamed update preparation", () => {
 		expect(readFileSync(f.bundledHelper, "utf8")).toBe("current manager");
 	});
 
+	test("prepares an older manifest without optional archive integrity fields", async () => {
+		const f = fixture();
+		const legacy = { ...manifest(), artifact: { file: manifest().artifact.file } };
+		const prepared = await prepareNativeUpdate({
+			...f.options,
+			manifest: legacy,
+			async execute() {
+				const request = JSON.parse(readFileSync(f.requestPath, "utf8")) as NativePrepareUpdateRequest;
+				expect(request.hash).toBe(legacy.hash);
+				expect(request.artifact_file).toBe(legacy.artifact.file);
+				expect(request).not.toHaveProperty("tar_sha256");
+				expect(request).not.toHaveProperty("tar_size");
+				f.publish();
+			},
+		});
+		expect(prepared).toEqual(f.staged);
+		expect(existsSync(f.requestPath)).toBe(false);
+	});
+
 	test("Windows preparation executes the copied exe and waits for exit before cleanup", async () => {
 		const events: string[] = [];
 		let finish!: () => void;
@@ -311,29 +330,46 @@ describe("archive integrity metadata compatibility", () => {
 		}
 	});
 
-	test("uses legacy metadata only when the integrity document returns 404", async () => {
+	for (const channel of ["stable", "canary"] as const) {
+		for (const withIntegrity of [false, true]) {
+			test(`requests only ${channel} update.json ${withIntegrity ? "with" : "without"} archive integrity`, async () => {
+				Updater.getLocalInfo = async () => ({ ...info, channel, baseUrl: `${info.baseUrl}/` });
+				const prefix = getPlatformPrefix(channel, OS, ARCH);
+				const next = { ...manifest(), channel, artifact: {
+					...(withIntegrity ? manifest().artifact : {}),
+					file: `${prefix}-Example.tar.zst`,
+				} };
+				const urls: string[] = [];
+				globalThis.fetch = (async (url: string | URL | Request) => {
+					urls.push(String(url));
+					expect(new URL(String(url)).pathname).toBe(`/releases/${prefix}-update.json`);
+					return Response.json(next);
+				}) as unknown as typeof fetch;
+				expect(await Updater.checkForUpdate()).toMatchObject({
+					error: "", updateAvailable: true, version: next.version, hash: next.hash,
+				});
+				expect(urls).toHaveLength(1);
+			});
+		}
+	}
+
+	for (const [label, response] of [
+		["missing", () => new Response(null, { status: 404 })],
+		["forbidden", () => new Response(null, { status: 403 })],
+		["unavailable", () => new Response(null, { status: 503 })],
+		["invalid JSON", () => new Response("<html>not a manifest</html>")],
+		["partial integrity", () => Response.json({ ...manifest(), artifact: { file: manifest().artifact.file, tarSize: 4096 } })],
+	] as const) test(`rejects ${label} update.json without probing another manifest`, async () => {
 		Updater.getLocalInfo = async () => info;
 		const urls: string[] = [];
 		globalThis.fetch = (async (url: string | URL | Request) => {
 			urls.push(String(url));
-			if (urls.length === 1) return new Response(null, { status: 404 });
-			return Response.json({ ...manifest(), artifact: { file: manifest().artifact.file } });
+			return response();
 		}) as unknown as typeof fetch;
-		expect((await Updater.checkForUpdate()).error).toBe("");
-		expect(urls).toHaveLength(2);
-		expect(urls[0]).toContain("-update-v2.json?");
-		expect(urls[1]).toContain("-update.json?");
-	});
-
-	for (const response of [
-		() => new Response(null, { status: 403 }),
-		() => Response.json({ ...manifest(), artifact: { file: manifest().artifact.file } }),
-		() => Response.json({ ...manifest(), artifact: { file: manifest().artifact.file, tarSize: 4096 } }),
-	]) test("does not downgrade a forbidden or malformed integrity manifest", async () => {
-		Updater.getLocalInfo = async () => info;
-		let requests = 0;
-		globalThis.fetch = (async () => { requests++; return response(); }) as unknown as typeof fetch;
-		expect((await Updater.checkForUpdate()).error).not.toBe("");
-		expect(requests).toBe(1);
+		const result = await Updater.checkForUpdate();
+		expect(result.error).not.toBe("");
+		expect(result.updateAvailable).toBe(false);
+		expect(urls).toHaveLength(1);
+		expect(new URL(urls[0]!).pathname).toBe(`/releases/${getPlatformPrefix("stable", OS, ARCH)}-update.json`);
 	});
 });

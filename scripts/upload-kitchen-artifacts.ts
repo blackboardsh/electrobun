@@ -16,7 +16,6 @@ const KITCHEN_ARTIFACT_NAME =
 
 const isStableUpdateArtifact = (filename: string): boolean =>
 	filename.endsWith("-update.json") ||
-	filename.endsWith("-update-v2.json") ||
 	filename.endsWith(".tar.zst") ||
 	/-[a-z0-9]+\.patch$/.test(filename);
 
@@ -43,6 +42,9 @@ async function* walk(dir: string): AsyncGenerator<string> {
 
 export const kitchenArtifactKey = (filePath: string): string => {
 	const filename = basename(filePath);
+	if (filename.endsWith("-update-v2.json")) {
+		throw new Error(`Obsolete Kitchen update manifest: ${filename}. Remove it and publish update.json instead.`);
+	}
 	const match = KITCHEN_ARTIFACT_NAME.exec(filename);
 	if (!match || (match[1] === "stable" && !isStableUpdateArtifact(filename))) {
 		throw new Error(`Unexpected Kitchen artifact filename: ${filename}`);
@@ -51,7 +53,7 @@ export const kitchenArtifactKey = (filePath: string): string => {
 };
 
 export const isKitchenUpdateManifest = (key: string): boolean =>
-	key.endsWith("-update.json") || key.endsWith("-update-v2.json");
+	key.endsWith("-update.json");
 
 // Keep publication bounded even when the storage service stops responding.
 export async function putKitchenArtifact(

@@ -63,11 +63,6 @@ describe("Kitchen artifact publishing", () => {
 		).toBe("kitchen/stable-macos-arm64-update.json");
 		expect(
 			kitchenArtifactKey(
-				"staged/kitchen-macos-arm64/stable-macos-arm64-update-v2.json",
-			),
-		).toBe("kitchen/stable-macos-arm64-update-v2.json");
-		expect(
-			kitchenArtifactKey(
 				"staged/kitchen-win-x64/win-x64-ElectrobunKitchenSink-Setup.exe",
 			),
 		).toBe("kitchen/win-x64-ElectrobunKitchenSink-Setup.exe");
@@ -88,8 +83,11 @@ describe("Kitchen artifact publishing", () => {
 		).toBe(true);
 		for (const channel of ["canary", "stable"]) {
 			expect(
-				isKitchenUpdateManifest(`kitchen/${channel}-win-arm64-update-v2.json`),
+				isKitchenUpdateManifest(`kitchen/${channel}-win-arm64-update.json`),
 			).toBe(true);
+			expect(
+				isKitchenUpdateManifest(`kitchen/${channel}-win-arm64-update-v2.json`),
+			).toBe(false);
 		}
 		expect(
 			isKitchenUpdateManifest(
@@ -98,11 +96,11 @@ describe("Kitchen artifact publishing", () => {
 		).toBe(false);
 	});
 
-	test("publishes both manifest generations after their payloads", () => {
+	test("publishes the canonical manifest after its payloads", () => {
 		const directory = mkdtempSync(join(tmpdir(), "kitchen-publish-order-"));
 		const prefix = "stable-linux-x64";
 		const payload = `${prefix}-zz-payload.tar.zst`;
-		const manifests = [`${prefix}-update.json`, `${prefix}-update-v2.json`];
+		const manifests = [`${prefix}-update.json`];
 		try {
 			for (const filename of [...manifests, payload]) {
 				writeFileSync(join(directory, filename), "test artifact");
@@ -122,6 +120,31 @@ describe("Kitchen artifact publishing", () => {
 					payloadPublished,
 				);
 			}
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects obsolete v2 manifests before publishing any files", () => {
+		const directory = mkdtempSync(join(tmpdir(), "kitchen-obsolete-manifest-"));
+		try {
+			for (const channel of ["canary", "stable"]) {
+				const obsolete = `${channel}-macos-arm64-update-v2.json`;
+				expect(() => kitchenArtifactKey(join(directory, obsolete)))
+					.toThrow("Obsolete Kitchen update manifest");
+				writeFileSync(join(directory, obsolete), "obsolete manifest");
+			}
+			writeFileSync(join(directory, "stable-macos-arm64-update.json"), "current manifest");
+			writeFileSync(join(directory, "stable-macos-arm64-Example.tar.zst"), "archive");
+			const result = Bun.spawnSync([
+				process.execPath,
+				join(import.meta.dir, "upload-kitchen-artifacts.ts"),
+				directory,
+				"--dry-run",
+			]);
+			expect(result.exitCode).not.toBe(0);
+			expect(result.stderr.toString()).toContain("Obsolete Kitchen update manifest");
+			expect(result.stdout.toString()).not.toContain("Validated kitchen/");
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}

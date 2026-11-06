@@ -525,8 +525,6 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 	const releasePrefix = `${CHANNEL}-${platform.updatePlatform}-${platform.updateArch}`;
 	const installerPrefix = `${platform.updatePlatform}-${platform.updateArch}-`;
 	const updatePath = join(root, `${releasePrefix}-update.json`);
-	const updateV2Candidate = join(root, `${releasePrefix}-update-v2.json`);
-	const updateV2Path = pathExists(updateV2Candidate) ? updateV2Candidate : undefined;
 	assert.equal(pathExists(updatePath), true, `${label} stable update metadata`);
 	assert.deepEqual(
 		new Set(names.filter((name) => name.endsWith("-update.json"))),
@@ -535,11 +533,10 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 	);
 	assert.deepEqual(
 		new Set(names.filter((name) => name.endsWith("-update-v2.json"))),
-		new Set(updateV2Path ? [basename(updateV2Path)] : []),
-		`${label} streaming update metadata names`,
+		new Set(),
+		`${label} must not emit a separate versioned update manifest`,
 	);
 	const metadata = readJson(updatePath);
-	const streamingMetadata = updateV2Path ? readJson(updateV2Path) : undefined;
 	assert.equal(
 		basename(metadata.artifact?.file || ""),
 		metadata.artifact?.file,
@@ -548,13 +545,10 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 	const archivePath = join(root, metadata.artifact.file);
 	assert.equal(pathExists(archivePath), true, `${label} full update archive`);
 	const tarIdentity = await readCompressedTarIdentity(archivePath);
-	if (streamingMetadata) {
-		const { tarSha256, tarSize, ...legacyArtifact } = streamingMetadata.artifact;
-		assert.deepEqual({ ...streamingMetadata, artifact: legacyArtifact }, metadata, `${label} manifest generations disagree`);
-		assert.match(tarSha256, /^[0-9a-f]{64}$/, `${label} exact tar digest`);
-		assert.equal(Number.isSafeInteger(tarSize) && tarSize > 0, true, `${label} exact tar size`);
-		assert.deepEqual({ sha256: tarSha256, size: tarSize }, tarIdentity, `${label} manifest integrity differs from CI archive`);
-	}
+	const { tarSha256, tarSize } = metadata.artifact;
+	assert.match(tarSha256, /^[0-9a-f]{64}$/, `${label} exact tar digest`);
+	assert.equal(Number.isSafeInteger(tarSize) && tarSize > 0, true, `${label} exact tar size`);
+	assert.deepEqual({ sha256: tarSha256, size: tarSize }, tarIdentity, `${label} manifest integrity differs from CI archive`);
 	const installerPath = exactlyOne(
 		names.filter((name) => platform.isInstaller(name)).map((name) => join(root, name)),
 		`${label} installer`,
@@ -589,8 +583,8 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 	);
 	assert.deepEqual(
 		new Set(Object.keys(metadata.artifact || {})),
-		new Set(["file"]),
-		`${label} artifact metadata must use the historical filename-only protocol`,
+		new Set(["file", "tarSha256", "tarSize"]),
+		`${label} canonical update metadata must include archive integrity`,
 	);
 	assert.equal(metadata.patch, undefined, `${label} metadata unexpectedly advertised a patch descriptor`);
 	let patchPath;
@@ -614,12 +608,10 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 	return {
 		root,
 		updatePath,
-		updateV2Path,
 		archivePath,
 		patchPath,
 		installerPath,
 		metadata,
-		streamingMetadata,
 		tarIdentity,
 	};
 }
@@ -634,12 +626,15 @@ function publishRelease(release, options = {}) {
 	if (includePatch && release.patchPath) {
 		copyFileSync(release.patchPath, join(serverRoot, basename(release.patchPath)));
 	}
-	copyFileSync(release.updatePath, join(serverRoot, basename(release.updatePath)));
-	if (release.updateV2Path) {
-		copyFileSync(release.updateV2Path, join(serverRoot, basename(release.updateV2Path)));
+	const updatePath = join(serverRoot, basename(release.updatePath));
+	if (options.includeIntegrity === false) {
+		// Older producers use the same canonical URL without the optional pair.
+		writeFileSync(updatePath, JSON.stringify({
+			...release.metadata,
+			artifact: { file: release.metadata.artifact.file },
+		}));
 	} else {
-		// A legacy-only release must not accidentally advertise a stale v2 target.
-		rmSync(join(serverRoot, basename(release.updatePath).replace(/-update\.json$/, "-update-v2.json")), { force: true });
+		copyFileSync(release.updatePath, updatePath);
 	}
 }
 
@@ -919,7 +914,7 @@ async function verifySuccessfulUpdate({
 	}
 
 	const phaseRequests = requests.slice(requestStart);
-	const updateName = `/${basename(toRelease.updateV2Path || toRelease.updatePath)}`;
+	const updateName = `/${basename(toRelease.updatePath)}`;
 	const archiveName = `/${basename(toRelease.archivePath)}`;
 	const metadataRequest = phaseRequests.findIndex(
 		(request) =>
@@ -927,13 +922,11 @@ async function verifySuccessfulUpdate({
 			request.status === 200,
 	);
 	assert.notEqual(metadataRequest, -1, `updater never fetched ${updateName}`);
-	if (!toRelease.updateV2Path) {
-		const attemptedV2Name = updateName.replace(/-update\.json$/, "-update-v2.json");
-		const missingV2Request = phaseRequests.findIndex(
-			(request) => request.pathname === attemptedV2Name && request.status === 404,
-		);
-		assert.ok(missingV2Request >= 0 && missingV2Request < metadataRequest, "legacy manifest must follow an unavailable v2 manifest");
-	}
+	assert.equal(
+		phaseRequests.some((request) => request.pathname.endsWith("-update-v2.json")),
+		false,
+		"updater must request only the canonical update.json, including on older hosts",
+	);
 	assert.equal(
 		phaseRequests.every(
 			(request) => !request.search.toLowerCase().includes("sha256"),
@@ -1618,6 +1611,12 @@ async function main() {
 		assert.notEqual(v2.metadata.hash, v3.metadata.hash, "v2 and v3 produced the same hash");
 		assert.notEqual(v1.metadata.hash, v3.metadata.hash, "v1 and v3 produced the same hash");
 		publishRelease(v3);
+		// A server may still hold this obsolete URL from an earlier publication.
+		// The current updater must ignore it even when it describes an old build.
+		writeFileSync(
+			join(serverRoot, basename(v1.updatePath).replace(/-update\.json$/, "-update-v2.json")),
+			JSON.stringify(v1.metadata),
+		);
 		for (const release of [v2, v3]) {
 			assert.equal(
 				pathExists(join(serverRoot, basename(release.patchPath))),
@@ -1629,7 +1628,7 @@ async function main() {
 	if (focus === "build") {
 		const v4 = await buildRelease(FALLBACK_TARGET_VERSION, baseUrl, "v4", v3);
 		assert.notEqual(v3.metadata.hash, v4.metadata.hash, "v3 and v4 produced the same hash");
-		publishRelease(v4, { includePatch: false });
+		publishRelease(v4, { includePatch: false, includeIntegrity: false });
 		assert.equal(
 			pathExists(join(serverRoot, basename(v4.patchPath))),
 			false,
@@ -1670,16 +1669,13 @@ async function main() {
 	assert.notEqual(v3.metadata.hash, v4.metadata.hash, "v3 and v4 produced the same hash");
 	assert.notEqual(v2.metadata.hash, v4.metadata.hash, "v2 and v4 produced the same hash");
 	assert.notEqual(v1.metadata.hash, v4.metadata.hash, "v1 and v4 produced the same hash");
-	// Artifact inspection above still validates both documents emitted by the
-	// pinned producer. Serve this update through the historical document only:
-	// one lifecycle run must cover v2 metadata and the 404-to-legacy negotiation,
-	// even when Hutch emits v2 metadata for every release.
-	const legacyV4 = { ...v4, updateV2Path: undefined, streamingMetadata: undefined };
-	publishRelease(legacyV4, { includePatch: false });
-	assert.equal(
-		pathExists(join(serverRoot, basename(v4.updatePath).replace(/-update\.json$/, "-update-v2.json"))),
-		false,
-		"v4 must remove the preceding v2 manifest before exercising legacy negotiation",
+	// Build inspection validates the new integrity fields. Omit them only from
+	// this served document to exercise an older producer at the same update URL.
+	publishRelease(v4, { includePatch: false, includeIntegrity: false });
+	assert.deepEqual(
+		readJson(join(serverRoot, basename(v4.updatePath))).artifact,
+		{ file: v4.metadata.artifact.file },
+		"v4 must exercise canonical metadata without optional archive integrity",
 	);
 	assert.equal(
 		pathExists(join(serverRoot, basename(v4.patchPath))),
@@ -1703,7 +1699,7 @@ async function main() {
 	);
 	await verifySuccessfulUpdate({
 		fromRelease: v3,
-		toRelease: legacyV4,
+		toRelease: v4,
 		relaunchSentinelPath: fallbackRelaunchSentinelPath,
 		expectedDownloadPath: "full",
 		patchReleases: [v4],

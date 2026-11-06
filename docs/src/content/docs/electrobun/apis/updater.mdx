@@ -111,6 +111,12 @@ and `error`, and confirm the new version after relaunch.
 
 ## Local and update metadata
 
+`checkForUpdate()` requests `<channel>-<os>-<arch>-update.json` from the
+configured release host. The manifest can include `artifact.tarSha256` and
+`artifact.tarSize` to verify the exact uncompressed archive. Older manifests
+that omit both fields remain supported; a partial or invalid pair is an error.
+See [Updates](/electrobun/guides/updates/) for publishing and host migration.
+
 `getLocalInfo()` returns the packaged `version.json` data:
 
 ```ts

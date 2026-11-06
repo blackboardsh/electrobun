@@ -51,11 +51,12 @@ a lifecycle failure blocks publication. The local `check:release` and `push:*`
 preflight checks do not run the full lifecycle themselves. When working on
 installer, updater, or uninstaller code, run `hutch test:updater-lifecycle` from
 `package/` to exercise it locally. It builds four releases, installs the first,
-verifies an app two
-versions behind follows a two-patch chain using the v2 integrity manifest when
-the pinned Hutch emits one, then serves the next update with only its legacy
-manifest and no patch. That verifies both `404`-to-legacy manifest negotiation
-and full-archive fallback before uninstalling. It uses
+and verifies an app two versions behind follows a two-patch chain using the
+canonical `update.json` with tar integrity fields. It then serves the next
+update at the same manifest URL without those optional fields and with no
+patch. That verifies older-manifest compatibility and full-archive fallback
+before uninstalling. Each build must emit exactly one update manifest, and
+runtime checks must never request `update-v2.json`. It uses
 real native UI and may display installer or uninstaller windows while running.
 
 The lifecycle restores a retained tar and removes the standalone manager and
