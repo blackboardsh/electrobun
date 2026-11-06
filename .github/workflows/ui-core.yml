@@ -35,7 +35,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: macos-14, platform: macos-arm64 }
+          - { runner: macos-26, platform: macos-arm64 }
           - { runner: ubuntu-24.04, platform: linux-x64 }
           - { runner: ubuntu-24.04-arm, platform: linux-arm64 }
           - { runner: windows-2025, platform: windows-x64 }

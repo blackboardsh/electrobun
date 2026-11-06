@@ -38,7 +38,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-26
             platform: darwin
             arch: arm64
             platform_name: darwin
@@ -815,7 +815,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-26
             platform: macos-arm64
           - os: macos-26-intel
             platform: macos-x64
@@ -944,7 +944,7 @@ jobs:
         # Related runner graphics issue:
         # https://github.com/actions/runner-images/issues/14751
         include:
-          - os: macos-14
+          - os: macos-26
             platform: macos-arm64
           - os: macos-15-intel
             platform: macos-x64

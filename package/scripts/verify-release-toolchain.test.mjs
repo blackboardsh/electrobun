@@ -380,7 +380,7 @@ test("release CI verifies provenance before all six Kitchen builds", () => {
 	);
 	assert.equal((matrix.match(/^          - os:/gm) ?? []).length, 6);
 	for (const runner of [
-		"macos-14",
+		"macos-26",
 		"macos-26-intel",
 		"ubuntu-24.04",
 		"ubuntu-24.04-arm",

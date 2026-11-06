@@ -212,7 +212,7 @@ test("publishes from the unified product release lane before templates", () => {
 		/node npm\/scripts\/accept-published-bootstrap\.mjs[\s\S]*?--version "\$\{\{ steps\.release-type\.outputs\.version \}\}"[\s\S]*?--release-tag "\$\{\{ github\.event\.inputs\.tag \|\| github\.ref_name \}\}"[\s\S]*?--dist-tag "\$\{\{ steps\.release-type\.outputs\.dist-tag \}\}"[\s\S]*?--platform "\$\{\{ matrix\.platform \}\}"/,
 	);
 	for (const runner of [
-		"macos-14",
+		"macos-26",
 		"ubuntu-24.04",
 		"ubuntu-24.04-arm",
 		"windows-2025",

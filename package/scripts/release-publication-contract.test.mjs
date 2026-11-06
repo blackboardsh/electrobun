@@ -364,7 +364,7 @@ function validatePublicationContract(source) {
 	assert.match(npmAcceptance, /^    permissions:\n      contents: read$/m);
 	assert.match(npmAcceptance, /^      fail-fast: false$/m);
 	for (const [runner, platform] of [
-		["macos-14", "macos-arm64"],
+		["macos-26", "macos-arm64"],
 		["macos-26-intel", "macos-x64"],
 		["ubuntu-24.04", "linux-x64"],
 		["ubuntu-24.04-arm", "linux-arm64"],
