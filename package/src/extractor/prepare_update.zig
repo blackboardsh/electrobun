@@ -855,7 +855,7 @@ const TestServer = struct {
 };
 
 const TestFixture = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: *std.heap.ArenaAllocator,
     temporary: std.testing.TmpDir,
     environment: std.process.Environ.Map,
     request: Request,
@@ -872,7 +872,12 @@ const TestFixture = struct {
 
     fn initWithManaged(base_url: []const u8, managed: ?ManagedIdentity) !TestFixture {
         const io = std.testing.io;
-        var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+        // The environment and nested recipe allocators retain this address.
+        // Keep one arena owner while constructing and returning the fixture;
+        // copying its state before later allocations can orphan grown buffers.
+        const arena = try std.testing.allocator.create(std.heap.ArenaAllocator);
+        errdefer std.testing.allocator.destroy(arena);
+        arena.* = .init(std.testing.allocator);
         errdefer arena.deinit();
         const a = arena.allocator();
         var temporary = std.testing.tmpDir(.{});
@@ -942,6 +947,7 @@ const TestFixture = struct {
     fn deinit(self: *TestFixture) void {
         self.temporary.cleanup();
         self.arena.deinit();
+        std.testing.allocator.destroy(self.arena);
     }
     fn writeRequest(self: *TestFixture) !void {
         const a = self.arena.allocator();
