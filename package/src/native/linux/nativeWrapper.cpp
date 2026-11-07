@@ -40,6 +40,7 @@
 #include "../shared/pending_resize_queue.h"
 #include "../shared/deferred_navigation.h"
 #include "ui_focus.h"
+#include "bridge_auth.h"
 #include <gio/gio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -3122,6 +3123,7 @@ public:
     HandlePostMessage bunBridgeHandler;
     HandlePostMessage internalBridgeHandler;
     bool isSandboxed;
+    const std::string bridgeToken = createWebKitBridgeToken();
     std::string electrobunPreloadScript;
     std::string customPreloadScript;
     std::string partition;
@@ -3258,26 +3260,12 @@ public:
             }
         }
         
-        // Add preload scripts
+        // Console forwarding intentionally includes child frames and does not
+        // grant access to host RPC or application events.
         if (shouldForwardWebviewConsole(g_electrobunChannel)) {
-            WebKitUserScript* consoleScript = webkit_user_script_new(
-                webviewConsoleForwardingScript(),
-                WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
-                WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
-                nullptr,
-                nullptr);
-            webkit_user_content_manager_add_script(manager, consoleScript);
-            webkit_user_script_unref(consoleScript);
             g_signal_connect(manager, "script-message-received::electrobunConsole",
                            G_CALLBACK(onConsoleMessage), this);
             webkit_user_content_manager_register_script_message_handler(manager, "electrobunConsole");
-        }
-
-        if (!this->electrobunPreloadScript.empty()) {
-            addPreloadScriptToWebView(this->electrobunPreloadScript.c_str());
-        }
-        if (!this->customPreloadScript.empty()) {
-            addPreloadScriptToWebView(this->customPreloadScript.c_str());
         }
         
         // Set up message handlers
@@ -3306,6 +3294,8 @@ public:
                 webkit_user_content_manager_register_script_message_handler(manager, "internalBridge");
             }
         }
+
+        installPreloadScripts();
         
         // Connect navigation decision handler for both navigation callbacks AND navigation rules
         g_signal_connect(webview, "decide-policy", G_CALLBACK(onDecidePolicy), this);
@@ -3516,33 +3506,32 @@ public:
         }
     }
     
+    void installPreloadScripts() {
+        if (shouldForwardWebviewConsole(g_electrobunChannel)) {
+            WebKitUserScript* script = webkit_user_script_new(
+                webviewConsoleForwardingScript(),
+                WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+                WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
+                nullptr, nullptr);
+            webkit_user_content_manager_add_script(manager, script);
+            webkit_user_script_unref(script);
+        }
+        // Install before both preloads so the core's bridge aliases resolve to
+        // authenticated wrappers. Keep the token in their closure, not a global.
+        addPreloadScriptToWebView(webKitBridgeBootstrap(bridgeToken).c_str());
+        if (!electrobunPreloadScript.empty()) {
+            addPreloadScriptToWebView(electrobunPreloadScript.c_str());
+        }
+        if (!customPreloadScript.empty()) {
+            addPreloadScriptToWebView(customPreloadScript.c_str());
+        }
+    }
+
     void updateCustomPreloadScript(const char* jsString) override {
         customPreloadScript = jsString ? jsString : "";
-        
-        // Remove existing custom scripts and add new one
         if (manager) {
-            // Remove all custom scripts (we'll track them with a prefix)
             webkit_user_content_manager_remove_all_scripts(manager);
-            
-            // Re-add electrobun preload script
-            if (!electrobunPreloadScript.empty()) {
-                WebKitUserScript* script = webkit_user_script_new(electrobunPreloadScript.c_str(), 
-                                                                WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
-                                                                WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
-                                                                nullptr, nullptr);
-                webkit_user_content_manager_add_script(manager, script);
-                webkit_user_script_unref(script);
-            }
-            
-            // Add updated custom script
-            if (!customPreloadScript.empty()) {
-                WebKitUserScript* script = webkit_user_script_new(customPreloadScript.c_str(), 
-                                                                WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
-                                                                WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
-                                                                nullptr, nullptr);
-                webkit_user_content_manager_add_script(manager, script);
-                webkit_user_script_unref(script);
-            }
+            installPreloadScripts();
         }
     }
     
@@ -3674,50 +3663,32 @@ public:
         g_free(message);
     }
 
-    // eventBridge handler - event-only bridge for all webviews (including sandboxed)
-    static void onEventBridgeMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
-        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
-        if (impl->eventBridgeHandler && js_result) {
-            // Use the newer JSC API recommended by WebKit2GTK
-            JSCValue* value = webkit_javascript_result_get_js_value(js_result);
-            if (value && JSC_IS_VALUE(value) && jsc_value_is_string(value)) {
-                gchar* str_value = jsc_value_to_string(value);
-                if (str_value) {
-                    impl->eventBridgeHandler(impl->webviewId, str_value);
-                    g_free(str_value);
-                }
-            }
+    void dispatchBridgeMessage(WebKitJavascriptResult* js_result, HandlePostMessage handler) {
+        if (!handler || !js_result) return;
+        JSCValue* value = webkit_javascript_result_get_js_value(js_result);
+        if (!value || !JSC_IS_VALUE(value) || !jsc_value_is_string(value)) return;
+        gchar* message = jsc_value_to_string(value);
+        if (const char* payload = authenticatedWebKitBridgePayload(message, bridgeToken)) {
+            handler(webviewId, payload);
         }
+        g_free(message);
+    }
+
+    // All application bridges use the same authentication, including sandboxed
+    // views' event-only bridge and both aliases of the host RPC bridge.
+    static void onEventBridgeMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
+        auto* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        if (impl) impl->dispatchBridgeMessage(js_result, impl->eventBridgeHandler);
     }
 
     static void onBunBridgeMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
-        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
-        if (impl->bunBridgeHandler && js_result) {
-            // Use the newer JSC API recommended by WebKit2GTK
-            JSCValue* value = webkit_javascript_result_get_js_value(js_result);
-            if (value && JSC_IS_VALUE(value) && jsc_value_is_string(value)) {
-                gchar* str_value = jsc_value_to_string(value);
-                if (str_value) {
-                    impl->bunBridgeHandler(impl->webviewId, str_value);
-                    g_free(str_value);
-                }
-            }
-        }
+        auto* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        if (impl) impl->dispatchBridgeMessage(js_result, impl->bunBridgeHandler);
     }
     
     static void onInternalBridgeMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
-        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
-        if (impl->internalBridgeHandler && js_result) {
-            // Use the newer JSC API recommended by WebKit2GTK
-            JSCValue* value = webkit_javascript_result_get_js_value(js_result);
-            if (value && JSC_IS_VALUE(value) && jsc_value_is_string(value)) {
-                gchar* str_value = jsc_value_to_string(value);
-                if (str_value) {
-                    impl->internalBridgeHandler(impl->webviewId, str_value);
-                    g_free(str_value);
-                }
-            }
-        }
+        auto* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        if (impl) impl->dispatchBridgeMessage(js_result, impl->internalBridgeHandler);
     }
     
     // Static debounce timestamp for ctrl+click handling

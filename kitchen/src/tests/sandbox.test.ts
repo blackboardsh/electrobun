@@ -32,6 +32,129 @@ function createTestHarnessRPC() {
 
 export const sandboxTests = [
   defineTest({
+    name: "Sandboxed iframe cannot call native bridges",
+    category: "Sandbox",
+    description: "Reject raw iframe RPC and events while preserving top-frame bridges across preload replacement",
+    timeout: 30000,
+    async run({ createWindow, log }) {
+      const requests: string[] = [];
+      const messages: number[] = [];
+      const events: string[] = [];
+      let ready = false;
+      const rpc = BrowserView.defineRPC<TestHarnessRPC>({
+        maxRequestTime: 10000,
+        handlers: {
+          requests: {
+            echo: ({ value }) => { requests.push(value); return value; },
+            add: ({ a, b }) => a + b,
+            throwError: () => { throw new Error("unused"); },
+            delayed: ({ value }) => value,
+          },
+          messages: {
+            ready: () => { ready = true; },
+            ping: ({ timestamp }) => { messages.push(timestamp); },
+          },
+        },
+      });
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Iframe Bridge Isolation",
+        renderer: BuildConfig.getSync().defaultRenderer,
+        sandbox: false,
+        rpc,
+      });
+      win.webview.on("did-navigate-in-page", (event: unknown) => events.push(JSON.stringify(event)));
+
+      for (let pass = 0; pass < 2; pass++) {
+        const deadline = Date.now() + 10000;
+        while (!ready && Date.now() < deadline) await sleep(25);
+        expect(ready, "test document loaded").toBe(true);
+        requests.length = messages.length = events.length = 0;
+
+        // Use the native transport directly: normal RPC may use the websocket
+        // and would not prove that the top-frame native bridge still works.
+        const result = await win.webview.rpc.request.evaluateJavascriptWithResponse({ script: `
+          return (async () => {
+          const request = value => JSON.stringify({type:'request',id:900001,method:'echo',params:{value}});
+          const message = timestamp => JSON.stringify({type:'message',id:'ping',payload:{timestamp}});
+          const event = detail => JSON.stringify({type:'message',id:'webviewEvent',payload:{
+            id:window.__electrobunWebviewId,eventName:'did-navigate-in-page',detail
+          }});
+          const childSource = \`
+            (async () => {
+              let parentBlocked = false;
+              try { void parent.__electrobunHostBridge; } catch { parentBlocked = true; }
+              let attempted = 0;
+              for (const name of ['hostBridge','bunBridge','internalBridge','eventBridge']) {
+                const bridge = window.webkit?.messageHandlers?.[name]
+                  || window.chrome?.webview?.hostObjects?.[name]
+                  || window[name];
+                if (!bridge) continue;
+                const payloads = name === 'hostBridge' || name === 'bunBridge'
+                  ? [\${JSON.stringify(request('bridge-child'))}, \${JSON.stringify(message(-1))}]
+                  : [\${JSON.stringify(event('bridge-child'))}];
+                for (const payload of payloads) {
+                  for (const forged of [payload, '0'.repeat(64) + ':' + payload]) {
+                    attempted++;
+                    try { await bridge.postMessage(forged); } catch {}
+                  }
+                }
+              }
+              parent.postMessage({bridgeProbe:true,parentBlocked,attempted}, '*');
+            })();
+          \`;
+          const status = await new Promise((resolve, reject) => {
+            const frame = document.createElement('iframe');
+            frame.setAttribute('sandbox', 'allow-scripts');
+            const timer = setTimeout(() => { cleanup(); reject(new Error('iframe probe timed out')); }, 5000);
+            const receive = e => {
+              if (e.source !== frame.contentWindow || !e.data?.bridgeProbe) return;
+              cleanup(); resolve(e.data);
+            };
+            function cleanup() { clearTimeout(timer); window.removeEventListener('message', receive); frame.remove(); }
+            window.addEventListener('message', receive);
+            frame.srcdoc = '<!doctype html><script>' + childSource + '<\/script>';
+            document.body.appendChild(frame);
+          });
+          window.__electrobunHostBridge.postMessage(request('bridge-main-host'));
+          window.__electrobunBunBridge.postMessage(request('bridge-main-bun'));
+          window.__electrobunHostBridge.postMessage(message(1));
+          window.__electrobunBunBridge.postMessage(message(2));
+          window.__electrobunEventBridge.postMessage(event('bridge-main-event'));
+          window.__electrobunInternalBridge.postMessage(event('bridge-main-internal'));
+          return {...status, updated: !!window.__frameBridgePreloadUpdated};
+          })();
+        ` });
+        expect(result.parentBlocked, "opaque iframe cannot read its parent").toBe(true);
+        if (process.platform === "linux" && win.webview.renderer === "native") {
+          expect(result.attempted, "WebKitGTK raw handlers were exercised").toBe(12);
+        }
+        expect(result.updated, "custom preload replacement ran").toBe(pass === 1);
+        await sleep(250);
+        expect(requests.sort().join(",")).toBe("bridge-main-bun,bridge-main-host");
+        expect(messages.sort().join(",")).toBe("1,2");
+        expect(events.filter(event => event.includes("bridge-child")).length).toBe(0);
+        expect(events.filter(event => event.includes("bridge-main")).length).toBe(2);
+
+        if (pass === 0) {
+          // This path removes and reinstalls Linux user scripts. Both the
+          // authentication bootstrap and the application's new preload must survive.
+          await win.webview.rpc.request.evaluateJavascriptWithResponse({ script: `
+            window.__electrobunInternalBridge.postMessage(JSON.stringify([JSON.stringify({
+              type:'message',id:'webviewTagUpdatePreload',payload:{
+                id:window.__electrobunWebviewId,preload:'window.__frameBridgePreloadUpdated = true;'
+              }
+            })]));
+            return true;
+          ` });
+          ready = false;
+          win.webview.loadURL("views://test-harness/index.html?bridge-reload=1");
+        }
+      }
+      log("All native bridges rejected opaque iframe calls before and after preload replacement");
+    },
+  }),
+  defineTest({
     name: "Sandbox mode - RPC is disabled",
     category: "Sandbox",
     description: "Test that RPC calls timeout/fail in sandbox mode",
