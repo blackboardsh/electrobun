@@ -32,7 +32,7 @@ export function synchronizationTargets({ platform = process.platform, processArc
 
 // A mutex deadlock cannot reliably run its own timeout. Keep the watchdog in
 // this separate process and terminate only the executable we just spawned.
-function run(command, args, directory, timeoutMs) {
+export function runSynchronizationProcess(command, args, directory, timeoutMs) {
   return new Promise((resolveResult, reject) => {
     const started = performance.now();
     const child = spawn(command, args, { cwd: directory, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -49,19 +49,24 @@ function run(command, args, directory, timeoutMs) {
 }
 
 async function main() {
+  // The real Core executable also includes the Insights persistence/integration
+  // tests beyond the original queue tests. Its intentional
+  // waits and durable file writes need a separate whole-suite budget. Keep the
+  // focused synchronization adapter's deadline unchanged, and bound both.
   const options = { repetitions: process.platform === "win32" ? 100 : 10,
-    coreRepetitions: 5, timeoutMs: 20_000, compileTimeoutMs: 240_000 };
+    coreRepetitions: 5, timeoutMs: 20_000, coreTimeoutMs: 120_000, compileTimeoutMs: 240_000 };
   for (let index = 2; index < process.argv.length; index++) {
     const option = process.argv[index];
     if (option === "--negative-control") options.negativeControl = true;
     else {
       const key = { "--zig": "zig", "--target": "target", "--output-dir": "outputDirectory", "--repetitions": "repetitions",
-        "--core-repetitions": "coreRepetitions", "--timeout-ms": "timeoutMs", "--compile-timeout-ms": "compileTimeoutMs" }[option];
+        "--core-repetitions": "coreRepetitions", "--timeout-ms": "timeoutMs", "--core-timeout-ms": "coreTimeoutMs",
+        "--compile-timeout-ms": "compileTimeoutMs" }[option];
       assert.ok(key && process.argv[index + 1], `Unknown or incomplete option: ${option}`);
       options[key] = process.argv[++index];
     }
   }
-  for (const key of ["repetitions", "coreRepetitions", "timeoutMs", "compileTimeoutMs"]) {
+  for (const key of ["repetitions", "coreRepetitions", "timeoutMs", "coreTimeoutMs", "compileTimeoutMs"]) {
     options[key] = Number(options[key]);
     assert.ok(Number.isSafeInteger(options[key]) && options[key] > 0, `${key} must be a positive integer`);
   }
@@ -77,10 +82,11 @@ async function main() {
 
   const report = { targets, platform: process.platform, processArch: process.arch, machine: machine(),
     negativeControl: Boolean(options.negativeControl), repetitions: options.repetitions, coreRepetitions: options.coreRepetitions,
+    timeoutMs: options.timeoutMs, coreTimeoutMs: options.coreTimeoutMs,
     startedAt: new Date().toISOString(), builds: [], runs: [], status: "running" };
   const save = () => writeFile(join(directory, "results.json"), JSON.stringify(report, null, 2) + "\n");
   try {
-    const version = await run(zig, ["version"], directory, 10_000);
+    const version = await runSynchronizationProcess(zig, ["version"], directory, 10_000);
     assert.ok(!version.timedOut && version.code === 0, `Cannot read Zig version: ${version.stderr}`);
     assert.equal(version.stdout.trim(), ZIG_VERSION, "Use the pinned release compiler");
     report.zigVersion = version.stdout.trim();
@@ -102,14 +108,15 @@ async function main() {
             : ["test", join(packageRoot, "src", "core", "main.zig"), "-lc", "--test-no-exec", `-femit-bin=${executable}`,
               "--cache-dir", join(directory, "cache"), ...moduleOptions];
           console.log(`Building Core synchronization: ${label}`);
-          const build = await run(zig, args, directory, options.compileTimeoutMs);
+          const build = await runSynchronizationProcess(zig, args, directory, options.compileTimeoutMs);
           report.builds.push({ target, optimize, fixture, ...build });
           assert.ok(!build.timedOut && build.code === 0, `Compile ${label} failed: ${build.stderr || JSON.stringify(build)}`);
           if (process.platform === "win32") assertWindowsBinaryArchitecture(executable, arch);
           const repetitions = fixture === "adapter" ? options.repetitions : options.coreRepetitions;
-          console.log(`Running Core synchronization: ${label}, ${repetitions} fresh processes`);
+          const timeoutMs = fixture === "adapter" ? options.timeoutMs : options.coreTimeoutMs;
+          console.log(`Running Core synchronization: ${label}, ${repetitions} fresh processes, ${timeoutMs}ms whole-process deadline`);
           for (let iteration = 1; iteration <= repetitions; iteration++) {
-            const result = await run(executable, [], directory, options.timeoutMs);
+            const result = await runSynchronizationProcess(executable, [], directory, timeoutMs);
             report.runs.push({ target, optimize, fixture, iteration, ...result });
             await save();
             if (result.timedOut && options.negativeControl) {
@@ -119,7 +126,7 @@ async function main() {
               console.log(`Original synchronization hung: ${label}, iteration ${iteration}\n${result.stderr}`);
               break targetsLoop;
             }
-            assert.ok(!result.timedOut, `${label} iteration ${iteration} exceeded ${options.timeoutMs}ms (possible synchronization deadlock): ${result.stderr}`);
+            assert.ok(!result.timedOut, `${label} iteration ${iteration} exceeded its ${timeoutMs}ms whole-process deadline (possible synchronization deadlock): ${result.stderr}`);
             assert.equal(result.code, 0, `${label} iteration ${iteration}: ${result.stderr}`);
             if (fixture === "adapter") assert.ok(result.stderr.includes(success), `${label} did not complete all stress phases: ${result.stderr}`);
             else assert.match(result.stderr, /All \d+ tests passed\./, `${label} did not finish the Core tests`);

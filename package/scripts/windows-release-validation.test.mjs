@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { nativeWindowsArchitecture, zigCompilerHostArchitecture } from "./zig-compiler-host.mjs";
-import { synchronizationTargets } from "./core-synchronization-stress.mjs";
+import { runSynchronizationProcess, synchronizationTargets } from "./core-synchronization-stress.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = readFileSync(resolve(packageRoot, "../.github/workflows/release.yml"), "utf8");
@@ -171,4 +171,26 @@ test("synchronization targets stay executable on each host and reject incompatib
     assert.deepEqual(synchronizationTargets(host), [{ target: "native", arch: processArch }]);
     assert.throws(() => synchronizationTargets({ ...host, target: "x86_64-windows-gnu" }), /native target/);
   }
+});
+
+test("Core watchdog preserves successful output and exit status", async () => {
+  const result = await runSynchronizationProcess(process.execPath, ["-e", `
+    process.stderr.write("1/2 fixture.test.first...OK\\n");
+    setTimeout(() => process.stderr.write("2/2 fixture.test.second...OK\\nAll 2 tests passed.\\n"), 50);
+  `], packageRoot, 5_000);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.code, 0);
+  assert.match(result.stderr, /All 2 tests passed\./);
+});
+
+test("Core watchdog kills a stalled child even when it keeps producing output", async () => {
+  const result = await runSynchronizationProcess(process.execPath, ["-e", `
+    process.stderr.write("1/2 fixture.test.completed...OK\\n");
+    setInterval(() => process.stderr.write("waiting for stuck test\\n"), 20);
+  `], packageRoot, 5_000);
+  assert.equal(result.timedOut, true);
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /1\/2 fixture\.test\.completed\.\.\.OK/);
+  assert.doesNotMatch(result.stderr, /All 2 tests passed\./);
+  assert.ok(result.elapsedMs < 15_000, "The parent must terminate the stalled child, not wait for it to exit");
 });
