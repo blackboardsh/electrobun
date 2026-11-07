@@ -59,9 +59,18 @@ function copyApiDirectory(sourcePath: string, destinationPath: string) {
 	});
 }
 
+function bundleInputPath(input: string, platform: string = process.platform) {
+	// Bun's metafile uses cwd-relative paths. For a consumer on another
+	// Windows drive it can prefix the absolute drive path with ../ segments.
+	// Restore that absolute path before asking node:path to resolve it.
+	return platform === "win32"
+		? input.replace(/^(?:\.\.[\\/])+([A-Za-z]:[\\/])/, "$1")
+		: input;
+}
+
 function resolveBundleInput(input: string) {
 	for (const base of [packageRoot, consumerRoot]) {
-		const candidate = resolve(base, input);
+		const candidate = resolve(base, bundleInputPath(input));
 		if (existsSync(candidate)) return realpathSync(candidate);
 	}
 	throw new Error(`Could not resolve bundle input ${input}`);
@@ -143,6 +152,17 @@ function reportComparison(
 }
 
 describe("private devkit SDK exports", () => {
+	test("resolves cross-drive Windows metafile paths without changing ordinary paths", () => {
+		const absolute = "C:/Users/RUNNER~1/AppData/Local/Temp/consumer/focused-0.ts";
+		expect(bundleInputPath(`../../../../../${absolute}`, "win32")).toBe(absolute);
+		expect(bundleInputPath("..\\..\\C:\\Temp\\consumer\\entry.ts", "win32"))
+			.toBe("C:\\Temp\\consumer\\entry.ts");
+		for (const path of [absolute, "../consumer/entry.ts", "./entry.ts", "node_modules/electrobun/index.ts"]) {
+			expect(bundleInputPath(path, "win32")).toBe(path);
+		}
+		expect(bundleInputPath(`../../${absolute}`, "linux")).toBe(`../../${absolute}`);
+	});
+
 	test("exposes the canonical main SDK and preserves legacy entry points", () => {
 		expect(manifest.exports["."]).toBe("./dist/api/sdks/main/index.ts");
 		expect(manifest.exports["./main"]).toBe("./dist/api/sdks/main/index.ts");
