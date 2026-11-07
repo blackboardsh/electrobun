@@ -40,4 +40,18 @@ pub fn build(b: *std.Build) void {
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run Electrobun core tests");
     test_step.dependOn(&run_unit_tests.step);
+
+    // Exercise the native queue, consent, delivery controls, encrypted spool,
+    // and shared installation identity without building the framework or UI.
+    const managed_services_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("insights.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    const run_managed_services_tests = b.addRunArtifact(managed_services_tests);
+    const managed_services_step = b.step("test-managed-services", "Run native Insights and installation identity tests");
+    managed_services_step.dependOn(&run_managed_services_tests.step);
 }

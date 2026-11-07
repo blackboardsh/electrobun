@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { ELECTROBUN_API_URL, normalizeManagedCustomOrigin } from "../../../shared/managed-service";
+import { Installation } from "./Installation";
 import {
 	chmodSync,
 	closeSync,
@@ -118,6 +120,8 @@ export interface LocalUpdateInfo {
 	name: string;
 	displayName?: string;
 	identifier: string;
+	managed?: { appId: string; apiUrl?: string; baseUrl?: string };
+	updateAuthority?: "direct" | "external" | "none";
 }
 
 export interface UpdateInfo {
@@ -345,6 +349,7 @@ let updateInfo: UpdateInfo = {
 	error: "",
 };
 let checkedManifest: UpdateManifestV1 | undefined;
+let checkedDownloadBaseUrl: string | undefined;
 let checkInFlight: Promise<UpdateInfo> | undefined;
 let downloadInFlight: Promise<void> | undefined;
 let applyInFlight: Promise<void> | undefined;
@@ -1777,11 +1782,134 @@ export function resolveUpdateParentPid(
 	return runtimePid;
 }
 
+export type ResolvedUpdate =
+	| { status: "current" | "unavailable" | "disabled" }
+	| {
+		status: "available";
+		manifest: UpdateManifestV1;
+		downloadBaseUrl?: string;
+	};
+
+function checkedUpdateUrl(value: string, allowQuery = false): URL {
+	const url = new URL(value);
+	const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+	if (
+		(url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) ||
+		url.username || url.password || (!allowQuery && url.search) || url.hash
+	) throw new Error("Invalid update URL");
+	return url;
+}
+
+/** Keep an API origin and an already-versioned API URL interchangeable. */
+export function managedUpdateApiBase(apiUrl = ELECTROBUN_API_URL): string {
+	const url = checkedUpdateUrl(apiUrl);
+	const path = url.pathname.replace(/\/+$/, "");
+	if (path !== "" && path !== "/v1/electrobun") throw new Error("Invalid managed API path");
+	return `${url.origin}/v1/electrobun`;
+}
+
+/** Match the hosted service's app names before URL encoding. */
+function managedAppComponent(value: unknown): string {
+	if (typeof value !== "string" || value.length < 1 || value.length > 240 ||
+		!/^[A-Za-z0-9][A-Za-z0-9._+ -]*$/.test(value) || value.includes("..") || /[ .]$/.test(value)) {
+		throw new Error("Invalid managed app ID");
+	}
+	return encodeURIComponent(value);
+}
+
+/** Managed hosting exposes the same flat file layout as a self-hosted folder. */
+export function managedUpdateBaseUrl(managed: NonNullable<LocalUpdateInfo["managed"]>): string {
+	if (!isRecord(managed) || (managed.apiUrl !== undefined && typeof managed.apiUrl !== "string") ||
+		(managed.baseUrl !== undefined && typeof managed.baseUrl !== "string")) {
+		throw new Error("Invalid managed update configuration");
+	}
+	const app = managedAppComponent(managed.appId);
+	if (managed.baseUrl !== undefined) return normalizeManagedCustomOrigin(managed.baseUrl);
+	return `${managedUpdateApiBase(managed.apiUrl)}/apps/${app}/updates`;
+}
+
+function managedInstallationId(): string {
+	const id = Installation.getId();
+	if (typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id)) {
+		throw new Error("Managed updates require the app's persisted installation ID");
+	}
+	return id;
+}
+
+/** The installation ID is a routing hint for the configured managed origin.
+ * Follow artifact redirects without exposing it to an unrelated CDN or host. */
+async function fetchManagedUpdate(
+	url: string,
+	installationId: string,
+	init: RequestInit,
+	fetchResponse: (url: string, init: RequestInit) => Promise<Response>,
+): Promise<Response> {
+	let current = checkedUpdateUrl(url, true);
+	let includeIdentity = true;
+	for (let redirects = 0; ; redirects++) {
+		const headers = new Headers(init.headers);
+		headers.delete("X-Electrobun-Installation-Id");
+		if (includeIdentity) headers.set("X-Electrobun-Installation-Id", installationId);
+		const response = await fetchResponse(current.href, { ...init, headers, redirect: "manual" });
+		if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+		const location = response.headers.get("location");
+		await response.body?.cancel();
+		if (!location) throw new Error("Managed update redirect has no location");
+		if (redirects >= 20) throw new Error("Managed update redirect limit exceeded");
+		const next = checkedUpdateUrl(new URL(location, current).href, true);
+		if (current.protocol === "https:" && next.protocol !== "https:") {
+			throw new Error("Managed update redirects cannot downgrade HTTPS");
+		}
+		if (next.origin !== current.origin) includeIdentity = false;
+		current = next;
+	}
+}
+
+/** Both hosting modes read the ordinary update.json from one stable folder. */
+export async function resolveUpdateManifest(
+	info: LocalUpdateInfo,
+	options: {
+		fetchResponse?: (url: string, init: RequestInit) => Promise<Response>;
+		platform?: SupportedOS;
+		arch?: SupportedArch;
+	} = {},
+): Promise<ResolvedUpdate> {
+	if (info.channel === "dev" ||
+		(info.updateAuthority !== undefined && info.updateAuthority !== "direct")) {
+		return { status: "disabled" };
+	}
+	if (info.channel !== "stable" && info.channel !== "canary") {
+		throw new Error(`Unsupported update channel: ${info.channel}`);
+	}
+	const platform = options.platform ?? currentOS;
+	const arch = options.arch ?? currentArch;
+	const expected = { identifier: info.identifier, channel: info.channel, platform, arch };
+	const fetchResponse = options.fetchResponse ?? fetch;
+	const readDocument = async (response: Response): Promise<unknown> => {
+		if (!response.ok) throw new Error(`HTTP ${response.status}`);
+		const bytes = await readBoundedResponse(response, MAX_UPDATE_DOCUMENT_BYTES);
+		try { return JSON.parse(new TextDecoder().decode(bytes)); }
+		catch { throw new Error("update.json is not valid JSON"); }
+	};
+	const downloadBaseUrl = info.managed === undefined ? undefined : managedUpdateBaseUrl(info.managed);
+	const prefix = getPlatformPrefix(info.channel, platform, arch);
+	const manifestBase = `${(downloadBaseUrl ?? info.baseUrl).replace(/\/+$/, "")}/${prefix}`;
+	const cacheBuster = randomBytes(8).toString("hex");
+	const manifestUrl = `${manifestBase}-update.json?${cacheBuster}`;
+	const init = { signal: AbortSignal.timeout(30_000) };
+	const response = downloadBaseUrl === undefined
+		? await fetchResponse(manifestUrl, init)
+		: await fetchManagedUpdate(manifestUrl, managedInstallationId(), init, fetchResponse);
+	const manifest = validateUpdateManifest(await readDocument(response), expected);
+	return { status: "available", manifest, ...(downloadBaseUrl === undefined ? {} : { downloadBaseUrl }) };
+}
+
 async function checkForUpdateOperation(): Promise<UpdateInfo> {
 	emitStatus("checking", "Checking for updates...");
 	const info = await Updater.getLocalInfo();
 	if (!isBuildEnvironment(info.channel)) {
 		checkedManifest = undefined;
+		checkedDownloadBaseUrl = undefined;
 		const message = `Unsupported update channel: ${info.channel}`;
 		updateInfo = {
 			version: info.version,
@@ -1795,6 +1923,7 @@ async function checkForUpdateOperation(): Promise<UpdateInfo> {
 	}
 	if (info.channel === "dev") {
 		checkedManifest = undefined;
+		checkedDownloadBaseUrl = undefined;
 		updateInfo = {
 			version: info.version,
 			hash: info.hash,
@@ -1808,33 +1937,19 @@ async function checkForUpdateOperation(): Promise<UpdateInfo> {
 		return updateInfo;
 	}
 
-	const platformPrefix = getPlatformPrefix(info.channel, currentOS, currentArch);
-	const cacheBuster = randomBytes(8).toString("hex");
-	const manifestBase = `${info.baseUrl.replace(/\/+$/, "")}/${platformPrefix}`;
-	const updateInfoUrl = `${manifestBase}-update.json?${cacheBuster}`;
 	try {
-		const response = await fetch(updateInfoUrl, {
-			signal: AbortSignal.timeout(30_000),
-		});
-		if (!response.ok) {
-			throw new Error(`HTTP ${response.status}`);
+		const selection = await resolveUpdateManifest(info);
+		if (selection.status !== "available") {
+			checkedManifest = undefined;
+			checkedDownloadBaseUrl = undefined;
+			updateInfo = { version: info.version, hash: info.hash, updateAvailable: false, updateReady: false, error: "" };
+			const message = selection.status === "disabled" ? "Updates are managed externally or disabled"
+				: selection.status === "unavailable" ? "No published release for this platform" : "Already on latest version";
+			emitStatus("no-update", message, { currentHash: info.hash });
+			return updateInfo;
 		}
-		const bytes = await readBoundedResponse(
-			response,
-			MAX_UPDATE_DOCUMENT_BYTES,
-		);
-		let document: unknown;
-		try {
-			document = JSON.parse(new TextDecoder().decode(bytes));
-		} catch {
-			throw new Error("update.json is not valid JSON");
-		}
-		const manifest = validateUpdateManifest(document, {
-			identifier: info.identifier,
-			channel: info.channel,
-			platform: currentOS,
-			arch: currentArch,
-		});
+		const manifest = selection.manifest;
+		checkedDownloadBaseUrl = selection.downloadBaseUrl;
 		checkedManifest = manifest;
 		let ready = false;
 		try {
@@ -1865,6 +1980,7 @@ async function checkForUpdateOperation(): Promise<UpdateInfo> {
 		return updateInfo;
 	} catch (error) {
 		checkedManifest = undefined;
+		checkedDownloadBaseUrl = undefined;
 		const message = `Failed to check for updates: ${(error as Error).message}`;
 		updateInfo = {
 			version: "",
@@ -1875,7 +1991,6 @@ async function checkForUpdateOperation(): Promise<UpdateInfo> {
 		};
 		emitStatus("error", message, {
 			errorMessage: (error as Error).message,
-			url: updateInfoUrl,
 		});
 		return updateInfo;
 	}
@@ -1970,6 +2085,8 @@ export async function preparePatchChainForUpdate(
 	);
 
 	const fetchResponse = dependencies.fetchResponse ?? fetch;
+	const managedBase = info.managed === undefined ? undefined : managedUpdateBaseUrl(info.managed);
+	const installationId = managedBase === undefined ? undefined : managedInstallationId();
 	const applyPatch = dependencies.applyPatch ?? applyDeltaPatch;
 	const readNextHash = dependencies.readNextHash ?? readUpdateHashFromTar;
 	const bspatchPath =
@@ -1989,7 +2106,7 @@ export async function preparePatchChainForUpdate(
 	try {
 		while (currentHash !== manifest.hash) {
 			const patchNumber = patchesApplied + 1;
-			patchUrl = getPatchFileUrl(info.baseUrl, platformPrefix, currentHash);
+			patchUrl = getPatchFileUrl(managedBase ?? info.baseUrl, platformPrefix, currentHash);
 			const pathPrefix = join(
 				extractionFolder,
 				`.${transactionId}.${patchNumber}.${currentHash}`,
@@ -2011,9 +2128,10 @@ export async function preparePatchChainForUpdate(
 					url: patchUrl,
 				},
 			);
-			const response = await fetchResponse(patchUrl, {
-				signal: AbortSignal.timeout(10 * 60_000),
-			});
+			const init = { signal: AbortSignal.timeout(10 * 60_000) };
+			const response = installationId === undefined
+				? await fetchResponse(patchUrl, init)
+				: await fetchManagedUpdate(patchUrl, installationId, init, fetchResponse);
 			if (!response.ok) {
 				try {
 					await response.body?.cancel();
@@ -2137,6 +2255,10 @@ export interface NativePrepareUpdateRequest {
 	hash: string;
 	base_hash: string;
 	base_url: string;
+	/** Fixed managed updates folder; base_url remains the installed identity. */
+	download_base_url?: string;
+	/** Same persisted ID used by Insights, only supplied for managed requests. */
+	installation_id?: string;
 	artifact_file: string;
 	channel_root: string;
 	app_bundle_path: string;
@@ -2198,12 +2320,16 @@ export async function executeNativePreparation(helper: string, args: readonly st
 export async function prepareNativeUpdate(options: {
 	info: LocalUpdateInfo;
 	manifest: UpdateManifestV1;
+	downloadBaseUrl?: string;
 	channelRoot: string;
 	appBundlePath: string;
 	transactionId: string;
 	execute?: NativePrepareExecutor;
 }): Promise<PreparedUpdateV2> {
 	const { info, channelRoot, appBundlePath, transactionId } = options;
+	if (info.updateAuthority !== undefined && info.updateAuthority !== "direct") {
+		throw new Error("Direct updates are disabled for this build");
+	}
 	const manifest = validateUpdateManifest(options.manifest, {
 		identifier: info.identifier,
 		channel: info.channel,
@@ -2219,13 +2345,10 @@ export async function prepareNativeUpdate(options: {
 	) {
 		throw new Error("Invalid native preparation request");
 	}
-	const base = new URL(info.baseUrl);
-	const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(base.hostname);
-	if (
-		(base.protocol !== "https:" && !(base.protocol === "http:" && loopback)) ||
-		base.username || base.password || base.search || base.hash
-	) {
-		throw new Error("Invalid update base URL");
+	checkedUpdateUrl(info.baseUrl);
+	const downloadBaseUrl = info.managed === undefined ? undefined : managedUpdateBaseUrl(info.managed);
+	if (options.downloadBaseUrl !== undefined && options.downloadBaseUrl.replace(/\/+$/, "") !== downloadBaseUrl) {
+		throw new Error("Download base URL must match this app's managed updates folder");
 	}
 	const helper = resolveUpdateHelperSource(channelRoot, appBundlePath, currentOS, true);
 	const requestPath = join(channelRoot, `.electrobun-prepare-${transactionId}.json`);
@@ -2240,6 +2363,10 @@ export async function prepareNativeUpdate(options: {
 		hash: manifest.hash,
 		base_hash: info.hash,
 		base_url: info.baseUrl,
+		...(downloadBaseUrl === undefined ? {} : {
+			download_base_url: downloadBaseUrl,
+			installation_id: managedInstallationId(),
+		}),
 		artifact_file: manifest.artifact.file,
 		channel_root: channelRoot,
 		app_bundle_path: appBundlePath,
@@ -2275,6 +2402,7 @@ async function downloadUpdateOperation(): Promise<void> {
 	if (checkInFlight) await checkInFlight;
 	if (!checkedManifest) await checkForUpdate();
 	const manifest = checkedManifest;
+	const downloadBaseUrl = checkedDownloadBaseUrl;
 	if (!manifest || manifest.hash === info.hash) return;
 
 	const channelRoot = appDataFolderFor(info);
@@ -2296,6 +2424,7 @@ async function downloadUpdateOperation(): Promise<void> {
 		await prepareNativeUpdate({
 			info,
 			manifest,
+			downloadBaseUrl,
 			channelRoot,
 			appBundlePath: installedAppBundlePath(channelRoot),
 			transactionId: randomBytes(16).toString("hex"),
@@ -2335,6 +2464,10 @@ function downloadUpdate(): Promise<void> {
 async function applyUpdateOperation(): Promise<void> {
 	if (downloadInFlight) await downloadInFlight;
 	const info = await Updater.getLocalInfo();
+	if (info.channel === "dev" || (info.updateAuthority !== undefined && info.updateAuthority !== "direct")) {
+		emitStatus("no-update", "Direct updates are disabled for this build");
+		return;
+	}
 	const channelRoot = appDataFolderFor(info);
 	let prepared: PreparedUpdate;
 	try {

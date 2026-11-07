@@ -8,6 +8,16 @@ export type BuildConfigType = {
 	buildEnvironment?: RuntimeBuildChannel;
 	chromiumFlags?: Record<string, string | boolean>;
 	autoGrantPermissions?: WindowsWebView2Permission[];
+	/** The updater authority is independent from the stable/canary build channel. */
+	updateAuthority?: "direct" | "external" | "none";
+	/** Distribution metadata for Insights; independent from the build channel. */
+	distribution?: string;
+	insights?: {
+		appId: string;
+		apiUrl?: string;
+		/** Collection defaults off on every channel unless explicitly enabled. */
+		enabled?: boolean;
+	};
 	/** Runtime channel read from the packaged Resources/version.json metadata. */
 	channel: RuntimeBuildChannel;
 	/** False for dev builds; true for stable and canary builds. */

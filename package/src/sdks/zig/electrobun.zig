@@ -807,6 +807,110 @@ pub fn exitOnLastWindowClosedFromJson(allocator: std.mem.Allocator, build_json: 
     };
 }
 
+/// Shared installation identity, independent of analytics collection. Keep the
+/// existing Insights storage directory so enabling hosting preserves old IDs.
+pub const InstallationConfig = struct {
+    /// Optional cloud app ID used to migrate an existing Insights identity.
+    appId: ?[]const u8 = null,
+    storagePath: []const u8,
+};
+
+fn installationConfigurationJson(
+    allocator: std.mem.Allocator,
+    build_json: []const u8,
+    version_json: []const u8,
+    storage_path: []const u8,
+) !?[]u8 {
+    const Settings = struct { appId: []const u8 };
+    const Build = struct { insights: ?Settings = null, managed: ?Settings = null };
+    const Version = struct { managed: ?Settings = null };
+    const build = try std.json.parseFromSlice(Build, allocator, build_json, .{ .ignore_unknown_fields = true });
+    defer build.deinit();
+    const version = try std.json.parseFromSlice(Version, allocator, version_json, .{ .ignore_unknown_fields = true });
+    defer version.deinit();
+    var app_id: ?[]const u8 = null;
+    for ([_]?Settings{ build.value.insights, build.value.managed, version.value.managed }) |settings| {
+        if (settings) |value| {
+            if (value.appId.len == 0) return error.InvalidInstallationConfiguration;
+            if (app_id) |existing| {
+                if (!std.mem.eql(u8, existing, value.appId)) return error.InstallationAppMismatch;
+            } else app_id = value.appId;
+        }
+    }
+    return try std.json.Stringify.valueAlloc(allocator, InstallationConfig{
+        .appId = app_id,
+        .storagePath = storage_path,
+    }, .{ .emit_null_optional_fields = false });
+}
+
+/// Configuration for the shared native Electrobun Insights client. Normal apps
+/// receive this automatically from their bundled build.json and version.json.
+pub const InsightsConfig = struct {
+    appId: []const u8,
+    /// Optional override for local development or staging.
+    apiUrl: []const u8 = "https://api.electrobun.dev",
+    storagePath: []const u8,
+    /// Initial collection preference; false unless explicitly enabled.
+    enabled: bool = false,
+    version: []const u8 = "0.0.0",
+    buildHash: []const u8 = "",
+    channel: []const u8 = "dev",
+    distribution: []const u8 = "direct",
+    updateAuthority: []const u8 = "direct",
+    platform: []const u8 = switch (builtin.os.tag) {
+        .macos => "macos",
+        .windows => "win",
+        else => "linux",
+    },
+    arch: []const u8 = switch (builtin.cpu.arch) {
+        .aarch64 => "arm64",
+        .x86_64 => "x64",
+        else => @tagName(builtin.cpu.arch),
+    },
+};
+
+fn insightsConfigurationJson(
+    allocator: std.mem.Allocator,
+    build_json: []const u8,
+    version_json: []const u8,
+    storage_path: []const u8,
+) !?[]u8 {
+    const Settings = struct {
+        appId: []const u8,
+        apiUrl: []const u8 = "https://api.electrobun.dev",
+        enabled: ?bool = null,
+    };
+    const Build = struct {
+        insights: ?Settings = null,
+        updateAuthority: ?[]const u8 = null,
+        distribution: ?[]const u8 = null,
+    };
+    const Version = struct {
+        version: []const u8 = "0.0.0",
+        hash: []const u8 = "",
+        channel: []const u8 = "dev",
+        updateAuthority: ?[]const u8 = null,
+        distribution: ?[]const u8 = null,
+    };
+    const build = try std.json.parseFromSlice(Build, allocator, build_json, .{ .ignore_unknown_fields = true });
+    defer build.deinit();
+    const settings = build.value.insights orelse return null;
+    if (settings.appId.len == 0 or settings.apiUrl.len == 0) return null;
+    const version = try std.json.parseFromSlice(Version, allocator, version_json, .{ .ignore_unknown_fields = true });
+    defer version.deinit();
+    return try std.json.Stringify.valueAlloc(allocator, InsightsConfig{
+        .appId = settings.appId,
+        .apiUrl = settings.apiUrl,
+        .storagePath = storage_path,
+        .enabled = settings.enabled orelse false,
+        .version = version.value.version,
+        .buildHash = version.value.hash,
+        .channel = version.value.channel,
+        .distribution = version.value.distribution orelse build.value.distribution orelse "direct",
+        .updateAuthority = version.value.updateAuthority orelse build.value.updateAuthority orelse "direct",
+    }, .{});
+}
+
 pub const Core = struct {
     allocator: std.mem.Allocator,
     lib: DynamicLibrary,
@@ -868,6 +972,14 @@ pub const Core = struct {
     const SendHostMessageToWebviewViaTransportFn = *const fn (u32, [*:0]const u8) callconv(.c) bool;
     const PopNextQueuedHostMessageFn = *const fn (*u32) callconv(.c) ?[*:0]u8;
     const FreeCoreStringFn = *const fn (?[*:0]u8) callconv(.c) void;
+    const InstallationConfigureFn = *const fn ([*:0]const u8) callconv(.c) bool;
+    const GetInstallationIdFn = *const fn () callconv(.c) ?[*:0]u8;
+    const InsightsConfigureFn = *const fn ([*:0]const u8) callconv(.c) bool;
+    const InsightsTrackFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.c) bool;
+    const InsightsIdentifyFn = *const fn (?[*:0]const u8) callconv(.c) void;
+    const InsightsVoidFn = *const fn () callconv(.c) void;
+    const InsightsSetEnabledFn = *const fn (bool) callconv(.c) void;
+    const InsightsGetInstallationIdFn = *const fn () callconv(.c) ?[*:0]u8;
     const WebviewOpenDevToolsFn = *const fn (u32) callconv(.c) void;
     const WebviewCloseDevToolsFn = *const fn (u32) callconv(.c) void;
     const WebviewToggleDevToolsFn = *const fn (u32) callconv(.c) void;
@@ -990,6 +1102,16 @@ pub const Core = struct {
         send_host_message_to_webview_via_transport: SendHostMessageToWebviewViaTransportFn,
         pop_next_queued_host_message: PopNextQueuedHostMessageFn,
         free_core_string: FreeCoreStringFn,
+        installation_configure: ?InstallationConfigureFn = null,
+        get_installation_id: ?GetInstallationIdFn = null,
+        insights_configure: ?InsightsConfigureFn = null,
+        insights_track: ?InsightsTrackFn = null,
+        insights_identify: ?InsightsIdentifyFn = null,
+        insights_reset: ?InsightsVoidFn = null,
+        insights_set_enabled: ?InsightsSetEnabledFn = null,
+        insights_get_installation_id: ?InsightsGetInstallationIdFn = null,
+        insights_flush: ?InsightsVoidFn = null,
+        insights_shutdown: ?InsightsVoidFn = null,
         webview_open_devtools: WebviewOpenDevToolsFn,
         webview_close_devtools: WebviewCloseDevToolsFn,
         webview_toggle_devtools: WebviewToggleDevToolsFn,
@@ -1131,6 +1253,16 @@ pub const Core = struct {
                 .send_host_message_to_webview_via_transport = lib.lookup(SendHostMessageToWebviewViaTransportFn, "sendHostMessageToWebviewViaTransport") orelse return error.MissingCoreSymbol,
                 .pop_next_queued_host_message = lib.lookup(PopNextQueuedHostMessageFn, "popNextQueuedHostMessage") orelse return error.MissingCoreSymbol,
                 .free_core_string = lib.lookup(FreeCoreStringFn, "freeCoreString") orelse return error.MissingCoreSymbol,
+                .installation_configure = lib.lookup(InstallationConfigureFn, "installationConfigure"),
+                .get_installation_id = lib.lookup(GetInstallationIdFn, "getInstallationId"),
+                .insights_configure = lib.lookup(InsightsConfigureFn, "insightsConfigure"),
+                .insights_track = lib.lookup(InsightsTrackFn, "insightsTrack"),
+                .insights_identify = lib.lookup(InsightsIdentifyFn, "insightsIdentify"),
+                .insights_reset = lib.lookup(InsightsVoidFn, "insightsReset"),
+                .insights_set_enabled = lib.lookup(InsightsSetEnabledFn, "insightsSetEnabled"),
+                .insights_get_installation_id = lib.lookup(InsightsGetInstallationIdFn, "insightsGetInstallationId"),
+                .insights_flush = lib.lookup(InsightsVoidFn, "insightsFlush"),
+                .insights_shutdown = lib.lookup(InsightsVoidFn, "insightsShutdown"),
                 .webview_open_devtools = lib.lookup(WebviewOpenDevToolsFn, "webviewOpenDevTools") orelse return error.MissingCoreSymbol,
                 .webview_close_devtools = lib.lookup(WebviewCloseDevToolsFn, "webviewCloseDevTools") orelse return error.MissingCoreSymbol,
                 .webview_toggle_devtools = lib.lookup(WebviewToggleDevToolsFn, "webviewToggleDevTools") orelse return error.MissingCoreSymbol,
@@ -1208,10 +1340,16 @@ pub const Core = struct {
         quit_requested_user_handler = null;
         core.symbols.set_quit_requested_handler(quitRequestedTrampoline);
 
+        // Identity performs local work even for hosting-only apps. Insights is
+        // configured separately and remains off unless explicitly enabled.
+        // Neither service configuration changes whether the app can start.
+        core.configureCloudServicesFromBundle(&bundle_paths) catch {};
+
         return core;
     }
 
     pub fn close(self: *Core) void {
+        self.insightsShutdown();
         // Drop the core's pointer to our trampoline before unloading the
         // library so a late quit request can't jump into freed code.
         self.symbols.set_quit_requested_handler(null);
@@ -1778,6 +1916,137 @@ pub const Core = struct {
 
     pub fn freeCoreString(self: *Core, value: ?[*:0]u8) void {
         self.symbols.free_core_string(value);
+    }
+
+    fn configureCloudServicesFromBundle(self: *Core, bundle_paths: *const BundlePaths) !void {
+        if (self.symbols.installation_configure == null and self.symbols.insights_configure == null) return;
+        const build_path = try std.fs.path.join(self.allocator, &.{ bundle_paths.resources_dir, "build.json" });
+        defer self.allocator.free(build_path);
+        const build_json = try readFileAlloc(self.allocator, build_path);
+        defer self.allocator.free(build_json);
+        const version_path = try std.fs.path.join(self.allocator, &.{ bundle_paths.resources_dir, "version.json" });
+        defer self.allocator.free(version_path);
+        const version_json = try readFileAlloc(self.allocator, version_path);
+        defer self.allocator.free(version_json);
+        const app_info = try resolveAppInfoFromBundle(self.allocator, bundle_paths);
+        defer app_info.deinit(self.allocator);
+        const paths = try Paths.resolve(self.allocator, app_info.borrowed());
+        defer paths.deinit(self.allocator);
+        const storage_path = try std.fs.path.join(self.allocator, &.{ paths.userData, "insights" });
+        defer self.allocator.free(storage_path);
+        if (try installationConfigurationJson(self.allocator, build_json, version_json, storage_path)) |configuration| {
+            defer self.allocator.free(configuration);
+            if (self.symbols.installation_configure != null and !try self.installationConfigureJson(configuration)) return error.InvalidInstallationConfiguration;
+        }
+        const configuration = (try insightsConfigurationJson(self.allocator, build_json, version_json, storage_path)) orelse return;
+        defer self.allocator.free(configuration);
+        _ = try self.insightsConfigureJson(configuration);
+    }
+
+    /// Loads the core-owned local installation identity without starting Insights.
+    /// Bundled apps configure this automatically, including apps without hosting
+    /// or Insights. appId is only a migration hint for a prior Insights identity.
+    pub fn installationConfigure(self: *Core, config: InstallationConfig) !bool {
+        if (self.symbols.installation_configure == null) return false;
+        const json = try std.json.Stringify.valueAlloc(self.allocator, config, .{ .emit_null_optional_fields = false });
+        defer self.allocator.free(json);
+        return self.installationConfigureJson(json);
+    }
+
+    pub fn installationConfigureJson(self: *Core, config_json: []const u8) !bool {
+        const configure = self.symbols.installation_configure orelse return false;
+        if (std.mem.indexOfScalar(u8, config_json, 0) != null) return false;
+        const json_z = try self.dupeZ(config_json);
+        defer self.allocator.free(json_z);
+        return configure(json_z.ptr);
+    }
+
+    /// Returns the shared app-install ID without enabling analytics collection.
+    /// The caller owns the copy and frees it with this core's allocator.
+    /// Null means this core lacks identity support or no identity was configured.
+    pub fn getInstallationId(self: *Core) !?[]u8 {
+        const get_id = self.symbols.get_installation_id orelse return null;
+        const id = get_id() orelse return null;
+        defer self.freeCoreString(id);
+        return try self.allocator.dupe(u8, std.mem.span(id));
+    }
+
+    /// Starts the native Insights worker; performs no network request here.
+    /// Returns false when this core does not support Insights or rejects config.
+    pub fn insightsConfigure(self: *Core, config: InsightsConfig) !bool {
+        if (self.symbols.insights_configure == null) return false;
+        const json = try std.json.Stringify.valueAlloc(self.allocator, config, .{});
+        defer self.allocator.free(json);
+        return self.insightsConfigureJson(json);
+    }
+
+    pub fn insightsConfigureJson(self: *Core, config_json: []const u8) !bool {
+        const configure = self.symbols.insights_configure orelse return false;
+        if (std.mem.indexOfScalar(u8, config_json, 0) != null) return false;
+        const json_z = try self.dupeZ(config_json);
+        defer self.allocator.free(json_z);
+        return configure(json_z.ptr);
+    }
+
+    /// Adds a custom event to the bounded native queue. Use .{} for no properties.
+    /// A true result means queued locally, not delivered to the server.
+    pub fn insightsTrack(self: *Core, name: []const u8, properties: anytype) !bool {
+        if (self.symbols.insights_track == null) return false;
+        const json = try std.json.Stringify.valueAlloc(self.allocator, properties, .{});
+        defer self.allocator.free(json);
+        return self.insightsTrackJson(name, json);
+    }
+
+    pub fn insightsTrackJson(self: *Core, name: []const u8, properties_json: []const u8) !bool {
+        const track = self.symbols.insights_track orelse return false;
+        if (std.mem.indexOfScalar(u8, name, 0) != null or std.mem.indexOfScalar(u8, properties_json, 0) != null) return false;
+        const name_z = try self.dupeZ(name);
+        defer self.allocator.free(name_z);
+        const properties_z = try self.dupeZ(properties_json);
+        defer self.allocator.free(properties_z);
+        return track(name_z.ptr, properties_z.ptr);
+    }
+
+    /// Associates only future custom events with an opaque application user ID.
+    /// Passing null clears that association without rewriting queued events.
+    /// Neither operation changes the app session or its duration.
+    pub fn insightsIdentify(self: *Core, user_id: ?[]const u8) !void {
+        const identify = self.symbols.insights_identify orelse return;
+        const value = user_id orelse {
+            identify(null);
+            return;
+        };
+        if (std.mem.indexOfScalar(u8, value, 0) != null) return error.InvalidUserId;
+        const value_z = try self.dupeZ(value);
+        defer self.allocator.free(value_z);
+        identify(value_z.ptr);
+    }
+
+    /// Clears the user association; the random installation ID is preserved.
+    pub fn insightsReset(self: *Core) void {
+        if (self.symbols.insights_reset) |reset| reset();
+    }
+
+    pub fn insightsSetEnabled(self: *Core, enabled: bool) void {
+        if (self.symbols.insights_set_enabled) |set_enabled| set_enabled(enabled);
+    }
+
+    /// The caller owns the returned copy and frees it with this core's allocator.
+    pub fn insightsGetInstallationId(self: *Core) !?[]u8 {
+        const get_id = self.symbols.insights_get_installation_id orelse return null;
+        const id = get_id() orelse return null;
+        defer self.freeCoreString(id);
+        return try self.allocator.dupe(u8, std.mem.span(id));
+    }
+
+    /// Requests a background retry without waiting for network availability.
+    pub fn insightsFlush(self: *Core) void {
+        if (self.symbols.insights_flush) |flush| flush();
+    }
+
+    /// Stops the worker and persists pending events before native-library unload.
+    pub fn insightsShutdown(self: *Core) void {
+        if (self.symbols.insights_shutdown) |shutdown| shutdown();
     }
 
     pub fn sendInternalMessageToWebview(self: *Core, webview_id: u32, message: anytype) !void {
@@ -2493,4 +2762,227 @@ test "build config controls quitting on last window close" {
         allocator,
         "{\"runtime\":{\"exitOnLastWindowClosed\":\"false\"}}",
     ));
+}
+
+test "shared installation configuration supports hosting without Insights" {
+    const allocator = std.testing.allocator;
+    const local_configuration = (try installationConfigurationJson(allocator, "{}", "{}", "/profile/insights")).?;
+    defer allocator.free(local_configuration);
+    try std.testing.expectEqualStrings("{\"storagePath\":\"/profile/insights\"}", local_configuration);
+    const cases = [_]struct { build: []const u8, version: []const u8 }{
+        .{ .build = "{}", .version = "{\"managed\":{\"appId\":\"app_1\"}}" },
+        .{ .build = "{\"insights\":{\"appId\":\"app_1\",\"enabled\":false}}", .version = "{}" },
+        .{ .build = "{\"insights\":{\"appId\":\"app_1\"}}", .version = "{\"managed\":{\"appId\":\"app_1\"}}" },
+        .{ .build = "{\"managed\":{\"appId\":\"app_1\"}}", .version = "{}" },
+    };
+    for (cases) |case| {
+        const configuration = (try installationConfigurationJson(allocator, case.build, case.version, "/profile/insights")).?;
+        defer allocator.free(configuration);
+        const parsed = try std.json.parseFromSlice(InstallationConfig, allocator, configuration, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings("app_1", parsed.value.appId.?);
+        try std.testing.expectEqualStrings("/profile/insights", parsed.value.storagePath);
+    }
+    try std.testing.expectError(error.InstallationAppMismatch, installationConfigurationJson(allocator, "{\"insights\":{\"appId\":\"app_1\"}}", "{\"managed\":{\"appId\":\"another_app\"}}", "/profile/insights"));
+    try std.testing.expectError(error.InstallationAppMismatch, installationConfigurationJson(allocator, "{\"managed\":{\"appId\":\"app_1\"}}", "{\"managed\":{\"appId\":\"another_app\"}}", "/profile/insights"));
+    try std.testing.expectError(error.InvalidInstallationConfiguration, installationConfigurationJson(allocator, "{}", "{\"managed\":{\"appId\":\"\"}}", "/profile/insights"));
+}
+
+test "shared identity bindings preserve ownership without invoking Insights" {
+    const Native = struct {
+        var configured = false;
+        var free_count: usize = 0;
+        var installation_id: [32:0]u8 = "1234567890abcdef1234567890abcdef".*;
+
+        fn configure(json: [*:0]const u8) callconv(.c) bool {
+            configured = std.mem.eql(u8, std.mem.span(json), "{\"appId\":\"app_1\",\"storagePath\":\"/profile/insights\"}") or
+                std.mem.eql(u8, std.mem.span(json), "{\"storagePath\":\"/profile/insights\"}");
+            return configured;
+        }
+
+        fn getId() callconv(.c) ?[*:0]u8 {
+            return if (configured) &installation_id else null;
+        }
+
+        fn free(value: ?[*:0]u8) callconv(.c) void {
+            if (value == &installation_id) free_count += 1;
+        }
+    };
+    Native.configured = false;
+    Native.free_count = 0;
+    var core: Core = undefined;
+    core.allocator = std.testing.allocator;
+    core.symbols.installation_configure = Native.configure;
+    core.symbols.get_installation_id = Native.getId;
+    core.symbols.free_core_string = Native.free;
+    try std.testing.expectEqual(@as(?[]u8, null), try core.getInstallationId());
+    try std.testing.expect(try core.installationConfigure(.{ .storagePath = "/profile/insights" }));
+    try std.testing.expect(try core.installationConfigure(.{ .appId = "app_1", .storagePath = "/profile/insights" }));
+    const id = (try core.getInstallationId()).?;
+    defer std.testing.allocator.free(id);
+    try std.testing.expectEqualStrings("1234567890abcdef1234567890abcdef", id);
+    try std.testing.expectEqual(@as(usize, 1), Native.free_count);
+    try std.testing.expect(!try core.installationConfigureJson("{}\x00ignored"));
+    core.symbols.installation_configure = null;
+    core.symbols.get_installation_id = null;
+    try std.testing.expect(!try core.installationConfigure(.{ .appId = "app_1", .storagePath = "/profile/insights" }));
+    try std.testing.expectEqual(@as(?[]u8, null), try core.getInstallationId());
+}
+
+test "Insights configuration is optional and every channel requires explicit enablement" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectEqual(@as(?[]u8, null), try insightsConfigurationJson(allocator, "{}", "{}", "/profile/insights"));
+    const cases = [_]struct { settings: []const u8, channel: []const u8, enabled: bool }{
+        .{ .settings = "", .channel = "dev", .enabled = false },
+        .{ .settings = ",\"enabled\":true", .channel = "dev", .enabled = true },
+        .{ .settings = ",\"enabled\":false", .channel = "dev", .enabled = false },
+        .{ .settings = "", .channel = "canary", .enabled = false },
+        .{ .settings = ",\"enabled\":true", .channel = "canary", .enabled = true },
+        .{ .settings = ",\"enabled\":false", .channel = "canary", .enabled = false },
+        .{ .settings = "", .channel = "stable", .enabled = false },
+        .{ .settings = ",\"enabled\":true", .channel = "stable", .enabled = true },
+        .{ .settings = ",\"enabled\":false", .channel = "stable", .enabled = false },
+    };
+    for (cases) |case| {
+        const build_json = try std.fmt.allocPrint(allocator, "{{\"insights\":{{\"appId\":\"app_1\",\"apiUrl\":\"https://cloud.example\"{s}}}}}", .{case.settings});
+        defer allocator.free(build_json);
+        const version_json = try std.fmt.allocPrint(allocator, "{{\"channel\":\"{s}\"}}", .{case.channel});
+        defer allocator.free(version_json);
+        const payload = (try insightsConfigurationJson(allocator, build_json, version_json, "/profile/insights")).?;
+        defer allocator.free(payload);
+        const parsed = try std.json.parseFromSlice(InsightsConfig, allocator, payload, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqual(case.enabled, parsed.value.enabled);
+        try std.testing.expectEqualStrings(case.channel, parsed.value.channel);
+    }
+}
+
+test "Insights retains build identity and is independent of update authority" {
+    const allocator = std.testing.allocator;
+    const payload = (try insightsConfigurationJson(
+        allocator,
+        "{\"insights\":{\"appId\":\"app_1\",\"apiUrl\":\"https://cloud.example/v1/electrobun\",\"enabled\":true},\"updateAuthority\":\"direct\"}",
+        "{\"version\":\"1.2.3\",\"hash\":\"build-456\",\"channel\":\"stable\",\"updateAuthority\":\"external\",\"distribution\":\"app-store\"}",
+        "/Users/example/Profile with spaces/insights",
+    )).?;
+    defer allocator.free(payload);
+    const parsed = try std.json.parseFromSlice(InsightsConfig, allocator, payload, .{});
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value.enabled);
+    try std.testing.expectEqualStrings("1.2.3", parsed.value.version);
+    try std.testing.expectEqualStrings("build-456", parsed.value.buildHash);
+    try std.testing.expectEqualStrings("external", parsed.value.updateAuthority);
+    try std.testing.expectEqualStrings("app-store", parsed.value.distribution);
+    try std.testing.expectEqualStrings("/Users/example/Profile with spaces/insights", parsed.value.storagePath);
+}
+
+test "Insights preserves the bundled managed custom origin without enabling collection" {
+    const allocator = std.testing.allocator;
+    // Hutch resolves the shared managed domain into insights.apiUrl. Keep the
+    // native ingestion origin intact while consuming the ordinary build data.
+    const payload = (try insightsConfigurationJson(
+        allocator,
+        "{\"insights\":{\"appId\":\"app_1\",\"apiUrl\":\"https://updates.example.test\"},\"managed\":{\"appId\":\"app_1\",\"baseUrl\":\"https://updates.example.test\"}}",
+        "{\"version\":\"1.5.0\",\"hash\":\"custom-build\",\"channel\":\"stable\",\"managed\":{\"appId\":\"app_1\",\"baseUrl\":\"https://updates.example.test\"}}",
+        "/profile/insights",
+    )).?;
+    defer allocator.free(payload);
+    const parsed = try std.json.parseFromSlice(InsightsConfig, allocator, payload, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("https://updates.example.test", parsed.value.apiUrl);
+    try std.testing.expectEqualStrings("app_1", parsed.value.appId);
+    try std.testing.expectEqualStrings("1.5.0", parsed.value.version);
+    try std.testing.expectEqualStrings("custom-build", parsed.value.buildHash);
+    try std.testing.expectEqualStrings("stable", parsed.value.channel);
+    try std.testing.expect(!parsed.value.enabled);
+}
+
+test "Insights configuration uses the hosted service without an API URL" {
+    const allocator = std.testing.allocator;
+    const payload = (try insightsConfigurationJson(
+        allocator,
+        "{\"insights\":{\"appId\":\"app_1\"}}",
+        "{\"version\":\"1.0.0\",\"hash\":\"build-1\",\"channel\":\"stable\"}",
+        "/profile/insights",
+    )).?;
+    defer allocator.free(payload);
+    const parsed = try std.json.parseFromSlice(InsightsConfig, allocator, payload, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("https://api.electrobun.dev", parsed.value.apiUrl);
+    try std.testing.expectEqualStrings("app_1", parsed.value.appId);
+    try std.testing.expect(!parsed.value.enabled);
+    const direct: InsightsConfig = .{ .appId = "app_1", .storagePath = "/profile/insights" };
+    try std.testing.expectEqualStrings(parsed.value.apiUrl, direct.apiUrl);
+    try std.testing.expect(!direct.enabled);
+}
+
+test "Insights calls safely decline when loading a core without Insights" {
+    var core: Core = undefined;
+    core.allocator = std.testing.allocator;
+    core.symbols.installation_configure = null;
+    core.symbols.get_installation_id = null;
+    core.symbols.insights_configure = null;
+    core.symbols.insights_track = null;
+    core.symbols.insights_identify = null;
+    core.symbols.insights_reset = null;
+    core.symbols.insights_set_enabled = null;
+    core.symbols.insights_get_installation_id = null;
+    core.symbols.insights_flush = null;
+    core.symbols.insights_shutdown = null;
+    var empty: [0]u8 = .{};
+    const bundle_paths = BundlePaths{ .exe_dir = &empty, .resources_dir = &empty };
+    try core.configureCloudServicesFromBundle(&bundle_paths);
+    try std.testing.expect(!try core.insightsConfigure(.{ .appId = "app", .apiUrl = "https://cloud.example", .storagePath = "/profile/insights" }));
+    try std.testing.expect(!try core.insightsTrack("event", .{}));
+    try core.insightsIdentify("opaque-user");
+    core.insightsReset();
+    core.insightsSetEnabled(true);
+    try std.testing.expectEqual(@as(?[]u8, null), try core.insightsGetInstallationId());
+    core.insightsFlush();
+    core.insightsShutdown();
+}
+
+test "Insights bindings preserve native arguments and string ownership" {
+    const Native = struct {
+        var event_received = false;
+        var user_cleared = false;
+        var free_count: usize = 0;
+        var installation_id: [12:0]u8 = "installation".*;
+
+        fn track(name: [*:0]const u8, properties: [*:0]const u8) callconv(.c) bool {
+            event_received = std.mem.eql(u8, std.mem.span(name), "document_open") and
+                std.mem.eql(u8, std.mem.span(properties), "{\"kind\":\"note\"}");
+            return event_received;
+        }
+
+        fn identify(user_id: ?[*:0]const u8) callconv(.c) void {
+            user_cleared = user_id == null;
+        }
+
+        fn getId() callconv(.c) ?[*:0]u8 {
+            return &installation_id;
+        }
+
+        fn free(value: ?[*:0]u8) callconv(.c) void {
+            if (value == &installation_id) free_count += 1;
+        }
+    };
+    Native.event_received = false;
+    Native.user_cleared = false;
+    Native.free_count = 0;
+    var core: Core = undefined;
+    core.allocator = std.testing.allocator;
+    core.symbols.insights_track = Native.track;
+    core.symbols.insights_identify = Native.identify;
+    core.symbols.insights_get_installation_id = Native.getId;
+    core.symbols.free_core_string = Native.free;
+    try std.testing.expect(try core.insightsTrack("document_open", .{ .kind = "note" }));
+    try std.testing.expect(Native.event_received);
+    try std.testing.expect(!try core.insightsTrack("document\x00ignored", .{}));
+    try core.insightsIdentify(null);
+    try std.testing.expect(Native.user_cleared);
+    const id = (try core.insightsGetInstallationId()).?;
+    defer std.testing.allocator.free(id);
+    try std.testing.expectEqualStrings("installation", id);
+    try std.testing.expectEqual(@as(usize, 1), Native.free_count);
 }

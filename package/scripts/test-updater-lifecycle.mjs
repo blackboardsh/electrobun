@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { systemTarBinary } from "./windows-tar.mjs";
 import { updaterLifecycleBuildTarget, updaterLifecycleHutchBinary } from "./updater-lifecycle-target.mjs";
 import { assertRecipeMatchesInstalled, readCompressedTarIdentity } from "./archive-recipe-test-utils.mjs";
+import { assertLifecycleInstallation, loadLifecycleHost } from "./updater-lifecycle-host.mjs";
 
 const FOCUSES = new Set(["build", "install", "update", "uninstall", "full"]);
 const INITIAL_VERSION = "1.0.0";
@@ -69,6 +70,8 @@ const patchRelaunchSentinelPath = join(signalDirectory, "v3-relaunched.json");
 const fallbackRelaunchSentinelPath = join(signalDirectory, "v4-relaunched.json");
 const updateActivationPath = join(signalDirectory, "activate-update");
 const bootstrapVerificationPath = join(signalDirectory, "verify-v2-bootstrap");
+const identityProbePath = join(signalDirectory, "probe-installation");
+const managedExitPath = join(signalDirectory, "finish-managed-launch");
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
 let hutchLauncher = updaterLifecycleHutchBinary();
 let hutchEngine = process.env.HUTCH_ENGINE_BINARY;
@@ -135,6 +138,8 @@ const completedUpdateResults = [];
 let cleanupManifest;
 const cleanupTransactionIds = new Set();
 let server;
+let lifecycleHost;
+let installationId;
 
 function parseFocus(args) {
 	let selected = process.env.ELECTROBUN_UPDATER_E2E_FOCUS || "full";
@@ -144,6 +149,7 @@ function parseFocus(args) {
 				"Usage: node scripts/test-updater-lifecycle.mjs [--focus=build|install|update|uninstall|full]\n" +
 					"Environment: ELECTROBUN_UPDATER_E2E_HUTCH=<launcher> selects a local Hutch launcher; " +
 					"HUTCH_ENGINE_BINARY=<engine> overrides its engine; " +
+					"ELECTROBUN_UPDATER_E2E_HOST_ADAPTER=<module> supplies a managed test host; " +
 					"ELECTROBUN_UPDATER_E2E_MIGRATION=0 disables the v1 manager/manifest compatibility simulation; " +
 					"ELECTROBUN_UPDATER_E2E_KEEP=1 preserves the isolated temporary root.",
 			);
@@ -462,6 +468,9 @@ function createFixtureProject(projectRoot, builtVersion) {
 		fallbackRelaunchSentinelPath,
 		updateActivationPath,
 		bootstrapVerificationPath,
+		identityProbePath,
+		managedExitPath,
+		managedServices: Boolean(lifecycleHost),
 	};
 	writeFileSync(
 		join(projectRoot, "src", "control.ts"),
@@ -480,6 +489,7 @@ function buildEnvironment(version, baseUrl) {
 		ELECTROBUN_UPDATER_E2E_IDENTIFIER: identifier,
 		ELECTROBUN_UPDATER_E2E_BASE_URL: baseUrl,
 		ELECTROBUN_SKIP_NOTARIZATION: "1",
+		...lifecycleHost?.buildEnvironment,
 	};
 	if (hutchEngine) environment.HUTCH_ENGINE_BINARY = hutchEngine;
 	return environment;
@@ -616,7 +626,7 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 	};
 }
 
-function publishRelease(release, options = {}) {
+async function publishRelease(release, options = {}) {
 	const includePatch = options.includePatch !== false;
 	mkdirSync(serverRoot, { recursive: true });
 	// Publish immutable payloads before the mutable target document. Deliberately
@@ -636,6 +646,7 @@ function publishRelease(release, options = {}) {
 	} else {
 		copyFileSync(release.updatePath, updatePath);
 	}
+	if (lifecycleHost) await lifecycleHost.publishRelease(release, options);
 }
 
 async function startReleaseServer() {
@@ -796,6 +807,39 @@ function launchInstalledApp(targetVersion) {
 		cwd: dirname(launcher),
 		env: profile.environment,
 	});
+}
+
+async function probeInstalledApp(release) {
+	const probeToken = randomBytes(8).toString("hex");
+	writeFileSync(identityProbePath, JSON.stringify({ runToken: token, probeToken }));
+	try {
+		launchInstalledApp();
+		const event = await waitFor("installed profile probe", () => recordedEvents().find(event =>
+			event.event === "installation-probed" && event.details?.probeToken === probeToken));
+		assert.equal(event.version, release.metadata.version, "probe must execute the installed release");
+		await waitFor("installed profile probe exit", () => {
+			try { process.kill(event.pid, 0); return false; }
+			catch (error) { if (error?.code === "ESRCH") return true; throw error; }
+		}, 30_000);
+		installationId = assertLifecycleInstallation(recordedEvents(), installationId);
+		return installationId;
+	} finally { rmSync(identityProbePath, { force: true }); }
+}
+
+async function finishManagedRelaunch(sentinelPath) {
+	const { pid } = readJson(sentinelPath);
+	writeFileSync(managedExitPath, JSON.stringify({ runToken: token, pid }));
+	try {
+		await waitFor("managed target app exit", () => {
+			try { process.kill(pid, 0); return false; }
+			catch (error) { if (error?.code === "ESRCH") return true; throw error; }
+		}, 30_000);
+	} finally { rmSync(managedExitPath, { force: true }); }
+}
+
+function lifecycleContext(release, extra = {}) {
+	return { installationId: assertLifecycleInstallation(recordedEvents(), installationId),
+		events: recordedEvents(), probe: () => probeInstalledApp(release), ...extra };
 }
 
 function resultFiles() {
@@ -1134,6 +1178,7 @@ async function bestEffortCleanup() {
 		server.closeAllConnections?.();
 		await new Promise((resolvePromise) => server.close(resolvePromise));
 	}
+	if (lifecycleHost) await lifecycleHost.dispose();
 	if (!keepTemporary) {
 		assertWithin(temporaryBase, temporaryRoot, "temporary cleanup root");
 		await removeTreeWithRetry(temporaryRoot);
@@ -1598,19 +1643,24 @@ async function main() {
 	console.log(`[updater-e2e] devkit target=${fixtureTarget.os}-${fixtureTarget.arch}; runner=${process.arch}`);
 	console.log(`[updater-e2e] isolated root=${temporaryRoot}`);
 	await prepareHutch();
-	const baseUrl = await startReleaseServer();
+	lifecycleHost = await loadLifecycleHost(process.env.ELECTROBUN_UPDATER_E2E_HOST_ADAPTER, {
+		identifier, appName, channel: CHANNEL, temporaryRoot,
+		target: { os: platform.updatePlatform, arch: platform.updateArch },
+		recordRequest: entry => requests.push(entry),
+	});
+	const baseUrl = lifecycleHost?.baseUrl ?? await startReleaseServer();
 	const v1 = await buildRelease(INITIAL_VERSION, baseUrl, "v1");
 	let v2;
 	let v3;
 	if (focus === "build" || focus === "update" || focus === "full") {
-		publishRelease(v1);
+		await publishRelease(v1);
 		v2 = await buildRelease(INTERMEDIATE_VERSION, baseUrl, "v2", v1);
 		assert.notEqual(v1.metadata.hash, v2.metadata.hash, "v1 and v2 produced the same hash");
-		publishRelease(v2);
+		await publishRelease(v2);
 		v3 = await buildRelease(PATCH_TARGET_VERSION, baseUrl, "v3", v2);
 		assert.notEqual(v2.metadata.hash, v3.metadata.hash, "v2 and v3 produced the same hash");
 		assert.notEqual(v1.metadata.hash, v3.metadata.hash, "v1 and v3 produced the same hash");
-		publishRelease(v3);
+		await publishRelease(v3);
 		// A server may still hold this obsolete URL from an earlier publication.
 		// The current updater must ignore it even when it describes an old build.
 		writeFileSync(
@@ -1628,7 +1678,7 @@ async function main() {
 	if (focus === "build") {
 		const v4 = await buildRelease(FALLBACK_TARGET_VERSION, baseUrl, "v4", v3);
 		assert.notEqual(v3.metadata.hash, v4.metadata.hash, "v3 and v4 produced the same hash");
-		publishRelease(v4, { includePatch: false, includeIntegrity: false });
+		await publishRelease(v4, { includePatch: false, includeIntegrity: false });
 		assert.equal(
 			pathExists(join(serverRoot, basename(v4.patchPath))),
 			false,
@@ -1638,9 +1688,15 @@ async function main() {
 	}
 
 	await installInitialRelease(v1);
+	if (lifecycleHost) {
+		await probeInstalledApp(v1);
+		await lifecycleHost.afterInstall?.(lifecycleContext(v1, { release: v1 }));
+	}
 	if (focus === "install") return;
 	if (focus === "uninstall") {
+		if (lifecycleHost) await lifecycleHost.beforeUninstall?.(lifecycleContext(v1));
 		await uninstallAndVerify();
+		if (lifecycleHost) await lifecycleHost.afterUninstall?.(lifecycleContext(v1));
 		return;
 	}
 
@@ -1663,6 +1719,10 @@ async function main() {
 		eventStart: firstEventStart,
 		previousResultPaths: firstPriorResults,
 	});
+	if (lifecycleHost) {
+		try { await lifecycleHost.afterUpdate?.(lifecycleContext(v3, { fromRelease: v1, toRelease: v3 })); }
+		finally { await finishManagedRelaunch(patchRelaunchSentinelPath); }
+	}
 	await verifyFirstPostV1LaunchBootstrap(v3);
 
 	const v4 = await buildRelease(FALLBACK_TARGET_VERSION, baseUrl, "v4", v3);
@@ -1671,7 +1731,7 @@ async function main() {
 	assert.notEqual(v1.metadata.hash, v4.metadata.hash, "v1 and v4 produced the same hash");
 	// Build inspection validates the new integrity fields. Omit them only from
 	// this served document to exercise an older producer at the same update URL.
-	publishRelease(v4, { includePatch: false, includeIntegrity: false });
+	await publishRelease(v4, { includePatch: false, includeIntegrity: false });
 	assert.deepEqual(
 		readJson(join(serverRoot, basename(v4.updatePath))).artifact,
 		{ file: v4.metadata.artifact.file },
@@ -1707,8 +1767,14 @@ async function main() {
 		eventStart: secondEventStart,
 		previousResultPaths: secondPriorResults,
 	});
+	if (lifecycleHost) {
+		try { await lifecycleHost.afterUpdate?.(lifecycleContext(v4, { fromRelease: v3, toRelease: v4 })); }
+		finally { await finishManagedRelaunch(fallbackRelaunchSentinelPath); }
+	}
 	if (focus === "update") return;
+	if (lifecycleHost) await lifecycleHost.beforeUninstall?.(lifecycleContext(v4));
 	await uninstallAndVerify();
+	if (lifecycleHost) await lifecycleHost.afterUninstall?.(lifecycleContext(v4));
 }
 
 let failure;

@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const synchronization = @import("synchronization.zig");
+const insights = @import("insights.zig");
+const installation_identity = @import("installation_identity.zig");
 
 const allocator = std.heap.c_allocator;
 const install_root_name_environment_variable = "ELECTROBUN_INSTALL_ROOT_NAME";
@@ -782,6 +784,178 @@ export fn freeCoreString(value: ?[*:0]u8) void {
     if (value) |ptr_value| {
         const slice = std.mem.sliceTo(ptr_value, 0);
         allocator.free(@constCast(slice));
+    }
+}
+
+// The app installation exists independently of collection. Managed updates can
+// load it without configuring Insights, starting a session, or creating a queue.
+var installation_mutex: synchronization.Mutex = .init;
+var installation_id: ?[32]u8 = null;
+var installation_scope: ?[32]u8 = null;
+
+fn configureInstallation(options: installation_identity.Options) bool {
+    installation_identity.validate(options) catch return false;
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    hash.update(options.storagePath);
+    var scope: [32]u8 = undefined;
+    hash.final(&scope);
+    installation_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer installation_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (installation_scope) |existing| return std.mem.eql(u8, &existing, &scope);
+    const id = installation_identity.loadOrCreate(allocator, coreIo(), options) catch return false;
+    installation_id = id;
+    installation_scope = scope;
+    return true;
+}
+
+export fn installationConfigure(json: [*:0]const u8) bool {
+    const options = std.json.parseFromSlice(installation_identity.Options, allocator, std.mem.span(json), .{ .ignore_unknown_fields = true }) catch return false;
+    defer options.deinit();
+    return configureInstallation(options.value);
+}
+
+/// Caller releases the returned copy with freeCoreString.
+export fn getInstallationId() ?[*:0]u8 {
+    installation_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer installation_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const id = installation_id orelse return null;
+    return (allocator.dupeSentinel(u8, &id, 0) catch return null).ptr;
+}
+
+test "shared installation ABI works without Insights and survives reporter shutdown" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const a = std.testing.allocator;
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", a);
+    defer a.free(path);
+    installation_id = null;
+    installation_scope = null;
+    defer {
+        insightsShutdown();
+        installation_id = null;
+        installation_scope = null;
+    }
+    try std.testing.expect(getInstallationId() == null);
+    try std.testing.expect(configureInstallation(.{ .storagePath = path }));
+    try std.testing.expect(insights_reporter == null);
+    try std.testing.expect(insightsGetInstallationId() == null);
+    const local = getInstallationId().?;
+    defer freeCoreString(local);
+    try std.testing.expect(installation_identity.validId(std.mem.span(local)));
+    const json = try std.json.Stringify.valueAlloc(a, insights.Options{
+        .appId = "managed-app",
+        .storagePath = path,
+        .version = "1.0.0",
+        .buildHash = "abc123",
+        .channel = "stable",
+        .enabled = false,
+    }, .{});
+    defer a.free(json);
+    const json_z = try a.dupeSentinel(u8, json, 0);
+    defer a.free(json_z);
+    try std.testing.expect(insightsConfigure(json_z.ptr));
+    const reporter_id = insightsGetInstallationId().?;
+    defer freeCoreString(reporter_id);
+    try std.testing.expectEqualStrings(std.mem.span(local), std.mem.span(reporter_id));
+    try std.testing.expect(!insights_reporter.?.enabled);
+    try std.testing.expect(!insights_reporter.?.session_active);
+    insightsShutdown();
+    const after = getInstallationId().?;
+    defer freeCoreString(after);
+    try std.testing.expectEqualStrings(std.mem.span(local), std.mem.span(after));
+    try std.testing.expect(insightsGetInstallationId() == null);
+}
+
+// One independent reporter per application process. SDK shutdown joins its
+// worker before unloading the core library. No update API is involved.
+var insights_mutex: synchronization.Mutex = .init;
+var insights_reporter: ?*insights.Reporter = null;
+var insights_io: ?*std.Io.Threaded = null;
+
+export fn insightsConfigure(json: [*:0]const u8) bool {
+    const options = std.json.parseFromSlice(insights.Options, allocator, std.mem.span(json), .{ .ignore_unknown_fields = true }) catch return false;
+    defer options.deinit();
+    if (!configureInstallation(.{ .appId = options.value.appId, .storagePath = options.value.storagePath })) return false;
+    insights_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer insights_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    // Repeated SDK setup must not rotate an active session.
+    if (insights_reporter != null) return true;
+    const threaded = allocator.create(std.Io.Threaded) catch return false;
+    threaded.* = std.Io.Threaded.init(allocator, .{});
+    const reporter = allocator.create(insights.Reporter) catch {
+        threaded.deinit();
+        allocator.destroy(threaded);
+        return false;
+    };
+    reporter.* = insights.Reporter.init(allocator, threaded.io(), options.value) catch {
+        allocator.destroy(reporter);
+        threaded.deinit();
+        allocator.destroy(threaded);
+        return false;
+    };
+    reporter.start() catch {
+        reporter.deinit();
+        allocator.destroy(reporter);
+        threaded.deinit();
+        allocator.destroy(threaded);
+        return false;
+    };
+    insights_io = threaded;
+    insights_reporter = reporter;
+    return true;
+}
+
+export fn insightsTrack(name: [*:0]const u8, properties_json: [*:0]const u8) bool {
+    insights_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer insights_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const reporter = insights_reporter orelse return false;
+    reporter.track(std.mem.span(name), std.mem.span(properties_json)) catch return false;
+    return true;
+}
+
+export fn insightsIdentify(user_id: ?[*:0]const u8) void {
+    insights_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer insights_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (insights_reporter) |reporter| reporter.identify(if (user_id) |id| std.mem.span(id) else null) catch {};
+}
+
+export fn insightsReset() void {
+    insightsIdentify(null);
+}
+
+export fn insightsSetEnabled(enabled: bool) void {
+    insights_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer insights_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (insights_reporter) |reporter| reporter.setEnabled(enabled);
+}
+
+export fn insightsGetInstallationId() ?[*:0]u8 {
+    insights_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer insights_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const reporter = insights_reporter orelse return null;
+    return (reporter.installationId(allocator) catch return null).ptr;
+}
+
+export fn insightsFlush() void {
+    insights_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer insights_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (insights_reporter) |reporter| reporter.flush();
+}
+
+export fn insightsShutdown() void {
+    insights_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer insights_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (insights_reporter) |reporter| {
+        reporter.deinit();
+        allocator.destroy(reporter);
+        insights_reporter = null;
+    }
+    // Telemetry is the only user of this pool. Joining it matters for native
+    // SDKs that unload the dynamic library immediately after shutdown.
+    if (insights_io) |threaded| {
+        threaded.deinit();
+        allocator.destroy(threaded);
+        insights_io = null;
     }
 }
 
@@ -2677,6 +2851,7 @@ export fn electrobun_core_run_main_thread(
         name,
         if (install_root_name) |value| value.ptr else channel,
     );
+    insightsShutdown();
     native_wrapper_state.force_exit(mainThreadExitCode(exit_code));
     return 0;
 }
@@ -4333,6 +4508,7 @@ export fn setExitOnLastWindowClosed(enabled: bool) void {
 }
 
 export fn quitGracefully(code: c_int, timeout_ms: c_int) void {
+    insightsShutdown();
     clearLastError();
     pending_graceful_exit_code.store(code, .release);
 
@@ -4372,6 +4548,7 @@ export fn waitForShutdownComplete(timeout_ms: c_int) void {
 }
 
 export fn forceExit(code: c_int) void {
+    insightsShutdown();
     clearLastError();
     if (!ensureNativeWrapperLoaded()) {
         return;

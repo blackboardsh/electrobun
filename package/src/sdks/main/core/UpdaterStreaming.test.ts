@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { Installation } from "./Installation";
 import {
 	existsSync,
 	mkdirSync,
@@ -32,8 +33,12 @@ import {
 const roots: string[] = [];
 const originalFetch = globalThis.fetch;
 const originalLocalInfo = Updater.getLocalInfo;
+const installationId = "0123456789abcdef0123456789abcdef";
+let installationSpy: ReturnType<typeof spyOn<typeof Installation, "getId">>;
+beforeEach(() => { installationSpy = spyOn(Installation, "getId").mockReturnValue(installationId); });
 
 afterEach(() => {
+	installationSpy.mockRestore();
 	globalThis.fetch = originalFetch;
 	Updater.getLocalInfo = originalLocalInfo;
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -144,6 +149,9 @@ describe("native streamed update preparation", () => {
 				}
 				expect(args).toEqual(["--prepare-update", f.requestPath, "--quiet"]);
 				const request = JSON.parse(readFileSync(f.requestPath, "utf8")) as NativePrepareUpdateRequest;
+				expect(request.base_url).toBe(info.baseUrl);
+				expect(request).not.toHaveProperty("download_base_url");
+				expect(request).not.toHaveProperty("installation_id");
 				expect(request.base_hash).toBe(info.hash);
 				expect(request.hash).toBe(manifest().hash);
 				expect(request.tar_sha256).toBe(manifest().artifact.tarSha256!);
@@ -167,6 +175,9 @@ describe("native streamed update preparation", () => {
 			manifest: legacy,
 			async execute() {
 				const request = JSON.parse(readFileSync(f.requestPath, "utf8")) as NativePrepareUpdateRequest;
+				expect(request.base_url).toBe(info.baseUrl);
+				expect(request).not.toHaveProperty("download_base_url");
+				expect(request).not.toHaveProperty("installation_id");
 				expect(request.hash).toBe(legacy.hash);
 				expect(request.artifact_file).toBe(legacy.artifact.file);
 				expect(request).not.toHaveProperty("tar_sha256");
@@ -176,6 +187,89 @@ describe("native streamed update preparation", () => {
 		});
 		expect(prepared).toEqual(f.staged);
 		expect(existsSync(f.requestPath)).toBe(false);
+	});
+
+	test("derives the same fixed managed folder for native preparation without a release ID", async () => {
+		const f = fixture();
+		const managed = { appId: "app_test", apiUrl: "https://updates.example.test" };
+		const downloadBaseUrl = "https://updates.example.test/v1/electrobun/apps/app_test/updates";
+		await prepareNativeUpdate({
+			...f.options,
+			info: { ...info, managed },
+			async execute() {
+				const request = JSON.parse(readFileSync(f.requestPath, "utf8")) as NativePrepareUpdateRequest;
+				expect(request.base_url).toBe(info.baseUrl);
+				expect(request.download_base_url).toBe(downloadBaseUrl);
+				expect(request.installation_id).toBe(installationId);
+				expect(request).not.toHaveProperty("release_id");
+				f.publish();
+			},
+		});
+	});
+
+	test("managed native preparation fails before spawning when installation identity is unavailable", async () => {
+		const f = fixture();
+		installationSpy.mockReturnValue(null);
+		let executed = false;
+		await expect(prepareNativeUpdate({ ...f.options,
+			info: { ...info, managed: { appId: "app_test", apiUrl: "https://updates.example.test" } },
+			async execute() { executed = true; },
+		})).rejects.toThrow("persisted installation ID");
+		expect(executed).toBe(false);
+		expect(existsSync(f.requestPath)).toBe(false);
+	});
+
+	test("native preparation uses the configured custom origin with the same installation ID", async () => {
+		const f = fixture();
+		const managed = { appId: "app_test", baseUrl: "https://updates.customer.test/" };
+		await prepareNativeUpdate({
+			...f.options,
+			info: { ...info, managed },
+			downloadBaseUrl: "https://updates.customer.test",
+			async execute() {
+				const request = JSON.parse(readFileSync(f.requestPath, "utf8")) as NativePrepareUpdateRequest;
+				expect(request.download_base_url).toBe("https://updates.customer.test");
+				expect(request.installation_id).toBe(installationId);
+				f.publish();
+			},
+		});
+	});
+
+	test("custom managed preparation cannot use the default API or another custom origin", async () => {
+		const f = fixture();
+		const managed = { appId: "app_test", baseUrl: "https://updates.customer.test" };
+		let executed = false;
+		for (const downloadBaseUrl of [
+			"https://api.electrobun.dev/v1/electrobun/apps/app_test/updates",
+			"https://updates.other.test",
+			"https://updates.customer.test/v1/electrobun/apps/app_test/updates",
+		]) {
+			await expect(prepareNativeUpdate({ ...f.options, info: { ...info, managed }, downloadBaseUrl,
+				async execute() { executed = true; },
+			})).rejects.toThrow("Download base URL must match");
+		}
+		expect(executed).toBe(false);
+	});
+
+	test("cannot switch native preparation to a release folder or another app or origin", async () => {
+		const f = fixture();
+		const managed = { appId: "app_test", apiUrl: "https://updates.example.test" };
+		let executed = false;
+		for (const downloadBaseUrl of [
+			"https://updates.example.test/v1/electrobun/apps/app_test/releases/release_test/artifacts",
+			"https://updates.example.test/v1/electrobun/apps/app_other/updates",
+			"https://other.example.test/v1/electrobun/apps/app_test/updates",
+			"https://updates.example.test/v1/electrobun/apps/app_test/updates?release=test",
+		]) {
+			await expect(prepareNativeUpdate({ ...f.options, info: { ...info, managed }, downloadBaseUrl,
+				async execute() { executed = true; },
+			})).rejects.toThrow("Download base URL must match");
+		}
+		await expect(prepareNativeUpdate({ ...f.options,
+			downloadBaseUrl: "https://updates.example.test/v1/electrobun/apps/app_test/updates",
+			async execute() { executed = true; },
+		})).rejects.toThrow("Download base URL must match");
+		expect(executed).toBe(false);
 	});
 
 	test("Windows preparation executes the copied exe and waits for exit before cleanup", async () => {

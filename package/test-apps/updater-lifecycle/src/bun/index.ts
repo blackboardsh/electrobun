@@ -7,7 +7,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { Updater, Utils, type UpdateStatusEntry } from "electrobun/bun";
+import { app, Insights, Updater, Utils, type UpdateStatusEntry } from "electrobun/bun";
 import { control } from "../control";
 
 type FixtureEvent = {
@@ -130,6 +130,30 @@ const run = async () => {
 		normalizePath(appDataFolder) === normalizePath(control.channelRoot) &&
 		normalizePath(runningAppBundlePath) ===
 			normalizePath(control.appBundlePath);
+	if (control.managedServices && scopedLaunch) {
+		const installationId = app.getInstallationId();
+		const insightsId = Insights.getInstallationId();
+		if (!installationId || installationId !== insightsId) {
+			throw new Error("Managed updates and Insights did not resolve the same installation ID");
+		}
+		appendEvent("installation-identity", localInfo.version, { installationId, insightsId });
+		if (!Insights.track("lifecycle.launched", { runToken: control.runToken, version: localInfo.version, hash: localInfo.hash })) {
+			throw new Error("The explicitly opted-in lifecycle custom event was rejected");
+		}
+		Insights.flush();
+		// Keep this short-lived fixture alive through the reporter's first wake.
+		// Final close events remain durable and are verified on the next launch.
+		await new Promise(resolve => setTimeout(resolve, 1500));
+	}
+	if (control.managedServices && existsSync(control.identityProbePath)) {
+		const probe = JSON.parse(readFileSync(control.identityProbePath, "utf8")) as { runToken?: string; probeToken?: string };
+		if (!scopedLaunch || probe.runToken !== control.runToken || typeof probe.probeToken !== "string") {
+			throw new Error("Installation identity probe did not use the isolated app profile");
+		}
+		appendEvent("installation-probed", localInfo.version, { probeToken: probe.probeToken });
+		Utils.quit(0);
+		return;
+	}
 	// Setup may relaunch v1 as part of installation. The harness activates the
 	// updater only after it has prepared the v1-compatible stable scope.
 	if (!existsSync(control.updateActivationPath)) {
@@ -270,6 +294,20 @@ const run = async () => {
 		appendEvent("target-relaunched", localInfo.version, {
 			hash: localInfo.hash,
 		});
+		if (control.managedServices) {
+			// The Cloud adapter verifies delivery while this real app is alive.
+			// Once acknowledged by the harness, use the ordinary quit path so
+			// the native core persists its final close/duration for the next open.
+			const deadline = Date.now() + 120_000;
+			for (;;) {
+				if (existsSync(control.managedExitPath)) {
+					const request = JSON.parse(readFileSync(control.managedExitPath, "utf8")) as { runToken?: string; pid?: number };
+					if (request.runToken === control.runToken && request.pid === process.pid) break;
+				}
+				if (Date.now() >= deadline) throw new Error("Managed lifecycle did not finish its app checks");
+				await new Promise(resolve => setTimeout(resolve, 100));
+			}
+		}
 		Utils.quit(0);
 		return;
 	}

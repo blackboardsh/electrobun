@@ -4573,24 +4573,21 @@ public:
     }
     
     void updateCustomPreloadScript(const char* jsString) override {
-        if (!jsString) return;
+        if (!jsString || !client) return;
         
         // Check if this is a views:// URL for a script file
         if (strncmp(jsString, "views://", 8) == 0) {
             // Read the script file using existing WebView2 logic
             std::string scriptContent = loadViewsFile(normalizeViewsRelativePath(jsString));
             if (!scriptContent.empty()) {
-                if (browser) {
-                    browser->GetMainFrame()->ExecuteJavaScript(scriptContent.c_str(), browser->GetMainFrame()->GetURL(), 0);
-                }
+                client->UpdateCustomPreloadScript(scriptContent);
             } else {
                 log(std::string("CEFView: Could not read preload script from: ") + std::string(jsString));
             }
         } else {
-            // Inline JavaScript
-            if (browser) {
-                browser->GetMainFrame()->ExecuteJavaScript(jsString, browser->GetMainFrame()->GetURL(), 0);
-            }
+            // Replacement applies to future documents through the same
+            // main-frame response filter as the initial custom preload.
+            client->UpdateCustomPreloadScript(std::string(jsString));
         }
     }
     

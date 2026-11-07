@@ -111,7 +111,9 @@ async function buildFixture(directory, runtimeArch) {
   assert.ok(existsSync(zig), "Install the repository Zig toolchain or set ZIG_BINARY");
   const source = join(directory, "core.zig");
   await writeFile(source, await readFile(join(packageRoot, "src", "core", "main.zig"), "utf8") + nativeFixture);
-  await writeFile(join(directory, "synchronization.zig"), await readFile(join(packageRoot, "src", "core", "synchronization.zig")));
+  for (const dependency of ["synchronization.zig", "insights.zig", "insights_spool.zig", "installation_identity.zig"]) {
+    await writeFile(join(directory, dependency), await readFile(join(packageRoot, "src", "core", dependency)));
+  }
   const extension = process.platform === "darwin" ? "dylib" : process.platform === "win32" ? "dll" : "so";
   const library = join(directory, `libCoreTransportTest.${extension}`);
   // Both the compiler and this Node harness can differ from the executable

@@ -112,6 +112,34 @@ AppInfo :: struct {
 	channel:    string,
 }
 
+// Shared local identity for managed updates and Insights. Configuring identity
+// does not start analytics collection or make network requests.
+InstallationConfig :: struct {
+	// Optional migration hint for an ID created by an older Insights build.
+	appId:       string `json:"appId,omitempty"`,
+	storagePath: string,
+}
+
+// Electrobun Insights runs in the native core. Configure it manually when a
+// custom profile location is needed; packaged apps read build.json at load.
+DEFAULT_INSIGHTS_API_URL :: "https://api.electrobun.dev"
+
+InsightsConfig :: struct {
+	appId:          string,
+	// Empty uses Electrobun Insights. Override only for local or staging services.
+	apiUrl:         string,
+	// Collection is disabled unless explicitly enabled, on every build channel.
+	enabled:        bool,
+	storagePath:    string,
+	version:        string,
+	buildHash:      string,
+	channel:        string,
+	distribution:   string,
+	updateAuthority: string,
+	platform:       string,
+	arch:           string,
+}
+
 OwnedAppInfo :: struct {
 	identifier: string,
 	name:       string,
@@ -875,6 +903,7 @@ ShowMessageBoxFn :: proc "c" (cstring, cstring, cstring, cstring, cstring, c.int
 SetGlobalShortcutCallbackFn :: proc "c" (GlobalShortcutHandler)
 SessionGetCookiesFn :: proc "c" (cstring, cstring) -> cstring
 SessionSetCookieFn :: proc "c" (cstring, cstring) -> bool
+InsightsTrackFn :: proc "c" (cstring, cstring) -> bool
 SessionRemoveCookieFn :: proc "c" (cstring, cstring, cstring) -> bool
 SetURLOpenHandlerFn :: proc "c" (URLOpenHandler)
 SetAppReopenHandlerFn :: proc "c" (AppReopenHandler)
@@ -944,6 +973,16 @@ Symbols :: struct {
 	sendHostMessageToWebviewViaTransport:   SendMessageToWebviewFn,
 	popNextQueuedHostMessage:               PopNextQueuedHostMessageFn,
 	freeCoreString:                         FreeCoreStringFn,
+	installationConfigure:                CstringToBoolFn,
+	getInstallationId:                    GetCstringFn,
+	insightsConfigure:                     CstringToBoolFn,
+	insightsTrack:                         InsightsTrackFn,
+	insightsIdentify:                      CstringVoidFn,
+	insightsReset:                         VoidFn,
+	insightsSetEnabled:                    SetBoolFn,
+	insightsGetInstallationId:             GetCstringFn,
+	insightsFlush:                         VoidFn,
+	insightsShutdown:                      VoidFn,
 	webviewOpenDevTools:                    WindowIdFn,
 	webviewCloseDevTools:                   WindowIdFn,
 	webviewToggleDevTools:                  WindowIdFn,
@@ -1049,11 +1088,14 @@ coreLoad :: proc(allocator := context.allocator) -> (core: Core, err: Error) {
 	g_quit_requested_stop_event_loop = core.symbols.stopEventLoop
 	g_quit_requested_user_handler = nil
 	core.symbols.setQuitRequestedHandler(quit_requested_trampoline)
+	installationConfigureFromBundle(&core, &bundle_paths)
+	insightsConfigureFromBundle(&core, &bundle_paths)
 
 	return core, .None
 }
 
 coreClose :: proc(self: ^Core) {
+	insightsShutdown(self)
 	// Drop the core's pointer to our trampoline before unloading the library so
 	// a late quit request can't jump into freed code.
 	if self.symbols.setQuitRequestedHandler != nil {
@@ -1063,6 +1105,318 @@ coreClose :: proc(self: ^Core) {
 	g_quit_requested_user_handler = nil
 	dynlib.unload_library(self.symbols.__handle)
 	self.symbols.__handle = nil
+}
+
+// Loads or creates the core-owned app/profile ID without enabling Insights.
+// Packaged apps configure this automatically, including apps without services.
+installationConfigure :: proc(self: ^Core, config: InstallationConfig) -> bool {
+	if self.symbols.installationConfigure == nil || len(config.storagePath) == 0 ||
+	   strings.contains(config.appId, "\x00") || strings.contains(config.storagePath, "\x00") {
+		return false
+	}
+	data, err := json.marshal(config, {}, self.allocator)
+	if err != nil {
+		return false
+	}
+	defer delete(data, self.allocator)
+	config_z := dupe_cstring(self, string(data))
+	defer delete(config_z, self.allocator)
+	return self.symbols.installationConfigure(config_z)
+}
+
+// Returns the shared random app/profile ID even when Insights is disabled.
+// The caller owns the returned string and frees it with self.allocator.
+getInstallationId :: proc(self: ^Core) -> string {
+	if self.symbols.getInstallationId == nil {
+		return ""
+	}
+	value := self.symbols.getInstallationId()
+	if value == nil {
+		return ""
+	}
+	defer self.symbols.freeCoreString(value)
+	return clone_string(string(value), self.allocator)
+}
+
+installationConfigureFromBundle :: proc(self: ^Core, bundle_paths: ^BundlePaths) {
+	if self.symbols.installationConfigure == nil {
+		return
+	}
+	build_path := join_path(self.allocator, {bundle_paths.resources_dir, "build.json"})
+	defer delete(build_path, self.allocator)
+	build_json, build_err := os.read_entire_file(build_path, self.allocator)
+	if build_err != nil {
+		return
+	}
+	defer delete(build_json, self.allocator)
+	version_path := join_path(self.allocator, {bundle_paths.resources_dir, "version.json"})
+	defer delete(version_path, self.allocator)
+	version_json, version_err := os.read_entire_file(version_path, self.allocator)
+	if version_err != nil {
+		return
+	}
+	defer delete(version_json, self.allocator)
+	app_info, app_err := resolveAppInfoFromBundle(self.allocator, bundle_paths)
+	if app_err != .None {
+		return
+	}
+	defer ownedAppInfoDeinit(&app_info, self.allocator)
+	paths, paths_err := resolvePaths(self.allocator, borrowed(app_info))
+	if paths_err != .None {
+		return
+	}
+	defer pathsDeinit(&paths, self.allocator)
+	// Keep the existing path so apps retain their previously generated ID.
+	storage_path := join_path(self.allocator, {paths.userData, "insights"})
+	defer delete(storage_path, self.allocator)
+	installationConfigureFromJson(self, string(build_json), string(version_json), storage_path)
+}
+
+// Only app identity is read here. Collection settings and update authority do
+// not affect whether an installation can identify itself for smoke testing.
+installationConfigureFromJson :: proc(self: ^Core, build_json, version_json, storage_path: string) -> bool {
+	build_value, build_err := json.parse_string(build_json, json.DEFAULT_SPECIFICATION, true, self.allocator)
+	if build_err != .None {
+		return false
+	}
+	defer json.destroy_value(build_value, self.allocator)
+	build, build_ok := build_value.(json.Object)
+	if !build_ok {
+		return false
+	}
+	version_value, version_err := json.parse_string(version_json, json.DEFAULT_SPECIFICATION, true, self.allocator)
+	if version_err != .None {
+		return false
+	}
+	defer json.destroy_value(version_value, self.allocator)
+	version, version_ok := version_value.(json.Object)
+	if !version_ok {
+		return false
+	}
+	app_id := ""
+	sources := []json.Object{build, build, version}
+	fields := []string{"insights", "managed", "managed"}
+	for source, i in sources {
+		settings_value, exists := source[fields[i]]
+		if !exists {
+			continue
+		}
+		if _, is_null := settings_value.(json.Null); is_null {
+			continue
+		}
+		settings, settings_ok := settings_value.(json.Object)
+		if !settings_ok {
+			return false
+		}
+		candidate, candidate_ok := object_string(settings, "appId")
+		if !candidate_ok || len(candidate) == 0 || (len(app_id) > 0 && candidate != app_id) {
+			return false
+		}
+		app_id = candidate
+	}
+	return installationConfigure(self, InstallationConfig{appId = app_id, storagePath = storage_path})
+}
+
+// Returns false when configuration is invalid or an older core lacks Insights.
+// Network work is performed asynchronously by the native core.
+insightsConfigure :: proc(self: ^Core, config: InsightsConfig) -> bool {
+	if self.symbols.insightsConfigure == nil {
+		return false
+	}
+	normalized := config
+	if len(normalized.apiUrl) == 0 {
+		normalized.apiUrl = DEFAULT_INSIGHTS_API_URL
+	}
+	data, err := json.marshal(normalized, {}, self.allocator)
+	if err != nil {
+		return false
+	}
+	defer delete(data, self.allocator)
+	config_z := dupe_cstring(self, string(data))
+	defer delete(config_z, self.allocator)
+	return self.symbols.insightsConfigure(config_z)
+}
+
+// properties_json must be a JSON object. Queue limits and validation live in
+// the core so every backend has the same event behavior.
+insightsTrack :: proc(self: ^Core, name: string, properties_json := "{}") -> bool {
+	if self.symbols.insightsTrack == nil || strings.contains(name, "\x00") || strings.contains(properties_json, "\x00") {
+		return false
+	}
+	name_z := dupe_cstring(self, name)
+	defer delete(name_z, self.allocator)
+	properties_z := dupe_cstring(self, properties_json)
+	defer delete(properties_z, self.allocator)
+	return self.symbols.insightsTrack(name_z, properties_z)
+}
+
+// Associates subsequent custom events with an app-provided opaque user ID. An empty
+// string clears the association without rewriting previously queued events.
+// Neither operation changes the app session or its duration.
+insightsIdentify :: proc(self: ^Core, user_id: string) {
+	if self.symbols.insightsIdentify == nil || strings.contains(user_id, "\x00") {
+		return
+	}
+	if len(user_id) == 0 {
+		self.symbols.insightsIdentify(nil)
+		return
+	}
+	user_id_z := dupe_cstring(self, user_id)
+	defer delete(user_id_z, self.allocator)
+	self.symbols.insightsIdentify(user_id_z)
+}
+
+insightsReset :: proc(self: ^Core) {
+	if self.symbols.insightsReset != nil {
+		self.symbols.insightsReset()
+	}
+}
+
+insightsSetEnabled :: proc(self: ^Core, enabled: bool) {
+	if self.symbols.insightsSetEnabled != nil {
+		self.symbols.insightsSetEnabled(enabled)
+	}
+}
+
+// The caller owns the returned string and frees it with self.allocator.
+insightsGetInstallationId :: proc(self: ^Core) -> string {
+	if self.symbols.insightsGetInstallationId == nil {
+		return ""
+	}
+	value := self.symbols.insightsGetInstallationId()
+	if value == nil {
+		return ""
+	}
+	defer self.symbols.freeCoreString(value)
+	return clone_string(string(value), self.allocator)
+}
+
+insightsFlush :: proc(self: ^Core) {
+	if self.symbols.insightsFlush != nil {
+		self.symbols.insightsFlush()
+	}
+}
+
+insightsShutdown :: proc(self: ^Core) {
+	if self.symbols.insightsShutdown != nil {
+		self.symbols.insightsShutdown()
+	}
+}
+
+// Missing build metadata disables telemetry without affecting app startup.
+insightsConfigureFromBundle :: proc(self: ^Core, bundle_paths: ^BundlePaths) {
+	if self.symbols.insightsConfigure == nil {
+		return
+	}
+	build_path := join_path(self.allocator, {bundle_paths.resources_dir, "build.json"})
+	defer delete(build_path, self.allocator)
+	build_json, build_err := os.read_entire_file(build_path, self.allocator)
+	if build_err != nil {
+		return
+	}
+	defer delete(build_json, self.allocator)
+	version_path := join_path(self.allocator, {bundle_paths.resources_dir, "version.json"})
+	defer delete(version_path, self.allocator)
+	version_json, version_err := os.read_entire_file(version_path, self.allocator)
+	if version_err != nil {
+		return
+	}
+	defer delete(version_json, self.allocator)
+	app_info, app_err := resolveAppInfoFromBundle(self.allocator, bundle_paths)
+	if app_err != .None {
+		return
+	}
+	defer ownedAppInfoDeinit(&app_info, self.allocator)
+	paths, paths_err := resolvePaths(self.allocator, borrowed(app_info))
+	if paths_err != .None {
+		return
+	}
+	defer pathsDeinit(&paths, self.allocator)
+	storage_path := join_path(self.allocator, {paths.userData, "insights"})
+	defer delete(storage_path, self.allocator)
+	if self.symbols.installationConfigure != nil && !installationConfigureFromJson(self, string(build_json), string(version_json), storage_path) {
+		return
+	}
+	insightsConfigureFromJson(self, string(build_json), string(version_json), storage_path)
+}
+
+// Kept separate from bundle I/O so configuration behavior can be checked
+// without loading a native library or making telemetry requests.
+insightsConfigureFromJson :: proc(self: ^Core, build_json, version_json, storage_path: string) -> bool {
+	build_value, build_err := json.parse_string(build_json, json.DEFAULT_SPECIFICATION, true, self.allocator)
+	if build_err != .None {
+		return false
+	}
+	defer json.destroy_value(build_value, self.allocator)
+	build, build_ok := build_value.(json.Object)
+	if !build_ok {
+		return false
+	}
+	insights_value, has_insights := build["insights"]
+	if !has_insights {
+		return false
+	}
+	insights, insights_ok := insights_value.(json.Object)
+	if !insights_ok {
+		return false
+	}
+	app_id, app_ok := object_string(insights, "appId")
+	if !app_ok || len(app_id) == 0 {
+		return false
+	}
+	api_url := DEFAULT_INSIGHTS_API_URL
+	if _, has_api_url := insights["apiUrl"]; has_api_url {
+		override, api_ok := object_string(insights, "apiUrl")
+		if !api_ok || len(override) == 0 {
+			return false
+		}
+		api_url = override
+	}
+	version_value, version_err := json.parse_string(version_json, json.DEFAULT_SPECIFICATION, true, self.allocator)
+	if version_err != .None {
+		return false
+	}
+	defer json.destroy_value(version_value, self.allocator)
+	version, version_ok := version_value.(json.Object)
+	if !version_ok {
+		return false
+	}
+	channel, has_channel := object_string(version, "channel")
+	if !has_channel {
+		channel = "dev"
+	}
+	enabled_value, explicit_enabled := insights["enabled"]
+	enabled := false
+	if explicit_enabled {
+		enabled_bool, bool_ok := enabled_value.(json.Boolean)
+		if !bool_ok {
+			return false
+		}
+		enabled = bool(enabled_bool)
+	}
+	config := InsightsConfig{
+		appId = app_id, apiUrl = api_url, enabled = enabled, storagePath = storage_path,
+		version = "0.0.0", channel = channel, distribution = "direct", updateAuthority = "direct",
+	}
+	if v, ok := object_string(version, "version"); ok { config.version = v }
+	if v, ok := object_string(version, "hash"); ok { config.buildHash = v }
+	if v, ok := object_string(build, "distribution"); ok { config.distribution = v }
+	if v, ok := object_string(build, "updateAuthority"); ok { config.updateAuthority = v }
+	if v, ok := object_string(version, "distribution"); ok { config.distribution = v }
+	if v, ok := object_string(version, "updateAuthority"); ok { config.updateAuthority = v }
+	when ODIN_OS == .Darwin {
+		config.platform = "macos"
+	} else when ODIN_OS == .Windows {
+		config.platform = "win"
+	} else {
+		config.platform = "linux"
+	}
+	when ODIN_ARCH == .arm64 {
+		config.arch = "arm64"
+	} else {
+		config.arch = "x64"
+	}
+	return insightsConfigure(self, config)
 }
 
 configureWebviewRuntimeFromExecutableDir :: proc(
@@ -2126,7 +2480,7 @@ error_from_last_error :: proc(message: string) -> Error {
 @(private = "file")
 missing_symbol_name :: proc(table: ^$T) -> (name: string, missing: bool) {
 	for field in reflect.struct_fields_zipped(T) {
-		if field.name == "__handle" || !reflect.is_procedure(field.type) {
+		if field.name == "__handle" || !reflect.is_procedure(field.type) || optional_insights_symbol(field.name) {
 			continue
 		}
 		field_ptr := rawptr(uintptr(table) + field.offset)
@@ -2135,6 +2489,18 @@ missing_symbol_name :: proc(table: ^$T) -> (name: string, missing: bool) {
 		}
 	}
 	return "", false
+}
+
+@(private = "file")
+optional_insights_symbol :: proc(name: string) -> bool {
+	switch name {
+	case "installationConfigure", "getInstallationId":
+		return true
+	case "insightsConfigure", "insightsTrack", "insightsIdentify", "insightsReset",
+	     "insightsSetEnabled", "insightsGetInstallationId", "insightsFlush", "insightsShutdown":
+		return true
+	}
+	return false
 }
 
 @(private = "file")

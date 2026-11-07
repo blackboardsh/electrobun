@@ -19,6 +19,9 @@ export type UpdaterLifecycleControl = {
 	readonly fallbackRelaunchSentinelPath: string;
 	readonly updateActivationPath: string;
 	readonly bootstrapVerificationPath: string;
+	readonly identityProbePath: string;
+	readonly managedExitPath: string;
+	readonly managedServices: boolean;
 };
 
 export const control: UpdaterLifecycleControl = (() => {

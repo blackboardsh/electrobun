@@ -48,6 +48,8 @@ import type {
 	ApplicationMenuItemConfig,
 } from "./proc/native";
 import { BuildConfig, type BuildConfigType } from "./core/BuildConfig";
+import { Insights, type InsightsConfig, type InsightsProperties } from "./core/Insights";
+import { Installation } from "./core/Installation";
 import { bridge, hasFFI } from "./proc/native";
 
 // Carrot boot state — populated from __bunnyCarrotBootstrap injected by Bunny Ears
@@ -136,6 +138,13 @@ export const Carrots = {
 };
 
 export const app = {
+	/** Read this app profile's persisted install ID without enabling Insights or making a request.
+	 * Suitable for a copy action in About, Help, or app settings. Returns null when
+	 * the native core or local identity storage is unavailable.
+	 */
+	getInstallationId(): string | null {
+		return Installation.getId();
+	},
 	on(name: string, handler: (payload: unknown) => void) {
 		if (bridge) {
 			return bridge.on(name, handler);
@@ -227,6 +236,8 @@ export {
 	type ElectrobunConfig,
 	type WindowsWebView2Permission,
 	type BuildConfigType,
+	type InsightsConfig,
+	type InsightsProperties,
 	type WindowOptionsType,
 	type BrowserViewOptions,
 	type BrowserViewCreatedHandler,
@@ -255,6 +266,7 @@ export {
 	WGPUView,
 	Tray,
 	Updater,
+	Insights,
 	Utils,
 	ApplicationMenu,
 	ContextMenu,
@@ -279,6 +291,7 @@ const Electrobun = {
 	WGPUView,
 	Tray,
 	Updater,
+	Insights,
 	Utils,
 	ApplicationMenu,
 	ContextMenu,

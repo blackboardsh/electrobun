@@ -646,9 +646,22 @@ export interface ElectrobunConfig {
 	 * Release and distribution configuration
 	 */
 	release?: {
+		/** Publish and resolve releases through Electrobun Managed Deploys. */
+		managed?: {
+			appId: string;
+			/** Advanced endpoint override for staging/local testing. Defaults to Electrobun's hosted service. */
+			apiUrl?: string;
+		};
+		/**
+		 * Direct updates are the default. External stores and package managers
+		 * own updates when set to external; none disables the updater entirely.
+		 */
+		updateAuthority?: "direct" | "external" | "none";
 		/**
 		 * Base URL for artifact distribution (e.g., S3 bucket, GitHub Releases)
-		 * Used for auto-updates and patch generation
+		 * Used for auto-updates and patch generation. With release.managed,
+		 * this is an optional verified custom HTTPS origin (no path). Matching
+		 * Insights configuration uses that origin unless insights.apiUrl is set.
 		 */
 		baseUrl?: string;
 		/**
@@ -657,5 +670,14 @@ export interface ElectrobunConfig {
 		 * @default true
 		 */
 		generatePatch?: boolean;
+	};
+
+	/** Electrobun Insights works independently of release hosting and updates. */
+	insights?: {
+		appId: string;
+		/** Advanced endpoint override for staging/local testing. Defaults to Electrobun's hosted service. */
+		apiUrl?: string;
+		/** Defaults to false. Set true to collect automatically, or opt in at runtime. */
+		enabled?: boolean;
 	};
 }

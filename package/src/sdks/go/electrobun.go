@@ -647,6 +647,17 @@ func LoadCore() (*Core, error) {
 		}
 		core.symbols[name] = symbol
 	}
+	// Insights is optional so this SDK can still load an older native core.
+	for _, name := range insightsSymbols {
+		nameCString := C.CString(name)
+		core.symbols[name] = C.eb_dlsym(lib, nameCString)
+		C.free(unsafe.Pointer(nameCString))
+	}
+	for _, name := range []string{"installationConfigure", "getInstallationId"} {
+		nameCString := C.CString(name)
+		core.symbols[name] = C.eb_dlsym(lib, nameCString)
+		C.free(unsafe.Pointer(nameCString))
+	}
 
 	// Honour the app's runtime.exitOnLastWindowClosed setting, which the JS SDK
 	// applies at startup too. The core only acts on it when a quit-requested
@@ -659,7 +670,273 @@ func LoadCore() (*Core, error) {
 	if err := core.SetQuitRequestedHandler(nil); err != nil {
 		return nil, err
 	}
+	if installation, ok := InstallationConfigFromBuildConfig(bundlePaths); ok {
+		// Loading the shared identity is local and does not start Insights.
+		_, _ = core.InstallationConfigure(installation)
+		if config, ok := InsightsConfigFromBuildConfig(bundlePaths); ok {
+			// Telemetry configuration failure must never prevent app startup.
+			_, _ = core.InsightsConfigure(config)
+		}
+	}
 	return core, nil
+}
+
+// InstallationConfigure loads the shared app/profile ID without starting
+// Insights or enabling collection. Bundled apps are configured automatically.
+func (c *Core) InstallationConfigure(config InstallationConfig) (bool, error) {
+	symbol := c.symbol("installationConfigure")
+	if symbol == nil {
+		return false, nil
+	}
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return false, err
+	}
+	value, freeValue, err := cString(string(payload), "Installation configuration")
+	if err != nil {
+		return false, err
+	}
+	defer freeValue()
+	return bool(C.eb_call_string_bool_ret(symbol, value)), nil
+}
+
+// InstallationID returns the persisted ID shared by managed updates and
+// Insights, including when analytics is disabled. It is safe to display in an
+// About or Help screen. An empty result means unavailable or unconfigured.
+func (c *Core) InstallationID() string {
+	symbol := c.symbol("getInstallationId")
+	freeSymbol := c.symbol("freeCoreString")
+	if symbol == nil || freeSymbol == nil {
+		return ""
+	}
+	value := C.eb_call_string_ret(symbol)
+	if value == nil {
+		return ""
+	}
+	defer C.eb_call_free_core_string(freeSymbol, value)
+	return C.GoString(value)
+}
+
+// InsightsConfig configures the shared native Insights client. APIURL defaults
+// to the hosted service and is only needed for local development or staging.
+// A nil Enabled value uses the native client's default (disabled).
+type InsightsConfig struct {
+	AppID           string `json:"appId"`
+	APIURL          string `json:"apiUrl,omitempty"`
+	Enabled         *bool  `json:"enabled,omitempty"`
+	StoragePath     string `json:"storagePath"`
+	Version         string `json:"version"`
+	BuildHash       string `json:"buildHash"`
+	Channel         string `json:"channel"`
+	Distribution    string `json:"distribution,omitempty"`
+	UpdateAuthority string `json:"updateAuthority,omitempty"`
+	Platform        string `json:"platform,omitempty"`
+	Arch            string `json:"arch,omitempty"`
+}
+
+// InsightsConfigFromBuildConfig resolves app metadata without starting the
+// native client. Missing or malformed metadata leaves telemetry unconfigured.
+// Every build channel requires insights.enabled to be explicitly true to collect.
+func InsightsConfigFromBuildConfig(bundlePaths BundlePaths) (InsightsConfig, bool) {
+	buildJSON, err := os.ReadFile(filepath.Join(bundlePaths.ResourcesDir, "build.json"))
+	if err != nil {
+		return InsightsConfig{}, false
+	}
+	var build struct {
+		Insights *struct {
+			AppID   string          `json:"appId"`
+			APIURL  json.RawMessage `json:"apiUrl"`
+			Enabled *bool           `json:"enabled"`
+		} `json:"insights"`
+		UpdateAuthority string `json:"updateAuthority"`
+		Distribution    string `json:"distribution"`
+	}
+	if json.Unmarshal(buildJSON, &build) != nil || build.Insights == nil ||
+		build.Insights.AppID == "" {
+		return InsightsConfig{}, false
+	}
+	apiURL := "https://api.electrobun.dev"
+	if len(build.Insights.APIURL) > 0 {
+		apiURL = ""
+		if json.Unmarshal(build.Insights.APIURL, &apiURL) != nil || apiURL == "" {
+			return InsightsConfig{}, false
+		}
+	}
+	versionJSON, err := os.ReadFile(filepath.Join(bundlePaths.ResourcesDir, "version.json"))
+	if err != nil {
+		return InsightsConfig{}, false
+	}
+	var version struct {
+		Identifier      string `json:"identifier"`
+		Name            string `json:"name"`
+		Version         string `json:"version"`
+		Hash            string `json:"hash"`
+		Channel         string `json:"channel"`
+		Distribution    string `json:"distribution"`
+		UpdateAuthority string `json:"updateAuthority"`
+	}
+	if json.Unmarshal(versionJSON, &version) != nil || version.Identifier == "" {
+		return InsightsConfig{}, false
+	}
+	if version.Channel == "" {
+		version.Channel = "dev"
+	}
+	if version.Version == "" {
+		version.Version = "0.0.0"
+	}
+	if version.Distribution == "" {
+		version.Distribution = build.Distribution
+	}
+	if version.Distribution == "" {
+		version.Distribution = "direct"
+	}
+	if version.UpdateAuthority == "" {
+		version.UpdateAuthority = build.UpdateAuthority
+	}
+	if version.UpdateAuthority == "" {
+		version.UpdateAuthority = "direct"
+	}
+	appInfo := AppInfo{Identifier: version.Identifier, Name: version.Name, Channel: version.Channel}
+	paths, err := ResolvePaths(appInfo)
+	if err != nil {
+		return InsightsConfig{}, false
+	}
+	enabled := false
+	if build.Insights.Enabled != nil {
+		enabled = *build.Insights.Enabled
+	}
+	platform := runtime.GOOS
+	if platform == "darwin" {
+		platform = "macos"
+	} else if platform == "windows" {
+		platform = "win"
+	}
+	arch := runtime.GOARCH
+	if arch == "amd64" {
+		arch = "x64"
+	}
+	return InsightsConfig{
+		AppID: build.Insights.AppID, APIURL: apiURL, Enabled: &enabled,
+		StoragePath: filepath.Join(paths.UserData, "insights"),
+		Version:     version.Version, BuildHash: version.Hash, Channel: version.Channel,
+		Distribution: version.Distribution, UpdateAuthority: version.UpdateAuthority,
+		Platform: platform, Arch: arch,
+	}, true
+}
+
+var insightsSymbols = []string{
+	"insightsConfigure", "insightsTrack", "insightsIdentify", "insightsReset",
+	"insightsSetEnabled", "insightsGetInstallationId", "insightsFlush", "insightsShutdown",
+}
+
+// InsightsConfigure starts the native background client. False means the core
+// lacks Insights or rejected configuration; neither result affects the app.
+func (c *Core) InsightsConfigure(config InsightsConfig) (bool, error) {
+	symbol := c.symbol("insightsConfigure")
+	if symbol == nil {
+		return false, nil
+	}
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return false, err
+	}
+	value, freeValue, err := cString(string(payload), "Insights configuration")
+	if err != nil {
+		return false, err
+	}
+	defer freeValue()
+	return bool(C.eb_call_string_bool_ret(symbol, value)), nil
+}
+
+// InsightsTrack queues a custom event. A successful result means queued locally,
+// not delivered. The native client handles bounded buffering and retries.
+func (c *Core) InsightsTrack(name string, properties map[string]any) (bool, error) {
+	symbol := c.symbol("insightsTrack")
+	if symbol == nil {
+		return false, nil
+	}
+	if properties == nil {
+		properties = map[string]any{}
+	}
+	payload, err := json.Marshal(properties)
+	if err != nil {
+		return false, err
+	}
+	eventName, freeName, err := cString(name, "Insights event name")
+	if err != nil {
+		return false, err
+	}
+	defer freeName()
+	value, freeValue, err := cString(string(payload), "Insights event properties")
+	if err != nil {
+		return false, err
+	}
+	defer freeValue()
+	return bool(C.eb_call_string_string_bool_ret(symbol, eventName, value)), nil
+}
+
+// InsightsIdentify associates future custom events with an app-defined opaque user ID.
+// An empty ID clears the association without changing historical events.
+// Neither operation changes the app session or its duration.
+func (c *Core) InsightsIdentify(userID string) error {
+	symbol := c.symbol("insightsIdentify")
+	if symbol == nil {
+		return nil
+	}
+	if userID == "" {
+		C.eb_call_string(symbol, nil)
+		return nil
+	}
+	value, freeValue, err := cString(userID, "Insights user ID")
+	if err != nil {
+		return err
+	}
+	defer freeValue()
+	C.eb_call_string(symbol, value)
+	return nil
+}
+
+// InsightsReset clears the user association for subsequent custom events.
+func (c *Core) InsightsReset() {
+	if symbol := c.symbol("insightsReset"); symbol != nil {
+		C.eb_call_void(symbol)
+	}
+}
+
+func (c *Core) InsightsSetEnabled(enabled bool) {
+	if symbol := c.symbol("insightsSetEnabled"); symbol != nil {
+		C.eb_call_bool(symbol, cbool(enabled))
+	}
+}
+
+// InsightsInstallationID returns the random app/profile ID, or an empty string
+// when Insights is unavailable or unconfigured. It is not a hardware identifier.
+func (c *Core) InsightsInstallationID() string {
+	symbol := c.symbol("insightsGetInstallationId")
+	freeSymbol := c.symbol("freeCoreString")
+	if symbol == nil || freeSymbol == nil {
+		return ""
+	}
+	value := C.eb_call_string_ret(symbol)
+	if value == nil {
+		return ""
+	}
+	defer C.eb_call_free_core_string(freeSymbol, value)
+	return C.GoString(value)
+}
+
+// InsightsFlush requests background delivery without waiting for the network.
+func (c *Core) InsightsFlush() {
+	if symbol := c.symbol("insightsFlush"); symbol != nil {
+		C.eb_call_void(symbol)
+	}
+}
+
+// InsightsShutdown cancels background work and persists the local queue.
+func (c *Core) InsightsShutdown() {
+	if symbol := c.symbol("insightsShutdown"); symbol != nil {
+		C.eb_call_void(symbol)
+	}
 }
 
 // ExitOnLastWindowClosedFromBuildConfig reads runtime.exitOnLastWindowClosed out
@@ -1943,6 +2220,7 @@ func (c *Core) WgpuSurfacePresentMainThread(surface unsafe.Pointer) (int, error)
 // RunMainThread runs the native event loop until the app quits. Call it from
 // main() (the main goroutine, which this package pins to the main OS thread).
 func (c *Core) RunMainThread(appInfo AppInfo) error {
+	defer c.InsightsShutdown()
 	identifier, freeIdentifier, err := cString(appInfo.Identifier, "app identifier")
 	if err != nil {
 		return err

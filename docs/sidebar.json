@@ -161,6 +161,10 @@
             "link": "/electrobun/apis/updater/"
           },
           {
+            "label": "App",
+            "link": "/electrobun/apis/app/"
+          },
+          {
             "label": "Events",
             "link": "/electrobun/apis/events/"
           },

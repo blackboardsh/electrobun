@@ -1,0 +1,87 @@
+---
+title: "App"
+description: "Application runtime helpers, including the shared persistent install ID."
+---
+
+`app.getInstallationId()` returns the native core's persistent ID for this app and
+local user-data profile. Managed updates and Electrobun Insights use the same
+value. Reading it works with Insights disabled or absent and does not start an
+analytics session, queue an event, or make a network request.
+
+## Display the install ID
+
+Offer the ID in your application's **About**, **Help**, or **Settings** screen,
+with a copy action. A developer or tester can then register that exact install
+for a managed prerelease. Electrobun does not add a menu or settings
+screen automatically.
+
+For Bun and Cottontail main processes, use the named `app` export from
+`electrobun/main`, or `Electrobun.app` from the default export:
+
+```ts
+import { app, Utils } from "electrobun/main";
+
+// Call from an existing About/Help menu item or settings action.
+async function showInstallationInfo() {
+  const id = app.getInstallationId();
+  const { response } = await Utils.showMessageBox({
+    type: "info",
+    title: "About My App",
+    message: "Install ID",
+    detail: id ?? "Unavailable",
+    buttons: id ? ["Copy install ID", "Close"] : ["Close"],
+  });
+  if (id && response === 0) Utils.clipboardWriteText(id);
+}
+```
+
+The getter returns a 32-character lowercase hexadecimal string, or `null` when
+the native core or local identity storage is unavailable. Keep unavailable IDs
+out of registration requests rather than generating a second ID in application
+code. Importing the TypeScript API alone does not create the identity; the
+getter initializes its local storage when needed.
+
+## Native SDKs
+
+Bundled applications configure identity as part of their normal SDK setup.
+Use the shared getter after that setup, independently of any Insights setting:
+
+| Runtime | Getter | Unavailable result / ownership |
+| --- | --- | --- |
+| Zig | `try core.getInstallationId()` | `null`; free a returned slice with `core.allocator` |
+| Rust | `core.installation_id()` | `None`; returns an owned `String` |
+| Go | `core.InstallationID()` | Empty string; ordinary Go string |
+| Odin | `electrobun.getInstallationId(core)` | Empty string; free a returned string with the core's allocator |
+
+For example, in Zig:
+
+```zig
+if (try core.getInstallationId()) |id| {
+    defer core.allocator.free(id);
+    // Display or copy id through the application's own UI.
+}
+```
+
+The earlier Insights-specific installation-ID getters remain available and
+refer to the same native identity. Prefer this shared API when displaying the ID
+or integrating managed updates, so the application does not need to initialize
+Insights just to retrieve it.
+
+## Identity lifetime
+
+The ID contains 128 random bits and is scoped to the application's local profile. It is not a
+hardware serial number, a Dash account ID, or an authenticated application user.
+Normal restarts and app updates retain it. Different profiles have independent
+IDs; deleting the application's local data can create a new one. Copying an
+existing profile can copy its ID too. Managed routing always scopes the ID to
+the app selected by the API path or verified hostname, so ID uniqueness is not
+the boundary between customers. Existing
+Insights identity state is reused when moving to the shared identity API.
+
+Managed update requests send this ID to the configured managed origin to select
+an eligible prerelease. Registration is a routing hint rather than a secret
+download credential. Insights collection remains off by default and follows
+its separate consent settings; showing or copying an ID does not opt anyone in.
+
+See [Updates](/electrobun/guides/updates/) for prerelease-install registration and
+publication, and [Utils](/electrobun/apis/utils/) for dialogs and clipboard APIs.

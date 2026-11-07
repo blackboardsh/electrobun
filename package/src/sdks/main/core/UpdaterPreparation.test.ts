@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { Installation } from "./Installation";
 import {
 	existsSync,
 	mkdirSync,
@@ -522,6 +523,49 @@ describe("v2 update preparation contracts", () => {
 			).toEqual([1, 2]);
 			expect(statuses.find((entry) => entry.status === "patch-chain-complete")?.details?.totalPatchesApplied).toBe(2);
 		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	for (const customOrigin of [false, true]) test(`${customOrigin ? "custom-origin" : "default"} managed patch chains use the shared install ID at every hop`, async () => {
+		const root = fixtureRoot();
+		const installationId = "0123456789abcdef0123456789abcdef";
+		const identity = spyOn(Installation, "getId").mockReturnValue(installationId);
+		const prefix = getPlatformPrefix("stable", OS, ARCH);
+		const requests: { path: string; id: string | null }[] = [];
+		const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request) {
+			const path = new URL(request.url).pathname;
+			requests.push({ path, id: request.headers.get("X-Electrobun-Installation-Id") });
+			if (path.endsWith("-oldhash.patch")) return new Response("middlehash");
+			if (path.endsWith("-middlehash.patch")) return new Response("finalhash");
+			return new Response(null, { status: 404 });
+		} });
+		try {
+			writeFileSync(join(root, "oldhash.tar"), "retained original");
+			const manifest = validateUpdateManifest({ ...validManifest(), hash: "finalhash" }, expected);
+			const result = await preparePatchChainForUpdate({
+				info: { ...validManifest(), hash: "oldhash", name: "Example",
+					baseUrl: "https://old-static.example.test/releases",
+					managed: { appId: "app_test", ...(customOrigin ? { baseUrl: server.url.origin } : { apiUrl: server.url.origin }) } },
+				manifest,
+				extractionFolder: root,
+				transactionId: "a".repeat(32),
+				retainedTarPath: resolve(join(root, "finalhash.tar")),
+			}, {
+				applyPatch: ({ patchPath, outputPath }) => {
+					writeFileSync(outputPath, updateTar(readFileSync(patchPath, "utf8")));
+				},
+			});
+			expect(result).toEqual({ completed: true, patchesApplied: 2 });
+			const folder = customOrigin ? "" : "/v1/electrobun/apps/app_test/updates";
+			expect(requests).toEqual([
+				{ path: `${folder}/${prefix}-oldhash.patch`, id: installationId },
+				{ path: `${folder}/${prefix}-middlehash.patch`, id: installationId },
+			]);
+			await expect(readUpdateHashFromTar(join(root, "finalhash.tar"))).resolves.toBe("finalhash");
+		} finally {
+			identity.mockRestore();
+			await server.stop(true);
 			rmSync(root, { recursive: true, force: true });
 		}
 	});

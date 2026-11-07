@@ -15,6 +15,256 @@ building them for every platform. The application-side API lives in the
 
 ## Configure The Release Host
 
+### Electrobun Managed Deploys preview
+
+Electrobun Managed Deploys adds staged uploads and explicit publication to the
+same stable/canary artifact format. Create an app from **Electrobun Apps** in
+Dash's Quick Access, then use its app ID in `electrobun.config.ts`:
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "My App",
+    identifier: "com.example.my-app",
+    version: "2.0.0",
+  },
+  release: {
+    managed: {
+      appId: "YOUR_APP_ID",
+    },
+    updateAuthority: "direct",
+  },
+  insights: {
+    appId: "YOUR_APP_ID",
+    enabled: true, // Explicitly opt this app into analytics.
+  },
+} satisfies ElectrobunConfig;
+```
+
+Managed Deploys and Insights use Electrobun's hosted API automatically. No
+custom domain or per-app subdomain is required. The optional `apiUrl` override
+is for local or staging service development.
+For managed canary builds, Hutch derives a separate app name and bundle
+identifier from the app's configuration so canary and stable can coexist.
+
+Each build runner uploads its existing Hutch artifacts to the same channel/version
+release. Hutch reads the channel, version, and target from those artifacts, so
+upload does not need a target list or a JavaScript package runner:
+
+```sh
+hutch electrobun build --env=canary
+hutch electrobun upload
+```
+
+The managed service stores original filenames under
+`releases/<channel>/<version>/`, inside the account/app prefix. Stable
+and canary remain different builds even when they share the same version.
+Hutch generates patches; the hosting service does not regenerate them.
+
+After every build/upload job succeeds, review the accumulated platforms and
+validation results in Dash. CI can perform the same publication steps:
+
+```sh
+# Optional: publish this release to the app's prerelease group.
+hutch electrobun publish --app=<app-id> --release=canary-2.0.0 --audience=prerelease
+
+# Publish the same release to the public audience on its channel.
+hutch electrobun publish --app=<app-id> --release=canary-2.0.0 --audience=public
+```
+
+Set the app's deploy key in `ELECTROBUN_API_KEY`. The final publish job does not
+need build artifacts or a package runner. Omitting `--audience` publishes to
+public; prerelease publication is optional. The canonical release ID is
+`<channel>-<version>`. A staged release accepts replacement uploads, but once
+published to either audience it no longer accepts uploads or replacements.
+Patch deletion and retention cleanup remain available. Use a new version for a
+changed managed build; self-hosted updates retain their existing hash-based
+same-version behavior.
+
+In the dashboard, register installation IDs in the app's **Prerelease installs**
+group, optionally with labels. **Publish prerelease** selects that release for
+the group on its channel; uploading another version does not select it
+automatically. **Publish public** switches the public selection. These actions
+change D1 routing records without copying or renaming artifacts. Group membership
+persists after public publication. Publishing a different public release does
+not clear an independently selected newer prerelease.
+
+Stable and canary are build channels; prerelease and public are audiences within
+either channel. Most workflows can publish directly to public and use canary for
+testing. A prerelease group provides an additional stage for production machines,
+internal users, or external early adopters. There is no separate test session or
+"stop test" action. Automated smoke-test execution and percentage rollouts are
+separate features.
+
+Managed updates and Insights share a persistent app-installation ID, owned by
+Electrobun's native core. Retrieve it with
+[`app.getInstallationId()`](/electrobun/apis/app/), and offer a copy action
+in your app's About/Help menu or settings. The getter works without enabling
+Insights. Prerelease registration uses this ID as a routing hint, not a download
+credential or user sign-in.
+
+Managed configuration supplies one stable public update folder:
+`/v1/electrobun/apps/<appId>/updates/`. The updater requests the same filenames
+as static hosting: `<channel>-<os>-<arch>-update.json`,
+`<channel>-<os>-<arch>-<current-hash>.patch`, and the full archive named by the
+manifest. Every patch step stays under that base URL. Managed requests send
+`X-Electrobun-Installation-Id` to the configured managed origin; the header is
+not forwarded to other origins on redirects. The Worker selects the prerelease
+for enrolled installs and the public release otherwise.
+
+A patch filename identifies its starting hash, so a patch can belong to an older
+release folder than the currently selected release. D1 maps that filename to
+its containing release while keeping staged/prerelease-only patches out of ordinary
+public routing. The client never includes the release folder in its URL or
+uses a separate update-manifest format. Missing patches retain the ordinary
+full-download fallback.
+
+Existing `release.baseUrl` configurations keep their static-host behavior,
+headers, and artifact layout without adding managed configuration. Managed
+routing retains the current and previous public release for each platform plus
+the selected prerelease. Publishing only macOS leaves other platforms on their
+existing releases. Once an older published folder is no longer referenced,
+its full artifacts can be removed while patches remain available until the
+developer removes them or opts into age-based cleanup.
+
+### Use a custom managed domain
+
+For a hostname served directly by Electrobun Managed Deploys, register and
+verify it in the app's Dash settings, then set `release.baseUrl` alongside the
+existing managed app ID:
+
+```ts
+export default {
+  // Keep the project's existing app and build configuration.
+  release: {
+    managed: { appId: "YOUR_APP_ID" },
+    baseUrl: "https://updates.example.com",
+  },
+  insights: {
+    appId: "YOUR_APP_ID",
+    enabled: true,
+  },
+};
+```
+
+For managed hosting, this optional `baseUrl` is a custom HTTPS origin using the
+standard HTTPS port, without a path, credentials, query, or fragment. Update
+requests use its root, for example
+`https://updates.example.com/stable-macos-arm64-update.json`. When Insights uses
+the same app ID and has no explicit `insights.apiUrl`, its requests use that
+same origin at `/v1/electrobun/apps/<appId>/insights`. An explicit Insights API
+override takes precedence. Authenticated Hutch upload and publication requests
+continue using the management API; a custom delivery origin does not receive
+deploy credentials.
+
+The dashboard provides the DNS ownership proof and CNAME target. A CNAME maps a
+hostname, not a URL path or release folder; DNS alone does not register the app
+binding or provision its HTTPS certificate. The service only accepts the custom
+hostname after verification and TLS are active, and binds it to exactly one app.
+The app contacts the custom hostname, while the same managed Worker handles
+updates and Insights behind it. Default hosted URLs remain available.
+
+You can instead operate your own HTTPS reverse proxy without registering its
+hostname in Dash. Your proxy terminates TLS and rewrites root artifact requests
+to the canonical app-scoped `/v1/electrobun/apps/<appId>/updates/<filename>`
+upstream path. Forward Insights POST requests to that app's canonical Insights
+path, preserving their body, and forward `X-Electrobun-Installation-Id` and
+download range/conditional headers. Use an upstream proxy request rather than
+a cross-origin redirect: the updater deliberately strips its installation ID
+when redirected to another origin. A CNAME alone cannot perform these rewrites.
+
+For a future store-managed build, `release.updateAuthority: "external"` or
+`"none"` disables the direct updater without disabling Insights; an external
+store check or launch action must be implemented separately.
+
+### Electrobun Insights preview
+
+Insights is off by default on every build channel, independently of update checks.
+Omitting `insights` leaves the native client unconfigured. Supplying an app ID
+alone still leaves collection disabled; set `insights.enabled: true` or call
+`Insights.setEnabled(true)` after obtaining any consent your app requires.
+The shared native core records the app version/build, channel, OS/architecture,
+an app/profile-scoped random installation ID, and approximate process-open time
+while the machine is awake when collection is enabled. It does not measure
+foreground activity. Dev builds additionally require explicit
+`insights.enabled: true` and a local test endpoint.
+
+```typescript
+import { Insights, app } from "electrobun/main";
+
+Insights.track("export_completed", { format: "pdf", pages: 3 });
+const installationId = app.getInstallationId();
+// Offer an app-specific collection control:
+Insights.setEnabled(false);
+```
+
+The existing `Insights.getInstallationId()` API remains compatible with the
+shared installation identity. Reading the ID does not start collection.
+
+Basic analytics need no app account or sign-in integration. Apps that want to
+associate their custom events with a user may call
+`Insights.identify("your-opaque-user-id")`; `Insights.reset()` clears that optional
+association for future custom events. Neither call starts a session, changes
+duration, or replaces the installation ID. Sign-in and sign-out are only tracked
+if the developer explicitly sends custom events for them.
+
+Custom event names are limited to 80 bytes and
+properties to 16 flat scalar values, with strings up to 256 bytes. Collection is
+limited to event names beginning with an ASCII letter or digit and containing
+letters, digits, spaces, `_`, `.`, `:`, or `-`. Property keys follow the same
+rule without spaces and have a 64-byte limit.
+The complete serialized event, including its identity and metadata fields, has
+an 8 KiB UTF-8 limit. Oversized events are rejected before entering the local queue.
+
+The core emits `electrobun.app.open`, `electrobun.app.close`, and, after an
+unfinished prior run, `electrobun.app.interrupted`. These events carry a stable
+`appSessionId` and the original session times. Interrupted means no clean end
+was recorded; it is not a crash diagnosis. One app-open period is one session;
+optional custom-event user associations do not divide it into segments.
+
+Duration checkpoints are saved locally roughly once a minute. They do not send
+network heartbeats. Normal shutdown saves final duration and a close event for
+delivery on the next launch, without waiting for a network acknowledgement.
+After an interrupted run, the next launch recovers the last saved duration,
+using its original timestamps and app version. Time between
+launches is not counted as app-open time. Session/day totals remain cumulative
+so retries cannot double-count duration.
+
+Delivery is best effort: a bounded local queue persists stable event IDs, expires
+events after 30 days, and discards oldest entries at its limit. The service
+processes backdated events within its detail-retention window and discards
+expired events individually. Session durations can therefore arrive later than
+app-open events, and apps that never reopen can leave an incomplete session.
+Local identity and queued/session state use versioned authenticated encryption
+with keys stored beside the files. This obscures ordinary file inspection and
+detects corruption, but does not make the data secret from the machine owner.
+Existing plain JSON files migrate when next persisted.
+The persisted queue assumes one running app process per user-data profile;
+concurrent processes sharing that directory can overwrite queued backlog.
+Use separate profile directories when running independent app instances.
+Omit `insights.enabled` or set it to `false` to start with collection disabled
+until the user opts in through `Insights.setEnabled(true)`. The user's choice persists across
+restarts and takes precedence over that build default. Disabling collection
+clears pending events and the active session journal; requests already sent may finish.
+`flush()` requests background
+delivery without waiting for a network response. The Zig, Go, Rust, and Odin
+SDKs expose the same native functionality through their `Core` APIs.
+
+Opted-in basic lifecycle, duration, version, and platform collection continues
+when the developer's paid custom-event allowance is exhausted or subscription
+expires. Analytics responses carry the current custom-collection policy, which
+the core persists across launches. Disabled custom events are discarded without
+blocking basic events. A later ordinary analytics response can reactivate custom
+collection; there is no separate polling request or periodic policy check.
+Server policy never overrides local opt-out or enables an unconfigured app.
+
+The app embeds only the public ingestion URL and app ID. Keep publishing API
+keys in the build environment; never add them to `insights` or app source.
+
+### Static release hosting
+
 Point `release.baseUrl` at the directory where every target's artifacts will
 be uploaded. Use an HTTPS URL without credentials, query parameters, or a
 fragment:

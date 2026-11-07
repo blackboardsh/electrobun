@@ -8,7 +8,15 @@ pub const Consumer = *const fn (context: *anyopaque, reader: *Io.Reader) anyerro
 pub const Options = struct {
     max_bytes: u64 = 16 * 1024 * 1024 * 1024,
     timeout_ms: u32 = 600_000,
+    /// Managed routing only; callers validate the initial URL against installed configuration.
+    installation_id: ?[]const u8 = null,
 };
+
+pub fn validInstallationId(value: []const u8) bool {
+    if (value.len != 32) return false;
+    for (value) |byte| if (!std.ascii.isDigit(byte) and !(byte >= 'a' and byte <= 'f')) return false;
+    return true;
+}
 
 pub fn checkedUri(url: []const u8) !std.Uri {
     if (url.len == 0 or url.len > 8192) return error.InvalidUpdateUrl;
@@ -34,6 +42,7 @@ pub fn checkedUri(url: []const u8) !std.Uri {
 
 pub fn fetch(allocator: A, io: Io, url: []const u8, context: *anyopaque, consume: Consumer, options: Options) !void {
     _ = try checkedUri(url);
+    if (options.installation_id) |id| if (!validInstallationId(id)) return error.InvalidInstallationId;
     const Transfer = struct {
         result: anyerror!void,
         finished_at: Io.Clock.Timestamp,
@@ -64,15 +73,18 @@ fn exchange(allocator: A, io: Io, url: []const u8, context: *anyopaque, consume:
     var redirects: std.heap.ArenaAllocator = .init(allocator);
     defer redirects.deinit();
     var current_url = url;
+    var installation_id = options.installation_id;
     var followed: usize = 0;
     while (true) {
         try io.checkCancel();
+        const headers: [1]std.http.Header = .{.{ .name = "X-Electrobun-Installation-Id", .value = installation_id orelse "" }};
         var request = try client.request(.GET, try checkedUri(current_url), .{
             // Inspect every destination before connecting. Automatic redirects
             // cannot enforce our HTTPS and loopback-origin restrictions.
             .redirect_behavior = .unhandled,
             .keep_alive = false,
             .headers = .{ .accept_encoding = .{ .override = "identity" } },
+            .extra_headers = if (installation_id != null) &headers else &.{},
         });
         defer {
             if (request.connection) |connection| connection.closing = true;
@@ -86,7 +98,9 @@ fn exchange(allocator: A, io: Io, url: []const u8, context: *anyopaque, consume:
             .moved_permanently, .found, .see_other, .temporary_redirect, .permanent_redirect => {
                 if (followed == max_redirects) return error.TooManyUpdateRedirects;
                 const location = response.head.location orelse return error.UpdateRedirectLocationMissing;
-                current_url = try redirectUrl(redirects.allocator(), current_url, location);
+                const next_url = try redirectUrl(redirects.allocator(), current_url, location);
+                installation_id = try redirectedInstallationId(installation_id, current_url, next_url);
+                current_url = next_url;
                 followed += 1;
                 // Closing the old connection avoids downloading an arbitrary
                 // redirect body. Only the final response reaches the consumer.
@@ -112,6 +126,17 @@ fn uriHost(uri: std.Uri) []const u8 {
     return switch (uri.host.?) {
         .raw, .percent_encoded => |value| value,
     };
+}
+
+/// Once a redirect leaves the trusted origin, never restore the identifier.
+fn redirectedInstallationId(id: ?[]const u8, previous: []const u8, next: []const u8) !?[]const u8 {
+    if (id == null) return null;
+    const from = try checkedUri(previous);
+    const to = try checkedUri(next);
+    const from_port = from.port orelse @as(u16, if (std.mem.eql(u8, from.scheme, "https")) 443 else 80);
+    const to_port = to.port orelse @as(u16, if (std.mem.eql(u8, to.scheme, "https")) 443 else 80);
+    return if (std.ascii.eqlIgnoreCase(from.scheme, to.scheme) and
+        std.ascii.eqlIgnoreCase(uriHost(from), uriHost(to)) and from_port == to_port) id else null;
 }
 
 fn redirectUrl(allocator: A, previous: []const u8, location: []const u8) ![]u8 {
@@ -265,6 +290,7 @@ const TestServer = struct {
         location: ?[]const u8 = null,
         body: []const u8 = "",
         delay_ms: u32 = 0,
+        installation_id: ?[]const u8 = null,
     };
     fn init() !TestServer {
         const address = try Io.net.IpAddress.parse("127.0.0.1", 0);
@@ -287,7 +313,17 @@ const TestServer = struct {
             var parts = std.mem.splitScalar(u8, line, ' ');
             try std.testing.expectEqualStrings("GET", parts.next().?);
             try std.testing.expectEqualStrings(step.path, parts.next().?);
-            while (!std.mem.eql(u8, try reader.interface.takeDelimiterInclusive('\n'), "\r\n")) {}
+            var id_seen = false;
+            while (true) {
+                const header = try reader.interface.takeDelimiterInclusive('\n');
+                if (std.mem.eql(u8, header, "\r\n")) break;
+                const colon = std.mem.indexOfScalar(u8, header, ':') orelse continue;
+                if (!std.ascii.eqlIgnoreCase(header[0..colon], "X-Electrobun-Installation-Id")) continue;
+                try std.testing.expect(!id_seen);
+                id_seen = true;
+                try std.testing.expectEqualStrings(step.installation_id orelse return error.UnexpectedInstallationHeader, std.mem.trim(u8, header[colon + 1 ..], " \r\n"));
+            }
+            try std.testing.expectEqual(step.installation_id != null, id_seen);
             if (step.delay_ms != 0) try Io.sleep(io, .fromMilliseconds(step.delay_ms), .awake);
             var write_buffer: [4096]u8 = undefined;
             var writer = connection.writer(io, &write_buffer);
@@ -336,6 +372,38 @@ test "HTTP download follows five relative and absolute redirects into one stream
     const result = try testDownload(&server, start, .{ .timeout_ms = 3000 });
     defer allocator.free(result);
     try std.testing.expectEqualStrings("payload\x00\xff", result);
+}
+
+test "managed installation routing survives same-origin HTTP redirects" {
+    const allocator = std.testing.allocator;
+    const id = "abcdef0123456789abcdef0123456789";
+    var server = try TestServer.init();
+    defer server.deinit();
+    const start = try server.url("/managed/start");
+    defer allocator.free(start);
+    const final = try server.url("/managed/full.tar.zst");
+    defer allocator.free(final);
+    server.steps = &.{
+        .{ .path = "/managed/start", .status = 302, .location = "patch", .installation_id = id },
+        .{ .path = "/managed/patch", .status = 307, .location = final, .installation_id = id },
+        .{ .path = "/managed/full.tar.zst", .body = "payload", .installation_id = id },
+    };
+    const result = try testDownload(&server, start, .{ .timeout_ms = 3000, .installation_id = id });
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("payload", result);
+}
+
+test "managed installation identifiers are permanently stripped after an origin change" {
+    const id = "abcdef0123456789abcdef0123456789";
+    try std.testing.expectEqualStrings(id, (try redirectedInstallationId(id, "https://updates.example/a", "https://UPDATES.example:443/b")).?);
+    for ([_][]const u8{ "https://cdn.example/a", "https://updates.example:444/a", "http://127.0.0.1/a" }) |destination| {
+        const stripped = try redirectedInstallationId(id, "https://updates.example/a", destination);
+        try std.testing.expectEqual(@as(?[]const u8, null), stripped);
+        try std.testing.expectEqual(@as(?[]const u8, null), try redirectedInstallationId(stripped, destination, "https://updates.example/a"));
+    }
+    for ([_][]const u8{ "", "abcdef", "ABCDEF0123456789abcdef0123456789", "abcdef0123456789abcdef012345678x", "abcdef0123456789abcdef0123456789\r\n" }) |invalid|
+        try std.testing.expect(!validInstallationId(invalid));
+    try std.testing.expect(validInstallationId(id));
 }
 
 test "HTTP streaming decodes compressed Zstd blocks across buffer boundaries" {

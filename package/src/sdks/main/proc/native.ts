@@ -76,6 +76,7 @@ import {
 import { parseWebviewEventBridgeMessage } from "./eventBridge";
 import { ffiCStringToString } from "./ffiCString";
 import { rasterizeNativeText } from "./nativeTextBitmap";
+import { initializeInsights } from "../core/Insights";
 
 function getElectrobunLibraryPathCandidates(fileName: string) {
 	const candidates = new Set<string>();
@@ -1166,6 +1167,10 @@ export const native = (() => {
 })();
 
 export const hasFFI = native !== null && core !== null;
+
+// Defer until the module graph is initialized. Insights performs HTTP on its
+// native worker and is independent from update checks and window creation.
+if (hasFFI) queueMicrotask(() => { initializeInsights(); });
 
 // PostMessage bridge for carrot workers (inter-carrot communication, host events).
 // Created when __bunnyCarrotBootstrap exists, regardless of FFI availability.

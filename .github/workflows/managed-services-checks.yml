@@ -1,0 +1,64 @@
+name: Managed services checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/managed-services-checks.yml'
+      - '.github/actions/install-hutch/**'
+      - 'package/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/managed-services-checks.yml'
+      - '.github/actions/install-hutch/**'
+      - 'package/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: managed-services-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdk:
+    name: SDK and native core (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-26, platform: macos-arm64 }
+          - { runner: ubuntu-24.04, platform: linux-x64 }
+          - { runner: windows-2025, platform: windows-x64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      HUTCH_NO_UPDATE_CHECK: '1'
+      HUTCH_RUNTIME: bun
+      ZIG_BINARY: zig
+    defaults:
+      run:
+        working-directory: package
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.1'
+          cache: npm
+          cache-dependency-path: package/package-lock.json
+      - uses: ./.github/actions/install-hutch
+        with:
+          channel: canary
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Install dependencies
+        run: hutch run install
+      # The packaged-app lifecycle against local Cloud services is exercised
+      # by dash-cloud. This job keeps Electrobun's SDK, native core, and fixture
+      # contracts independent of either sibling repository.
+      - name: Test managed SDKs, native Insights, and lifecycle adapter
+        run: hutch run test:managed-services

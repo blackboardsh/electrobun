@@ -12,6 +12,7 @@ const Io = std.Io;
 const max_archive_bytes = 16 * 1024 * 1024 * 1024;
 const prepared_name = ".electrobun-prepared-update.json";
 const prepare_lock_name = ".electrobun-prepare.lock";
+const test_installation_id = "abcdef0123456789abcdef0123456789";
 
 fn sha256(bytes: []const u8) [64]u8 {
     var digest: [32]u8 = undefined;
@@ -30,11 +31,19 @@ pub const Request = struct {
     hash: []const u8,
     base_hash: []const u8,
     base_url: []const u8,
+    /// Managed config derives one stable artifact folder without changing installed identity.
+    download_base_url: ?[]const u8 = null,
+    /// Shared core installation identity, used only for managed routing.
+    installation_id: ?[]const u8 = null,
     artifact_file: []const u8,
     channel_root: []const u8,
     app_bundle_path: []const u8,
     tar_sha256: ?[]const u8 = null,
     tar_size: ?u64 = null,
+
+    fn downloadBaseUrl(self: Request) []const u8 {
+        return self.download_base_url orelse self.base_url;
+    }
 };
 
 pub const Prepared = struct {
@@ -51,6 +60,13 @@ pub const Prepared = struct {
     artifact_file: []const u8,
 };
 
+const ManagedIdentity = struct {
+    appId: []const u8,
+    apiUrl: []const u8 = "https://api.electrobun.dev",
+    /// A verified custom hostname serves ordinary filenames at its root.
+    baseUrl: ?[]const u8 = null,
+};
+
 const Identity = struct {
     identifier: []const u8,
     channel: []const u8,
@@ -59,7 +75,64 @@ const Identity = struct {
     name: ?[]const u8 = null,
     displayName: ?[]const u8 = null,
     baseUrl: ?[]const u8 = null,
+    managed: ?ManagedIdentity = null,
 };
+
+fn validManagedName(value: []const u8) bool {
+    if (value.len == 0 or value.len > 240 or !std.ascii.isAlphanumeric(value[0]) or
+        std.mem.indexOf(u8, value, "..") != null or value[value.len - 1] == ' ' or value[value.len - 1] == '.') return false;
+    for (value) |c| if (!std.ascii.isAlphanumeric(c) and std.mem.indexOfScalar(u8, "._+ -", c) == null) return false;
+    return true;
+}
+
+fn encodedManagedName(a: A, value: []const u8) ![]u8 {
+    if (!validManagedName(value)) return error.InvalidManagedUpdateIdentity;
+    var result: std.ArrayList(u8) = .empty;
+    errdefer result.deinit(a);
+    const digits = "0123456789ABCDEF";
+    for (value) |c| {
+        if (std.ascii.isAlphanumeric(c) or std.mem.indexOfScalar(u8, "-_.~", c) != null) try result.append(a, c) else try result.appendSlice(a, &.{ '%', digits[c >> 4], digits[c & 15] });
+    }
+    return result.toOwnedSlice(a);
+}
+
+fn uriComponentBytes(component: std.Uri.Component) []const u8 {
+    return switch (component) {
+        .raw, .percent_encoded => |value| value,
+    };
+}
+
+/// A locally supplied request cannot expand the installed app's update authority.
+fn validateManagedDownload(a: A, identity: Identity, download_url: []const u8) !void {
+    const managed = identity.managed orelse return error.InvalidManagedUpdateIdentity;
+    const app_id = try encodedManagedName(a, managed.appId);
+    defer a.free(app_id);
+    const authority_url = managed.baseUrl orelse managed.apiUrl;
+    _ = try http.checkedUri(authority_url);
+    _ = try http.checkedUri(download_url);
+    const api = try std.Uri.parse(authority_url);
+    const download = try std.Uri.parse(download_url);
+    if (api.query != null or download.query != null) return error.InvalidUpdateUrl;
+    const api_path = std.mem.trimEnd(u8, uriComponentBytes(api.path), "/");
+    if (managed.baseUrl != null) {
+        const custom_path = uriComponentBytes(api.path);
+        if (custom_path.len != 0 and !std.mem.eql(u8, custom_path, "/")) return error.InvalidManagedUpdateIdentity;
+        if (std.mem.eql(u8, api.scheme, "https") and api.port != null and api.port.? != 443) return error.InvalidManagedUpdateIdentity;
+    } else if (api_path.len != 0 and !std.mem.eql(u8, api_path, "/v1/electrobun")) return error.InvalidManagedUpdateIdentity;
+    const api_port = api.port orelse @as(u16, if (std.mem.eql(u8, api.scheme, "https")) 443 else 80);
+    const download_port = download.port orelse @as(u16, if (std.mem.eql(u8, download.scheme, "https")) 443 else 80);
+    if (!std.ascii.eqlIgnoreCase(api.scheme, download.scheme) or
+        !std.ascii.eqlIgnoreCase(uriComponentBytes(api.host.?), uriComponentBytes(download.host.?)) or api_port != download_port) return error.InvalidManagedUpdateIdentity;
+    const path = std.mem.trimEnd(u8, uriComponentBytes(download.path), "/");
+    if (managed.baseUrl != null) {
+        const custom_path = uriComponentBytes(download.path);
+        if (custom_path.len != 0 and !std.mem.eql(u8, custom_path, "/")) return error.InvalidManagedUpdateIdentity;
+        return;
+    }
+    const expected_path = try std.fmt.allocPrint(a, "/v1/electrobun/apps/{s}/updates", .{app_id});
+    defer a.free(expected_path);
+    if (!std.mem.eql(u8, path, expected_path)) return error.InvalidManagedUpdateIdentity;
+}
 
 fn nativePlatform() []const u8 {
     return switch (builtin.os.tag) {
@@ -229,6 +302,8 @@ fn validateRequest(a: A, io: Io, env: *const std.process.Environ.Map, request_pa
     if ((request.tar_sha256 == null) != (request.tar_size == null)) return error.InvalidPrepareRequest;
     const base_uri = try http.checkedUri(request.base_url);
     if (base_uri.query != null) return error.InvalidUpdateUrl;
+    const download_uri = try http.checkedUri(request.downloadBaseUrl());
+    if (download_uri.query != null) return error.InvalidUpdateUrl;
     try requireCanonical(a, request_path);
     try requireCanonical(a, request.channel_root);
     try requireCanonical(a, request.app_bundle_path);
@@ -250,6 +325,11 @@ fn validateRequest(a: A, io: Io, env: *const std.process.Environ.Map, request_pa
     defer identity.deinit();
     if (!std.mem.eql(u8, identity.value.identifier, request.identifier) or !std.mem.eql(u8, identity.value.channel, request.channel) or !std.mem.eql(u8, identity.value.hash, request.base_hash) or
         !std.mem.eql(u8, std.mem.trimEnd(u8, identity.value.baseUrl orelse return error.InvalidUpdateIdentity, "/"), std.mem.trimEnd(u8, request.base_url, "/"))) return error.InvalidUpdateIdentity;
+    if (request.download_base_url) |download_url| {
+        try validateManagedDownload(a, identity.value, download_url);
+        const id = request.installation_id orelse return error.InvalidInstallationId;
+        if (!http.validInstallationId(id)) return error.InvalidInstallationId;
+    } else if (request.installation_id != null or identity.value.managed != null) return error.InvalidManagedUpdateIdentity;
     const root_name = std.fs.path.basename(request.channel_root);
     var root_matches = std.mem.eql(u8, root_name, request.channel);
     if (identity.value.name) |name| root_matches = root_matches or (validComponent(name) and std.mem.eql(u8, root_name, name));
@@ -500,8 +580,8 @@ const Engine = struct {
             defer self.extraction.deleteFile(self.io, patch_name) catch {};
             defer patch_file.close(self.io);
             const remote_name = try std.fmt.allocPrint(a, "{s}-{s}-{s}-{s}.patch", .{ self.request.channel, self.request.platform, self.request.arch, hash });
-            const url = try artifactUrl(a, self.request.base_url, remote_name, self.request.transaction_id);
-            try http.download(self.allocator, self.io, url, patch_file, .{});
+            const url = try artifactUrl(a, self.request.downloadBaseUrl(), remote_name, self.request.transaction_id);
+            try http.download(self.allocator, self.io, url, patch_file, .{ .installation_id = self.request.installation_id });
             var memory: patch.MemorySource = .{ .bytes = old_tar };
             var reader: patch.PatchReader = undefined;
             try reader.init(self.allocator, self.io, patch_file, memory.source());
@@ -550,9 +630,9 @@ const Engine = struct {
         };
         var context: Context = .{ .engine = self, .stage = stage };
         errdefer if (context.result) |*record| record.deinit();
-        const url = try artifactUrl(self.allocator, self.request.base_url, self.request.artifact_file, self.request.transaction_id);
+        const url = try artifactUrl(self.allocator, self.request.downloadBaseUrl(), self.request.artifact_file, self.request.transaction_id);
         defer self.allocator.free(url);
-        try http.fetch(self.allocator, self.io, url, &context, Context.consume, .{});
+        try http.fetch(self.allocator, self.io, url, &context, Context.consume, .{ .installation_id = self.request.installation_id });
         var identity = try self.stageIdentity(context.result.?.value);
         defer identity.deinit();
         try self.validateFinal(context.result.?.value, identity.value);
@@ -727,6 +807,7 @@ const TestServer = struct {
     listener: Io.net.Server,
     responses: []const Response = &.{},
     closed: bool = false,
+    installation_id: ?[]const u8 = null,
     const Response = struct { path: []const u8, body: []const u8, code: u16 = 200 };
 
     fn init() !TestServer {
@@ -753,7 +834,17 @@ const TestServer = struct {
             const target = parts.next().?;
             const path = target[0 .. std.mem.indexOfScalar(u8, target, '?') orelse target.len];
             try std.testing.expectEqualStrings(response.path, path);
-            while (!std.mem.eql(u8, try reader.interface.takeDelimiterInclusive('\n'), "\r\n")) {}
+            var id_seen = false;
+            while (true) {
+                const header = try reader.interface.takeDelimiterInclusive('\n');
+                if (std.mem.eql(u8, header, "\r\n")) break;
+                const colon = std.mem.indexOfScalar(u8, header, ':') orelse continue;
+                if (!std.ascii.eqlIgnoreCase(header[0..colon], "X-Electrobun-Installation-Id")) continue;
+                try std.testing.expect(!id_seen);
+                id_seen = true;
+                try std.testing.expectEqualStrings(self.installation_id orelse return error.UnexpectedInstallationHeader, std.mem.trim(u8, header[colon + 1 ..], " \r\n"));
+            }
+            try std.testing.expectEqual(self.installation_id != null, id_seen);
             var output_buffer: [4096]u8 = undefined;
             var writer = connection.writer(io, &output_buffer);
             try writer.interface.print("HTTP/1.1 {d} Response\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ response.code, response.body.len });
@@ -776,6 +867,10 @@ const TestFixture = struct {
     root_name: []const u8,
 
     fn init(base_url: []const u8) !TestFixture {
+        return initWithManaged(base_url, null);
+    }
+
+    fn initWithManaged(base_url: []const u8, managed: ?ManagedIdentity) !TestFixture {
         const io = std.testing.io;
         var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
         errdefer arena.deinit();
@@ -797,8 +892,8 @@ const TestFixture = struct {
         try Io.Dir.cwd().createDirPath(io, parent_path);
         const root_name = if (builtin.os.tag == .macos) "Test.app" else "app";
         const installed_path = try std.fs.path.join(a, &.{ parent_path, root_name });
-        const old_tar = try testTar(a, root_name, .{ .identifier = identifier, .channel = "stable", .version = "1.0.0", .hash = "base123", .name = "Test", .displayName = "Test", .baseUrl = base_url });
-        const new_tar = try testTar(a, root_name, .{ .identifier = identifier, .channel = "stable", .version = "2.0.0", .hash = "next123", .name = "Test", .displayName = "Test", .baseUrl = base_url });
+        const old_tar = try testTar(a, root_name, .{ .identifier = identifier, .channel = "stable", .version = "1.0.0", .hash = "base123", .name = "Test", .displayName = "Test", .baseUrl = base_url, .managed = managed });
+        const new_tar = try testTar(a, root_name, .{ .identifier = identifier, .channel = "stable", .version = "2.0.0", .hash = "next123", .name = "Test", .displayName = "Test", .baseUrl = base_url, .managed = managed });
         var parent = try Io.Dir.openDirAbsolute(io, parent_path, .{});
         defer parent.close(io);
         var source: Io.Reader = .fixed(old_tar);
@@ -822,6 +917,7 @@ const TestFixture = struct {
             .hash = "next123",
             .base_hash = "base123",
             .base_url = try a.dupe(u8, base_url),
+            .installation_id = if (managed != null) test_installation_id else null,
             .artifact_file = try std.fmt.allocPrint(a, "stable-{s}-{s}-Test.tar.zst", .{ nativePlatform(), nativeArch() }),
             .channel_root = channel_root,
             .app_bundle_path = installed_path,
@@ -954,6 +1050,153 @@ test "native preparation falls back from missing patch and rejects wrong full ar
     }
 }
 
+test "managed preparation uses one flat patch and full-download folder while retaining installed authority" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var server = try TestServer.init();
+    defer server.deinit();
+    const base = try server.baseUrl(a);
+    defer a.free(base);
+    var fixture = try TestFixture.initWithManaged("https://updates.example.test/canonical", .{ .appId = "app_test", .apiUrl = base });
+    defer fixture.deinit();
+    const arena = fixture.arena.allocator();
+    fixture.request.download_base_url = try std.fmt.allocPrint(arena, "{s}/v1/electrobun/apps/app_test/updates", .{base});
+    server.installation_id = test_installation_id;
+    try fixture.writeRequest();
+    const compressed = try testZstd(arena, fixture.new_tar);
+    server.responses = &.{
+        .{ .path = try std.fmt.allocPrint(arena, "/v1/electrobun/apps/app_test/updates/stable-{s}-{s}-base123.patch", .{ nativePlatform(), nativeArch() }), .body = "missing", .code = 404 },
+        .{ .path = try std.fmt.allocPrint(arena, "/v1/electrobun/apps/app_test/updates/{s}", .{fixture.request.artifact_file}), .body = compressed },
+    };
+    var serving = try io.concurrent(TestServer.serve, .{&server});
+    defer serving.cancel(io) catch {};
+    try run(a, io, &fixture.environment, fixture.request_path);
+    try serving.await(io);
+    try fixture.expectPrepared();
+    // A download override must never weaken canonical identity validation.
+    fixture.request.base_url = base;
+    try fixture.writeRequest();
+    try std.testing.expectError(error.InvalidUpdateIdentity, run(a, io, &fixture.environment, fixture.request_path));
+}
+
+test "managed download authority is bound to the installed app flat folder" {
+    const a = std.testing.allocator;
+    const identity: Identity = .{
+        .identifier = "dev.example",
+        .channel = "stable",
+        .version = "1.0",
+        .hash = "abc123",
+        .managed = .{ .appId = "app_test", .apiUrl = "https://updates.example.test/v1/electrobun/" },
+    };
+    try validateManagedDownload(a, identity, "https://updates.example.test/v1/electrobun/apps/app_test/updates/");
+    for ([_][]const u8{
+        "http://updates.example.test/v1/electrobun/apps/app_test/updates",
+        "http://127.0.0.1/v1/electrobun/apps/app_test/updates",
+        "https://other.example.test/v1/electrobun/apps/app_test/updates",
+        "https://updates.example.test:8443/v1/electrobun/apps/app_test/updates",
+        "https://updates.example.test/v1/electrobun/apps/other/updates",
+        "https://updates.example.test/v1/electrobun/apps/app_test/updates/../updates",
+        "https://updates.example.test/v1/electrobun/apps/app_test%2Fother/updates",
+        "https://updates.example.test/v1/electrobun/apps/app_test/releases/test/artifacts",
+        "https://updates.example.test/v1/electrobun/apps/app_test/updates?candidate=1",
+        "https://updates.example.test/v1/electrobun/apps/app_test/updates#fragment",
+    }) |url| {
+        if (validateManagedDownload(a, identity, url)) |_| return error.TestUnexpectedResult else |_| {}
+    }
+    var local = identity;
+    local.managed = .{ .appId = "app_test", .apiUrl = "http://127.0.0.1:1234" };
+    try validateManagedDownload(a, local, "http://127.0.0.1:1234/v1/electrobun/apps/app_test/updates");
+    try std.testing.expectError(error.InvalidManagedUpdateIdentity, validateManagedDownload(a, local, "http://127.0.0.1:1235/v1/electrobun/apps/app_test/updates"));
+    var fixture = try TestFixture.init("https://updates.example.test/canonical");
+    defer fixture.deinit();
+    fixture.request.download_base_url = "https://updates.example.test/v1/electrobun/apps/app_test/updates";
+    try fixture.writeRequest();
+    try std.testing.expectError(error.InvalidManagedUpdateIdentity, run(a, std.testing.io, &fixture.environment, fixture.request_path));
+}
+
+test "managed identity without an endpoint is bound to the shared hosted service" {
+    const a = std.testing.allocator;
+    const parsed = try std.json.parseFromSlice(Identity, a,
+        \\{"identifier":"dev.example","channel":"stable","version":"1.0","hash":"abc123","managed":{"appId":"app_test"}}
+    , .{});
+    defer parsed.deinit();
+    try validateManagedDownload(a, parsed.value, "https://api.electrobun.dev/v1/electrobun/apps/app_test/updates");
+    try std.testing.expectError(error.InvalidManagedUpdateIdentity, validateManagedDownload(a, parsed.value, "https://other.example/v1/electrobun/apps/app_test/updates"));
+}
+
+test "managed custom origin is the installed download authority without an API path" {
+    const a = std.testing.allocator;
+    const parsed = try std.json.parseFromSlice(Identity, a,
+        \\{"identifier":"dev.example","channel":"stable","version":"1.0","hash":"abc123","managed":{"appId":"app_test","apiUrl":"https://api.electrobun.dev","baseUrl":"https://updates.customer.test/"}}
+    , .{});
+    defer parsed.deinit();
+    for ([_][]const u8{ "https://updates.customer.test", "https://updates.customer.test/", "https://updates.customer.test:443/" }) |url| {
+        try validateManagedDownload(a, parsed.value, url);
+    }
+    for ([_][]const u8{
+        "https://api.electrobun.dev/v1/electrobun/apps/app_test/updates",
+        "https://updates.customer.test/v1/electrobun/apps/app_test/updates",
+        "https://updates.customer.test/updates",
+        "https://updates.customer.test//",
+        "https://updates.customer.test/../",
+        "https://updates.customer.test/%2e%2e/",
+        "https://other.customer.test",
+        "https://updates.customer.test:8443",
+        "https://user:password@updates.customer.test",
+        "https://updates.customer.test?app=other",
+        "https://updates.customer.test#fragment",
+        "http://updates.customer.test",
+    }) |url| {
+        if (validateManagedDownload(a, parsed.value, url)) |_| return error.TestUnexpectedResult else |_| {}
+    }
+    var local = parsed.value;
+    local.managed.?.baseUrl = "http://127.0.0.1:1234/";
+    try validateManagedDownload(a, local, "http://127.0.0.1:1234");
+    try std.testing.expectError(error.InvalidManagedUpdateIdentity, validateManagedDownload(a, local, "http://127.0.0.1:1235"));
+}
+
+test "managed custom origin rejects invalid installed configuration and app IDs" {
+    const a = std.testing.allocator;
+    var identity: Identity = .{
+        .identifier = "dev.example",
+        .channel = "stable",
+        .version = "1.0",
+        .hash = "abc123",
+        .managed = .{ .appId = "app_test", .baseUrl = "https://updates.customer.test" },
+    };
+    for ([_][]const u8{ "", "https://updates.customer.test/files", "https://updates.customer.test//", "https://updates.customer.test:8443", "https://updates.customer.test?app=other", "https://updates.customer.test#fragment", "https://user@updates.customer.test", "http://updates.customer.test" }) |origin| {
+        identity.managed.?.baseUrl = origin;
+        if (validateManagedDownload(a, identity, "https://updates.customer.test")) |_| return error.TestUnexpectedResult else |_| {}
+    }
+    identity.managed.?.baseUrl = "https://updates.customer.test:443/";
+    try validateManagedDownload(a, identity, "https://updates.customer.test");
+    identity.managed.?.baseUrl = "https://updates.customer.test:8443";
+    try std.testing.expectError(error.InvalidManagedUpdateIdentity, validateManagedDownload(a, identity, "https://updates.customer.test:8443"));
+    identity.managed.?.baseUrl = "https://updates.customer.test";
+    for ([_][]const u8{ "", "../other", "app/other", "app%2fother" }) |id| {
+        identity.managed.?.appId = id;
+        try std.testing.expectError(error.InvalidManagedUpdateIdentity, validateManagedDownload(a, identity, "https://updates.customer.test"));
+    }
+}
+
+test "managed preparation requires a valid shared installation ID and static preparation rejects it" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var managed = try TestFixture.initWithManaged("https://updates.example.test/canonical", .{ .appId = "app_test", .apiUrl = "https://updates.example.test" });
+    defer managed.deinit();
+    managed.request.download_base_url = "https://updates.example.test/v1/electrobun/apps/app_test/updates";
+    for ([_]?[]const u8{ null, "", "short", "ABCDEF0123456789abcdef0123456789", "abcdef0123456789abcdef0123456789\r\n" }) |id| {
+        managed.request.installation_id = id;
+        try managed.writeRequest();
+        try std.testing.expectError(error.InvalidInstallationId, run(a, io, &managed.environment, managed.request_path));
+    }
+    var self_hosted = try TestFixture.init("https://updates.example.test/static");
+    defer self_hosted.deinit();
+    self_hosted.request.installation_id = test_installation_id;
+    try self_hosted.writeRequest();
+    try std.testing.expectError(error.InvalidManagedUpdateIdentity, run(a, io, &self_hosted.environment, self_hosted.request_path));
+}
+
 test "native prepare rejects a symlink request and unmatched integrity metadata" {
     const a = std.testing.allocator;
     const io = std.testing.io;
@@ -991,6 +1234,112 @@ test "native preparation follows patches through an intermediate staged app" {
     try serving.await(io);
     try fixture.expectPrepared();
     try std.testing.expectError(error.FileNotFound, Io.Dir.cwd().access(io, try std.fmt.allocPrint(arena, "{s}.prepare-{s}", .{ fixture.request.app_bundle_path, fixture.request.transaction_id }), .{}));
+}
+
+test "flat-folder contract preserves two-step hash patch chains for self-hosted managed and custom-origin apps" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const Hosting = enum { self_hosted, managed, custom };
+    for ([_]Hosting{ .self_hosted, .managed, .custom }) |hosting| {
+        const managed = hosting != .self_hosted;
+        for ([_]bool{ false, true }) |integrity| {
+            var server = try TestServer.init();
+            defer server.deinit();
+            const origin = try server.baseUrl(a);
+            defer a.free(origin);
+            const folder = switch (hosting) {
+                .managed => "/v1/electrobun/apps/app_test/updates",
+                .custom => "",
+                .self_hosted => "/existing-bucket/app-files",
+            };
+            const base = try std.fmt.allocPrint(a, "{s}{s}/", .{ origin, folder });
+            defer a.free(base);
+            const managed_identity: ?ManagedIdentity = switch (hosting) {
+                .managed => .{ .appId = "app_test", .apiUrl = origin },
+                .custom => .{ .appId = "app_test", .baseUrl = origin },
+                .self_hosted => null,
+            };
+            var fixture = try TestFixture.initWithManaged(base, managed_identity);
+            defer fixture.deinit();
+            const arena = fixture.arena.allocator();
+            if (managed) {
+                fixture.request.download_base_url = base;
+                server.installation_id = test_installation_id;
+            }
+            if (!integrity) {
+                fixture.request.tar_sha256 = null;
+                fixture.request.tar_size = null;
+            }
+            try fixture.writeRequest();
+            const middle = try testTar(arena, fixture.root_name, .{
+                .identifier = fixture.request.identifier,
+                .channel = "stable",
+                .version = "1.5.0",
+                .hash = "middle123",
+                .baseUrl = base,
+                .managed = managed_identity,
+            });
+            // Only these ordinary flat filenames exist. The same base is used
+            // before and after reading the next hash from the patched payload;
+            // neither release IDs nor a managed response envelope are involved.
+            server.responses = &.{
+                .{ .path = try std.fmt.allocPrint(arena, "{s}/stable-{s}-{s}-base123.patch", .{ folder, nativePlatform(), nativeArch() }), .body = try testLiteralPatch(arena, middle) },
+                .{ .path = try std.fmt.allocPrint(arena, "{s}/stable-{s}-{s}-middle123.patch", .{ folder, nativePlatform(), nativeArch() }), .body = try testLiteralPatch(arena, fixture.new_tar) },
+            };
+            var serving = try io.concurrent(TestServer.serve, .{&server});
+            defer serving.cancel(io) catch {};
+            try run(a, io, &fixture.environment, fixture.request_path);
+            try serving.await(io);
+            try fixture.expectPrepared();
+        }
+    }
+}
+
+test "flat-folder contract preserves missing-patch full fallback with optional archive integrity" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const Hosting = enum { self_hosted, managed, custom };
+    for ([_]Hosting{ .self_hosted, .managed, .custom }) |hosting| {
+        const managed = hosting != .self_hosted;
+        for ([_]bool{ false, true }) |integrity| {
+            var server = try TestServer.init();
+            defer server.deinit();
+            const origin = try server.baseUrl(a);
+            defer a.free(origin);
+            const folder = switch (hosting) {
+                .managed => "/v1/electrobun/apps/app_test/updates",
+                .custom => "",
+                .self_hosted => "/existing-bucket/app-files",
+            };
+            const base = try std.fmt.allocPrint(a, "{s}{s}/", .{ origin, folder });
+            defer a.free(base);
+            var fixture = try TestFixture.initWithManaged(base, switch (hosting) {
+                .managed => .{ .appId = "app_test", .apiUrl = origin },
+                .custom => .{ .appId = "app_test", .baseUrl = origin },
+                .self_hosted => null,
+            });
+            defer fixture.deinit();
+            const arena = fixture.arena.allocator();
+            if (managed) {
+                fixture.request.download_base_url = base;
+                server.installation_id = test_installation_id;
+            }
+            if (!integrity) {
+                fixture.request.tar_sha256 = null;
+                fixture.request.tar_size = null;
+            }
+            try fixture.writeRequest();
+            server.responses = &.{
+                .{ .path = try std.fmt.allocPrint(arena, "{s}/stable-{s}-{s}-base123.patch", .{ folder, nativePlatform(), nativeArch() }), .body = "missing", .code = 404 },
+                .{ .path = try std.fmt.allocPrint(arena, "{s}/{s}", .{ folder, fixture.request.artifact_file }), .body = try testZstd(arena, fixture.new_tar) },
+            };
+            var serving = try io.concurrent(TestServer.serve, .{&server});
+            defer serving.cancel(io) catch {};
+            try run(a, io, &fixture.environment, fixture.request_path);
+            try serving.await(io);
+            try fixture.expectPrepared();
+        }
+    }
 }
 
 test "native preparation replaces superseded staged payload and prunes obsolete tars" {

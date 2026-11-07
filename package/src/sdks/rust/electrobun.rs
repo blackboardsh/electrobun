@@ -4,7 +4,7 @@ use std::mem;
 use std::os::raw::{c_char, c_int, c_void};
 use std::path::PathBuf;
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 pub const INSTALL_ROOT_NAME_ENVIRONMENT_VARIABLE: &str = "ELECTROBUN_INSTALL_ROOT_NAME";
 
@@ -648,6 +648,488 @@ pub fn exit_on_last_window_closed_from_build_config(bundle_paths: &BundlePaths) 
     json_bool_field(runtime_object, "exitOnLastWindowClosed").unwrap_or(true)
 }
 
+pub const DEFAULT_INSIGHTS_API_URL: &str = "https://api.electrobun.dev";
+
+/// App-scoped installation identity shared by managed updates and Insights.
+/// Configuring this local identity never enables analytics or starts a session.
+#[derive(Clone, Debug, Default)]
+pub struct InstallationConfig {
+    /// Optional managed-service app ID used to migrate an older Insights identity.
+    pub app_id: Option<String>,
+    /// Use the same directory as Insights to preserve existing installation IDs.
+    pub storage_path: String,
+}
+
+impl InstallationConfig {
+    fn to_json(&self) -> String {
+        let mut json = format!("{{\"storagePath\":{}", json_string_literal(&self.storage_path));
+        if let Some(app_id) = &self.app_id {
+            json.push_str(&format!(",\"appId\":{}", json_string_literal(app_id)));
+        }
+        json.push('}');
+        json
+    }
+}
+
+/// Resolves the app's shared identity, with or without managed services.
+/// The Insights collection preference does not affect installation identity.
+pub fn installation_config_from_bundle(bundle_paths: &BundlePaths) -> Option<InstallationConfig> {
+    let build_json = fs::read_to_string(bundle_paths.resources_dir.join("build.json")).ok()?;
+    let version_json = fs::read_to_string(bundle_paths.resources_dir.join("version.json")).ok()?;
+    let app_info = insights_app_info_from_json(&version_json)?;
+    let storage_path = PathBuf::from(Paths::resolve(&app_info).ok()?.user_data)
+        .join("insights")
+        .to_string_lossy()
+        .into_owned();
+    installation_config_from_json(&build_json, &version_json, storage_path)
+}
+
+fn installation_config_from_json(
+    build_json: &str,
+    version_json: &str,
+    storage_path: String,
+) -> Option<InstallationConfig> {
+    insights_json_object_fields(build_json)?;
+    insights_json_object_fields(version_json)?;
+    let mut app_id: Option<String> = None;
+    for (source, key) in [
+        (build_json, "insights"),
+        (build_json, "managed"),
+        (version_json, "managed"),
+    ] {
+        if let Some(settings) = insights_json_field(source, key) {
+            // Optional settings may be null when the corresponding service is off.
+            if settings == "null" {
+                continue;
+            }
+            let candidate = insights_json_string(settings, "appId")?;
+            if candidate.is_empty()
+                || app_id.as_ref().is_some_and(|existing| existing != &candidate)
+            {
+                return None;
+            }
+            app_id = Some(candidate);
+        }
+    }
+    Some(InstallationConfig {
+        app_id,
+        storage_path,
+    })
+}
+
+/// Native Electrobun Insights configuration. Network requests and the bounded
+/// offline queue are owned by the core, independently of the update mechanism.
+#[derive(Clone, Debug)]
+pub struct InsightsConfig {
+    pub app_id: String,
+    /// Defaults to Electrobun Insights; override only for local or staging services.
+    pub api_url: String,
+    /// Parent directory for app-scoped identity and queued events.
+    pub storage_path: String,
+    /// Initial collection preference, disabled unless explicitly enabled.
+    /// The native core preserves a user's later runtime choice across launches.
+    pub enabled: bool,
+    pub version: String,
+    pub build_hash: String,
+    pub channel: String,
+    pub distribution: String,
+    pub update_authority: String,
+    pub platform: String,
+    pub arch: String,
+}
+
+impl Default for InsightsConfig {
+    fn default() -> Self {
+        Self {
+            app_id: String::new(),
+            api_url: DEFAULT_INSIGHTS_API_URL.into(),
+            storage_path: String::new(),
+            enabled: false,
+            version: "0.0.0".into(),
+            build_hash: String::new(),
+            channel: "dev".into(),
+            distribution: "direct".into(),
+            update_authority: "direct".into(),
+            platform: if cfg!(target_os = "macos") {
+                "macos"
+            } else if cfg!(target_os = "windows") {
+                "win"
+            } else {
+                std::env::consts::OS
+            }
+            .into(),
+            arch: match std::env::consts::ARCH {
+                "aarch64" => "arm64",
+                "x86_64" => "x64",
+                arch => arch,
+            }
+            .into(),
+        }
+    }
+}
+
+impl InsightsConfig {
+    fn to_json(&self) -> String {
+        let fields = [
+            ("appId", &self.app_id),
+            ("apiUrl", &self.api_url),
+            ("storagePath", &self.storage_path),
+            ("version", &self.version),
+            ("buildHash", &self.build_hash),
+            ("channel", &self.channel),
+            ("distribution", &self.distribution),
+            ("updateAuthority", &self.update_authority),
+            ("platform", &self.platform),
+            ("arch", &self.arch),
+        ];
+        let mut json = format!("{{\"enabled\":{}", self.enabled);
+        for (name, value) in fields {
+            json.push_str(&format!(",\"{name}\":{}", json_string_literal(value)));
+        }
+        json.push('}');
+        json
+    }
+}
+
+/// Missing or malformed configuration leaves telemetry off. Every channel
+/// defaults to disabled unless `insights.enabled: true` is explicitly supplied.
+pub fn insights_config_from_bundle(bundle_paths: &BundlePaths) -> Option<InsightsConfig> {
+    let build_json = fs::read_to_string(bundle_paths.resources_dir.join("build.json")).ok()?;
+    let version_json = fs::read_to_string(bundle_paths.resources_dir.join("version.json")).ok()?;
+    let app_info = insights_app_info_from_json(&version_json)?;
+    let storage_path = PathBuf::from(Paths::resolve(&app_info).ok()?.user_data)
+        .join("insights")
+        .to_string_lossy()
+        .into_owned();
+    insights_config_from_json(&build_json, &version_json, storage_path)
+}
+
+fn insights_app_info_from_json(version_json: &str) -> Option<AppInfo> {
+    let identifier = insights_json_string(version_json, "identifier")?;
+    if identifier.is_empty() {
+        return None;
+    }
+    Some(AppInfo {
+        identifier,
+        name: insights_json_string(version_json, "name").unwrap_or_else(|| "Electrobun".into()),
+        channel: insights_json_string(version_json, "channel").unwrap_or_else(|| "dev".into()),
+    })
+}
+
+fn insights_config_from_json(
+    build_json: &str,
+    version_json: &str,
+    storage_path: String,
+) -> Option<InsightsConfig> {
+    let insights = insights_json_field(build_json, "insights")?;
+    let app_id = insights_json_string(insights, "appId")?;
+    let api_url = match insights_json_field(insights, "apiUrl") {
+        None => DEFAULT_INSIGHTS_API_URL.into(),
+        Some(value) => insights_decode_string(value)?,
+    };
+    if app_id.is_empty() || api_url.is_empty() {
+        return None;
+    }
+    // Also validate version.json even when all optional fields are absent.
+    insights_json_object_fields(version_json)?;
+    let channel = insights_json_string(version_json, "channel").unwrap_or_else(|| "dev".into());
+    let enabled = match insights_json_field(insights, "enabled") {
+        Some("true") => true,
+        Some("false") => false,
+        None => false,
+        _ => return None,
+    };
+    let update_authority = insights_json_string(version_json, "updateAuthority")
+        .or_else(|| insights_json_string(build_json, "updateAuthority"))
+        .unwrap_or_else(|| "direct".into());
+    if !matches!(update_authority.as_str(), "direct" | "external" | "none") {
+        return None;
+    }
+    Some(InsightsConfig {
+        app_id,
+        api_url,
+        storage_path,
+        enabled,
+        channel,
+        update_authority,
+        version: insights_json_string(version_json, "version").unwrap_or_else(|| "0.0.0".into()),
+        build_hash: insights_json_string(version_json, "hash").unwrap_or_default(),
+        distribution: insights_json_string(version_json, "distribution")
+            .or_else(|| insights_json_string(build_json, "distribution"))
+            .unwrap_or_else(|| "direct".into()),
+        ..InsightsConfig::default()
+    })
+}
+
+// These readers deliberately inspect only direct object members. The older
+// general SDK helpers search strings by key, which could enable collection
+// from a nested `insights` example or read a nested `enabled` flag by mistake.
+fn insights_json_field<'a>(source: &'a str, key: &str) -> Option<&'a str> {
+    insights_json_object_fields(source)?
+        .into_iter()
+        .find_map(|(name, value)| if name == key { Some(value) } else { None })
+}
+
+fn insights_json_string(source: &str, key: &str) -> Option<String> {
+    insights_decode_string(insights_json_field(source, key)?)
+}
+
+fn insights_json_object_fields(source: &str) -> Option<Vec<(String, &str)>> {
+    let source = source.trim();
+    // Validate the complete object, including trailing members and values.
+    if !source.starts_with('{') || insights_json_value_end(source, 0, 0)? != source.len() {
+        return None;
+    }
+    let mut fields = Vec::new();
+    let mut offset = 1;
+    loop {
+        offset = insights_skip_space(source, offset);
+        if source.as_bytes().get(offset) == Some(&b'}') {
+            return Some(fields);
+        }
+        let end = insights_json_string_end(source, offset)?;
+        let key = insights_decode_string(&source[offset..end])?;
+        if fields.iter().any(|(name, _)| name == &key) {
+            return None;
+        }
+        offset = insights_skip_space(source, end) + 1; // Validated colon.
+        offset = insights_skip_space(source, offset);
+        let end = insights_json_value_end(source, offset, 0)?;
+        fields.push((key, &source[offset..end]));
+        offset = insights_skip_space(source, end);
+        if source.as_bytes().get(offset) == Some(&b'}') {
+            return Some(fields);
+        }
+        offset += 1; // Validated comma.
+    }
+}
+
+fn insights_skip_space(source: &str, mut offset: usize) -> usize {
+    while matches!(
+        source.as_bytes().get(offset),
+        Some(b' ' | b'\t' | b'\r' | b'\n')
+    ) {
+        offset += 1;
+    }
+    offset
+}
+
+fn insights_json_string_end(source: &str, start: usize) -> Option<usize> {
+    if source.as_bytes().get(start) != Some(&b'"') {
+        return None;
+    }
+    let mut offset = start + 1;
+    while let Some(&byte) = source.as_bytes().get(offset) {
+        match byte {
+            b'"' => {
+                let end = offset + 1;
+                insights_decode_string(&source[start..end])?;
+                return Some(end);
+            }
+            b'\\' => {
+                offset += 1;
+                source.as_bytes().get(offset)?;
+            }
+            0..=31 => return None,
+            _ => {}
+        }
+        offset += 1;
+    }
+    None
+}
+
+fn insights_decode_string(source: &str) -> Option<String> {
+    let mut chars = source.strip_prefix('"')?.strip_suffix('"')?.chars();
+    let mut result = String::new();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' | '\u{0000}'..='\u{001f}' => return None,
+            '\\' => result.push(match chars.next()? {
+                '"' => '"',
+                '\\' => '\\',
+                '/' => '/',
+                'b' => '\u{0008}',
+                'f' => '\u{000c}',
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                'u' => {
+                    let mut code = 0u32;
+                    for _ in 0..4 {
+                        code = code * 16 + chars.next()?.to_digit(16)?;
+                    }
+                    if (0xd800..=0xdbff).contains(&code) {
+                        if chars.next()? != '\\' || chars.next()? != 'u' {
+                            return None;
+                        }
+                        let mut low = 0u32;
+                        for _ in 0..4 {
+                            low = low * 16 + chars.next()?.to_digit(16)?;
+                        }
+                        if !(0xdc00..=0xdfff).contains(&low) {
+                            return None;
+                        }
+                        code = 0x10000 + ((code - 0xd800) << 10) + low - 0xdc00;
+                    }
+                    char::from_u32(code)?
+                }
+                _ => return None,
+            }),
+            _ => result.push(ch),
+        }
+    }
+    Some(result)
+}
+
+fn insights_json_value_end(source: &str, start: usize, depth: usize) -> Option<usize> {
+    if depth > 64 {
+        return None;
+    }
+    let bytes = source.as_bytes();
+    match *bytes.get(start)? {
+        b'"' => insights_json_string_end(source, start),
+        b'{' | b'[' => {
+            let object = bytes[start] == b'{';
+            let close = if object { b'}' } else { b']' };
+            let mut offset = insights_skip_space(source, start + 1);
+            if bytes.get(offset) == Some(&close) {
+                return Some(offset + 1);
+            }
+            loop {
+                if object {
+                    offset = insights_skip_space(source, insights_json_string_end(source, offset)?);
+                    if bytes.get(offset) != Some(&b':') {
+                        return None;
+                    }
+                    offset = insights_skip_space(source, offset + 1);
+                }
+                offset = insights_skip_space(
+                    source,
+                    insights_json_value_end(source, offset, depth + 1)?,
+                );
+                if bytes.get(offset) == Some(&close) {
+                    return Some(offset + 1);
+                }
+                if bytes.get(offset) != Some(&b',') {
+                    return None;
+                }
+                offset = insights_skip_space(source, offset + 1);
+            }
+        }
+        b't' if source[start..].starts_with("true") => Some(start + 4),
+        b'f' if source[start..].starts_with("false") => Some(start + 5),
+        b'n' if source[start..].starts_with("null") => Some(start + 4),
+        b'-' | b'0'..=b'9' => {
+            let mut offset = start;
+            if bytes.get(offset) == Some(&b'-') {
+                offset += 1;
+            }
+            match bytes.get(offset) {
+                Some(b'0') => offset += 1,
+                Some(b'1'..=b'9') => {
+                    offset += 1;
+                    while matches!(bytes.get(offset), Some(b'0'..=b'9')) {
+                        offset += 1;
+                    }
+                }
+                _ => return None,
+            }
+            if bytes.get(offset) == Some(&b'.') {
+                offset += 1;
+                let digit_start = offset;
+                while matches!(bytes.get(offset), Some(b'0'..=b'9')) {
+                    offset += 1;
+                }
+                if digit_start == offset {
+                    return None;
+                }
+            }
+            if matches!(bytes.get(offset), Some(b'e' | b'E')) {
+                offset += 1;
+                if matches!(bytes.get(offset), Some(b'+' | b'-')) {
+                    offset += 1;
+                }
+                let digit_start = offset;
+                while matches!(bytes.get(offset), Some(b'0'..=b'9')) {
+                    offset += 1;
+                }
+                if digit_start == offset {
+                    return None;
+                }
+            }
+            Some(offset)
+        }
+        _ => None,
+    }
+}
+
+type InsightsConfigureFn = unsafe extern "C" fn(*const c_char) -> bool;
+type InsightsTrackFn = unsafe extern "C" fn(*const c_char, *const c_char) -> bool;
+type InsightsIdentifyFn = unsafe extern "C" fn(*const c_char);
+type InsightsActionFn = unsafe extern "C" fn();
+type InsightsSetEnabledFn = unsafe extern "C" fn(bool);
+type InsightsGetInstallationIdFn = unsafe extern "C" fn() -> *mut c_char;
+
+#[derive(Default)]
+struct InstallationSymbols {
+    configure: Option<InsightsConfigureFn>,
+    installation_id: Option<InsightsGetInstallationIdFn>,
+}
+
+impl InstallationSymbols {
+    fn load(lib: &dynlib::DynamicLibrary) -> Self {
+        Self {
+            configure: lib.symbol("installationConfigure").ok(),
+            installation_id: lib.symbol("getInstallationId").ok(),
+        }
+    }
+
+    fn configure(&self, config: &InstallationConfig) -> Result<bool, String> {
+        let Some(configure) = self.configure else {
+            return Ok(false);
+        };
+        let json = to_c_string(&config.to_json(), "Installation configuration")?;
+        Ok(unsafe { configure(json.as_ptr()) })
+    }
+
+    fn get_id(&self, free: FreeCoreStringFn) -> Option<String> {
+        let value = unsafe { (self.installation_id?)() };
+        if value.is_null() {
+            return None;
+        }
+        let result = c_string_to_string(value);
+        unsafe { free(value) };
+        if result.is_empty() { None } else { Some(result) }
+    }
+}
+
+#[derive(Default)]
+struct InsightsSymbols {
+    configure: Option<InsightsConfigureFn>,
+    track: Option<InsightsTrackFn>,
+    identify: Option<InsightsIdentifyFn>,
+    reset: Option<InsightsActionFn>,
+    set_enabled: Option<InsightsSetEnabledFn>,
+    installation_id: Option<InsightsGetInstallationIdFn>,
+    flush: Option<InsightsActionFn>,
+    shutdown: Option<InsightsActionFn>,
+}
+
+impl InsightsSymbols {
+    fn load(lib: &dynlib::DynamicLibrary) -> Self {
+        Self {
+            configure: lib.symbol("insightsConfigure").ok(),
+            track: lib.symbol("insightsTrack").ok(),
+            identify: lib.symbol("insightsIdentify").ok(),
+            reset: lib.symbol("insightsReset").ok(),
+            set_enabled: lib.symbol("insightsSetEnabled").ok(),
+            installation_id: lib.symbol("insightsGetInstallationId").ok(),
+            flush: lib.symbol("insightsFlush").ok(),
+            shutdown: lib.symbol("insightsShutdown").ok(),
+        }
+    }
+}
+
 type LastErrorFn = unsafe extern "C" fn() -> *const c_char;
 type RunMainThreadFn =
     unsafe extern "C" fn(*const c_char, *const c_char, *const c_char, c_int) -> c_int;
@@ -967,6 +1449,9 @@ struct Symbols {
 pub struct Core {
     _lib: dynlib::DynamicLibrary,
     symbols: Symbols,
+    installation: InstallationSymbols,
+    insights: InsightsSymbols,
+    insights_configured: AtomicBool,
 }
 
 unsafe impl Send for Core {}
@@ -1118,7 +1603,125 @@ impl Core {
             (symbols.set_quit_requested_handler)(Some(quit_requested_trampoline));
         }
 
-        Ok(Self { _lib: lib, symbols })
+        let installation = InstallationSymbols::load(&lib);
+        let insights = InsightsSymbols::load(&lib);
+        let core = Self {
+            _lib: lib,
+            symbols,
+            installation,
+            insights,
+            insights_configured: AtomicBool::new(false),
+        };
+        if let Some(config) = installation_config_from_bundle(&bundle_paths) {
+            // Identity is local and independent of the Insights background worker.
+            let _ = core.installation_configure(&config);
+            if let Some(config) = insights_config_from_bundle(&bundle_paths) {
+                // Analytics initialization must never prevent the app from opening.
+                let _ = core.insights_configure(&config);
+            }
+        }
+        Ok(core)
+    }
+
+    /// Configures only the persisted installation identity, without telemetry.
+    /// Normal bundled apps are configured automatically by `Core::load`.
+    pub fn installation_configure(&self, config: &InstallationConfig) -> Result<bool, String> {
+        self.installation.configure(config)
+    }
+
+    /// Shared app/profile installation ID. This works with Insights disabled.
+    /// Applications may display it in About, Help, or their own settings UI.
+    pub fn installation_id(&self) -> Option<String> {
+        self.installation.get_id(self.symbols.free_core_string)
+    }
+
+    /// Configures the native worker without waiting for a network request.
+    /// Returns false when the loaded core does not provide Insights.
+    pub fn insights_configure(&self, config: &InsightsConfig) -> Result<bool, String> {
+        let Some(configure) = self.insights.configure else {
+            return Ok(false);
+        };
+        // Starting a worker is unsafe if this core cannot stop it before unload.
+        if self.insights.shutdown.is_none() {
+            return Ok(false);
+        }
+        let json = to_c_string(&config.to_json(), "Insights configuration")?;
+        let configured = unsafe { configure(json.as_ptr()) };
+        if configured {
+            self.insights_configured.store(true, Ordering::Release);
+        }
+        Ok(configured)
+    }
+
+    /// Enqueues a custom event. `properties_json` must be a JSON object; the
+    /// native core validates and bounds it. False means the event was not queued.
+    pub fn insights_track(&self, name: &str, properties_json: &str) -> Result<bool, String> {
+        let Some(track) = self.insights.track else {
+            return Ok(false);
+        };
+        let name = to_c_string(name, "Insights event name")?;
+        let properties = to_c_string(properties_json, "Insights event properties")?;
+        Ok(unsafe { track(name.as_ptr(), properties.as_ptr()) })
+    }
+
+    /// Associates subsequent custom events with an application-defined opaque user ID.
+    /// None clears the association without changing historical events.
+    /// Neither operation changes the app session or its duration.
+    pub fn insights_identify(&self, user_id: Option<&str>) -> Result<(), String> {
+        let Some(identify) = self.insights.identify else {
+            return Ok(());
+        };
+        let user_id = user_id
+            .map(|value| to_c_string(value, "Insights user ID"))
+            .transpose()?;
+        unsafe { identify(user_id.as_ref().map_or(ptr::null(), |value| value.as_ptr())) };
+        Ok(())
+    }
+
+    /// Clears the user association. The native core owns installation identity.
+    pub fn insights_reset(&self) {
+        if let Some(reset) = self.insights.reset {
+            unsafe { reset() };
+        }
+    }
+
+    pub fn insights_set_enabled(&self, enabled: bool) {
+        if let Some(set_enabled) = self.insights.set_enabled {
+            unsafe { set_enabled(enabled) };
+        }
+    }
+
+    /// Returns the app/profile-scoped random installation ID, when configured.
+    pub fn insights_installation_id(&self) -> Option<String> {
+        let installation_id = self.insights.installation_id?;
+        let value = unsafe { installation_id() };
+        if value.is_null() {
+            return None;
+        }
+        let result = c_string_to_string(value);
+        unsafe { (self.symbols.free_core_string)(value) };
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
+    /// Requests a background send; this does not wait for network availability.
+    pub fn insights_flush(&self) {
+        if let Some(flush) = self.insights.flush {
+            unsafe { flush() };
+        }
+    }
+
+    /// Stops the native worker before unloading the core. Queued events remain
+    /// on disk for the next launch; shutdown does not force a network delivery.
+    pub fn insights_shutdown(&self) {
+        if self.insights_configured.swap(false, Ordering::AcqRel) {
+            if let Some(shutdown) = self.insights.shutdown {
+                unsafe { shutdown() };
+            }
+        }
     }
 
     pub fn configure_webview_runtime_from_executable_dir(
@@ -2315,6 +2918,12 @@ impl Core {
     }
 }
 
+impl Drop for Core {
+    fn drop(&mut self) {
+        self.insights_shutdown();
+    }
+}
+
 fn core_library_name() -> &'static str {
     if cfg!(windows) {
         "ElectrobunCore.dll"
@@ -2723,6 +3332,275 @@ fn effective_install_root_name(fallback: &str) -> String {
     match std::env::var(INSTALL_ROOT_NAME_ENVIRONMENT_VARIABLE) {
         Ok(candidate) if is_safe_install_root_name(&candidate) => candidate,
         _ => fallback.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod installation_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Mutex;
+
+    static CONFIGURATION: Mutex<Option<String>> = Mutex::new(None);
+    static FREED: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn configure(config: *const c_char) -> bool {
+        *CONFIGURATION.lock().unwrap() = Some(c_string_to_string(config));
+        true
+    }
+
+    unsafe extern "C" fn installation_id() -> *mut c_char {
+        CString::new("0123456789abcdef0123456789abcdef").unwrap().into_raw()
+    }
+
+    unsafe extern "C" fn free(value: *mut c_char) {
+        drop(CString::from_raw(value));
+        FREED.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn hosting_only_and_disabled_insights_resolve_the_same_local_identity() {
+        let version = r#"{"managed":{"appId":"app_123"},"channel":"stable"}"#;
+        for build in [
+            "{}",
+            r#"{"insights":null}"#,
+            r#"{"insights":{"appId":"app_123","enabled":false}}"#,
+            r#"{"insights":{"appId":"app_123","enabled":true}}"#,
+        ] {
+            let config = installation_config_from_json(build, version, "/profile/insights".into()).unwrap();
+            assert_eq!(config.app_id.as_deref(), Some("app_123"));
+            assert_eq!(config.storage_path, "/profile/insights");
+            let json = config.to_json();
+            assert_eq!(insights_json_object_fields(&json).unwrap().len(), 2);
+            assert!(insights_json_field(&json, "enabled").is_none());
+        }
+        assert!(insights_config_from_json("{}", version, "/profile/insights".into()).is_none());
+        let config = installation_config_from_json(
+            r#"{"insights":{"appId":"app_123","enabled":false}}"#,
+            "{}",
+            "/profile/insights".into(),
+        ).unwrap();
+        assert_eq!(config.app_id.as_deref(), Some("app_123"));
+        let config = installation_config_from_json(
+            r#"{"managed":{"appId":"app_123"}}"#,
+            "{}",
+            "/profile/insights".into(),
+        ).unwrap();
+        assert_eq!(config.app_id.as_deref(), Some("app_123"));
+    }
+
+    #[test]
+    fn applications_without_managed_services_still_have_local_identity() {
+        for build in ["{}", r#"{"example":{"managed":{"appId":"other_app"}}}"#] {
+            let config = installation_config_from_json(build, "{}", "/profile/insights".into()).unwrap();
+            assert!(config.app_id.is_none());
+            assert_eq!(config.storage_path, "/profile/insights");
+            let json = config.to_json();
+            assert!(insights_json_field(&json, "appId").is_none());
+            assert_eq!(insights_json_object_fields(&json).unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn identity_rejects_conflicting_or_malformed_service_scopes() {
+        for (build, version) in [
+            (r#"{"insights":{"appId":"app_one"}}"#, r#"{"managed":{"appId":"app_two"}}"#),
+            (r#"{"managed":{"appId":"app_one"}}"#, r#"{"managed":{"appId":"app_two"}}"#),
+            (r#"{"insights":{"appId":null}}"#, r#"{"managed":{"appId":"app_one"}}"#),
+            ("{}", r#"{"managed":{"appId":""}}"#),
+            ("{}", r#"{"managed":"app_one"}"#),
+            ("{", r#"{"managed":{"appId":"app_one"}}"#),
+        ] {
+            assert!(installation_config_from_json(build, version, "profile".into()).is_none(), "{build} / {version}");
+        }
+    }
+
+    #[test]
+    fn shared_getter_calls_only_identity_symbols_and_frees_native_string() {
+        let api = InstallationSymbols { configure: Some(configure), installation_id: Some(installation_id) };
+        let config = InstallationConfig { app_id: Some("app_123".into()), storage_path: "/profile with spaces/insights".into() };
+        assert!(api.configure(&config).unwrap());
+        let payload = CONFIGURATION.lock().unwrap().clone().unwrap();
+        assert_eq!(insights_json_string(&payload, "appId"), config.app_id);
+        assert_eq!(insights_json_string(&payload, "storagePath").unwrap(), config.storage_path);
+        assert_eq!(api.get_id(free).as_deref(), Some("0123456789abcdef0123456789abcdef"));
+        assert_eq!(FREED.load(Ordering::SeqCst), 1);
+
+        let unavailable = InstallationSymbols::default();
+        assert!(!unavailable.configure(&config).unwrap());
+        assert!(unavailable.get_id(free).is_none());
+        assert_eq!(FREED.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(test)]
+mod insights_tests {
+    use super::{
+        insights_app_info_from_json, insights_config_from_json, insights_decode_string,
+        insights_json_field, InsightsConfig, DEFAULT_INSIGHTS_API_URL,
+    };
+
+    #[test]
+    fn managed_service_defaults_without_an_api_url_and_keeps_explicit_overrides() {
+        let config = insights_config_from_json(
+            r#"{"insights":{"appId":"app_123"}}"#,
+            r#"{"channel":"stable"}"#,
+            "/profile/insights".into(),
+        ).unwrap();
+        assert_eq!(config.api_url, DEFAULT_INSIGHTS_API_URL);
+        assert!(!config.enabled);
+        assert_eq!(InsightsConfig::default().api_url, DEFAULT_INSIGHTS_API_URL);
+        assert!(!InsightsConfig::default().enabled);
+        assert_eq!(
+            insights_decode_string(insights_json_field(&config.to_json(), "apiUrl").unwrap()).unwrap(),
+            DEFAULT_INSIGHTS_API_URL,
+        );
+        let override_config = insights_config_from_json(
+            r#"{"insights":{"appId":"app_123","apiUrl":"http://127.0.0.1:8787"}}"#,
+            r#"{"channel":"canary"}"#,
+            "/profile/insights".into(),
+        ).unwrap();
+        assert_eq!(override_config.api_url, "http://127.0.0.1:8787");
+        for value in ["null", "false", "123", r#""""#] {
+            let build = format!(r#"{{"insights":{{"appId":"app_123","apiUrl":{value}}}}}"#);
+            assert!(insights_config_from_json(&build, r#"{"channel":"stable"}"#, "profile".into()).is_none());
+        }
+    }
+
+    #[test]
+    fn storage_profile_requires_top_level_app_identifier() {
+        for version in [
+            "{}",
+            r#"{"identifier":""}"#,
+            r#"{"identifier":null}"#,
+            r#"{"example":{"identifier":"other.app","name":"Other","channel":"stable"}}"#,
+        ] {
+            assert!(insights_app_info_from_json(version).is_none(), "{version}");
+        }
+        let info = insights_app_info_from_json(
+            r#"{"example":{"identifier":"other.app","name":"Other","channel":"stable"},"identifier":"actual.app"}"#,
+        ).unwrap();
+        assert_eq!(info.identifier, "actual.app");
+        assert_eq!(info.name, "Electrobun");
+        assert_eq!(info.channel, "dev");
+    }
+
+    #[test]
+    fn bundled_managed_custom_origin_preserves_identity_and_disabled_collection() {
+        // Hutch has already selected this origin for both managed updates and
+        // Insights; the SDK passes it to the core without changing its scope.
+        let config = insights_config_from_json(
+            r#"{"insights":{"appId":"app_123","apiUrl":"https://updates.example.test"},"managed":{"appId":"app_123","baseUrl":"https://updates.example.test"}}"#,
+            r#"{"version":"1.5.0","hash":"custom-build","channel":"stable","managed":{"appId":"app_123","baseUrl":"https://updates.example.test"}}"#,
+            "/profile/insights".into(),
+        ).unwrap();
+        assert_eq!(config.api_url, "https://updates.example.test");
+        assert_eq!(config.app_id, "app_123");
+        assert_eq!(config.version, "1.5.0");
+        assert_eq!(config.build_hash, "custom-build");
+        assert_eq!(config.channel, "stable");
+        assert!(!config.enabled);
+        assert_eq!(
+            insights_decode_string(insights_json_field(&config.to_json(), "apiUrl").unwrap()).unwrap(),
+            "https://updates.example.test",
+        );
+    }
+
+    #[test]
+    fn bundled_insights_preserve_external_distribution_and_build_identity() {
+        let config = insights_config_from_json(
+            r#"{"insights":{"appId":"app_123","apiUrl":"https://cloud.example/v1/electrobun","enabled":true},"updateAuthority":"external","distribution":"app-store"}"#,
+            r#"{"version":"2.1.0","hash":"abc123","channel":"stable"}"#,
+            "/profile/insights".into(),
+        ).unwrap();
+        assert_eq!(config.app_id, "app_123");
+        assert_eq!(config.storage_path, "/profile/insights");
+        assert_eq!(config.version, "2.1.0");
+        assert_eq!(config.build_hash, "abc123");
+        assert_eq!(config.update_authority, "external");
+        assert_eq!(config.distribution, "app-store");
+        assert!(config.enabled);
+    }
+
+    #[test]
+    fn immutable_packaged_distribution_takes_precedence_over_build_defaults() {
+        let config = insights_config_from_json(
+            r#"{"insights":{"appId":"a","apiUrl":"https://cloud.example"},"updateAuthority":"direct","distribution":"direct"}"#,
+            r#"{"channel":"stable","updateAuthority":"external","distribution":"app-store"}"#,
+            "profile".into(),
+        ).unwrap();
+        assert_eq!(config.update_authority, "external");
+        assert_eq!(config.distribution, "app-store");
+    }
+
+    #[test]
+    fn every_channel_requires_explicit_opt_in_and_nested_flags_do_not_opt_in() {
+        for channel in [None, Some("dev"), Some("canary"), Some("stable")] {
+            let version = channel.map_or_else(|| "{}".into(), |value| format!(r#"{{"channel":"{value}"}}"#));
+            for extras in [
+                "",
+                r#", "example":{"enabled":true}"#,
+                r#", "enabled":false"#,
+            ] {
+                let build = format!(
+                    r#"{{"insights":{{"appId":"a","apiUrl":"https://cloud.example"{extras}}}}}"#
+                );
+                assert!(
+                    !insights_config_from_json(&build, &version, "profile".into())
+                        .unwrap()
+                        .enabled
+                );
+            }
+            let build = r#"{"insights":{"appId":"a","apiUrl":"https://cloud.example","enabled":true}}"#;
+            assert!(
+                insights_config_from_json(build, &version, "profile".into())
+                    .unwrap()
+                    .enabled
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_or_nested_configuration_cannot_enable_collection() {
+        for build in [
+            "{}",
+            r#"{"example":{"insights":{"appId":"a","apiUrl":"https://cloud.example"}}}"#,
+            r#"{"insights":{"example":{"appId":"a","apiUrl":"https://cloud.example"}}}"#,
+            r#"{"insights":{"appId":"a","apiUrl":"https://cloud.example","enabled":"true"}}"#,
+            r#"{"insights":{"appId":"a","apiUrl":"https://cloud.example","enabled":true,"enabled":false}}"#,
+            r#"{"insights":{"appId":"a","apiUrl":"https://cloud.example"},}"#,
+            r#"{"insights":{"appId":"a","apiUrl":"https://cloud.example"}} garbage"#,
+            r#"{"insights":{"appId":"a","apiUrl":"https://cloud.example"},"bad":01}"#,
+        ] {
+            assert!(
+                insights_config_from_json(build, r#"{"channel":"stable"}"#, "profile".into())
+                    .is_none(),
+                "{build}"
+            );
+        }
+    }
+
+    #[test]
+    fn serialization_escapes_paths_and_ids_and_preserves_unicode() {
+        let config = InsightsConfig {
+            app_id: "app\"\\\n雪".into(),
+            storage_path: "C:\\Users\\Name\\insights".into(),
+            ..InsightsConfig::default()
+        };
+        let json = config.to_json();
+        assert_eq!(
+            insights_decode_string(insights_json_field(&json, "appId").unwrap()).unwrap(),
+            config.app_id
+        );
+        assert_eq!(
+            insights_decode_string(insights_json_field(&json, "storagePath").unwrap()).unwrap(),
+            config.storage_path
+        );
+        assert_eq!(
+            insights_decode_string(r#""\u96ea\ud83d\ude00""#).unwrap(),
+            "雪😀"
+        );
+        assert!(insights_decode_string(r#""\ud800""#).is_none());
     }
 }
 
