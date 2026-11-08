@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 const workflow = readFileSync(
 	new URL("../../.github/workflows/release.yml", import.meta.url),
@@ -591,7 +592,7 @@ test("test gate contract rejects early publication or premature desktop smoke", 
 	}
 });
 
-function validateIntelGuiMatrices(source, intelSelector) {
+function validateIntelGuiMatrices(source, intelSelector, armSelector) {
 	const expression = source.match(/^        include: \$\{\{ fromJSON\((.+)\) \}\}$/m)?.[1];
 	assert.ok(expression, "GUI workflow must expose its selectable runner matrices");
 	const alternatives = [...expression.matchAll(/'(\[[^']+\])'/g)];
@@ -601,7 +602,13 @@ function validateIntelGuiMatrices(source, intelSelector) {
 	assert.equal(matrices[0].length, 1, "the Intel-only selector must schedule one runner");
 	assert.equal(matrices[0][0].runner, "macos-15-intel");
 	assert.ok(matrices.at(-1).length > 1, "the default must retain the full platform matrix");
-	for (const matrix of matrices) {
+	for (const [index, matrix] of matrices.entries()) {
+		if (armSelector && index === 1) {
+			assert.equal(expression.slice(alternatives[0].index + alternatives[0][0].length, alternatives[1].index).trim(), `|| ${armSelector} &&`);
+			assert.deepEqual(matrix, [{ runner: "macos-15", platform: "macos-arm64", python: "arm64" }],
+				"only the explicit ARM-only selection may omit Intel macOS coverage");
+			continue;
+		}
 		const macOS = matrix.filter(({ runner }) => runner.startsWith("macos-"));
 		if (macOS.length === 0) continue;
 		const intel = macOS.filter(({ runner, platform, arch }) =>
@@ -617,15 +624,15 @@ function validateIntelGuiMatrices(source, intelSelector) {
 	}
 }
 
-for (const [filename, intelSelector] of [
+for (const [filename, intelSelector, armSelector] of [
 	["test-vm.yml", "inputs.macos_intel_only"],
 	["source-desktop-smoke.yml", "inputs.runners == 'macos-intel'"],
-	["desktop-smoke.yml", "inputs.macos_intel_only"],
+	["desktop-smoke.yml", "inputs.macos_intel_only", "inputs.macos_arm_only"],
 ]) {
 	const source = readFileSync(new URL(`../../.github/workflows/${filename}`, import.meta.url), "utf8")
 		.replace(/\r\n/g, "\n");
 	test(`${filename} routes every Intel GUI selection to macOS 15`, () => {
-		validateIntelGuiMatrices(source, intelSelector);
+		validateIntelGuiMatrices(source, intelSelector, armSelector);
 	});
 	test(`${filename} rejects a single Intel GUI branch reverting to macOS 26`, () => {
 		const runner = '"runner":"macos-15-intel"';
@@ -633,7 +640,37 @@ for (const [filename, intelSelector] of [
 		assert.ok(occurrences.length >= 2, "check both targeted and default Intel routes");
 		for (const { index } of occurrences) {
 			const changed = source.slice(0, index) + source.slice(index).replace(runner, '"runner":"macos-26-intel"');
-			assert.throws(() => validateIntelGuiMatrices(changed, intelSelector), { code: "ERR_ASSERTION" });
+			assert.throws(() => validateIntelGuiMatrices(changed, intelSelector, armSelector), { code: "ERR_ASSERTION" });
 		}
 	});
 }
+
+const publishedSmokeWorkflow = readFileSync(new URL("../../.github/workflows/desktop-smoke.yml", import.meta.url), "utf8");
+test("published desktop smoke permits one native ARM15 diagnostic without changing the default matrix", () => {
+	assert.match(publishedSmokeWorkflow, /macos_arm_only:\n        description: [^\n]+\n        type: boolean\n        default: false/);
+	const expression = publishedSmokeWorkflow.match(/^        include: \$\{\{ fromJSON\((.+)\) \}\}$/m)[1];
+	const matrices = [...expression.matchAll(/'(\[[^']+\])'/g)].map(([, json]) => JSON.parse(json));
+	assert.deepEqual(matrices.at(-1), [
+		{ runner: "macos-26", platform: "macos-arm64", python: "arm64" },
+		{ runner: "macos-15-intel", platform: "macos-x64", python: "x64" },
+		{ runner: "ubuntu-24.04", platform: "linux-x64", python: "x64" },
+		{ runner: "ubuntu-24.04-arm", platform: "linux-arm64", python: "arm64" },
+		{ runner: "windows-2025", platform: "windows-x64", python: "x64" },
+		{ runner: "windows-11-arm", platform: "windows-arm64", python: "x64" },
+	]);
+	const branch = '"runner":"macos-15","platform":"macos-arm64","python":"arm64"';
+	for (const replacement of [branch.replace('macos-15', 'macos-26'), branch.replace('"python":"arm64"', '"python":"x64"')]) {
+		assert.throws(() => validateIntelGuiMatrices(publishedSmokeWorkflow.replace(branch, replacement), "inputs.macos_intel_only", "inputs.macos_arm_only"), { code: "ERR_ASSERTION" });
+	}
+});
+
+test("published desktop smoke rejects ARM selection combined with focused Bunny diagnostics", () => {
+	const step = namedStep(publishedSmokeWorkflow, "Validate focused Bunny diagnostic selection");
+	assert.match(step, /MACOS_ARM_ONLY: \$\{\{ inputs.macos_arm_only \}\}/);
+	const script = step.match(/node -e '([^']+)'/)[1];
+	for (const selection of [{ INTEL_ONLY: "true" }, { WINDOWS_X64_ONLY: "true" }]) {
+		const env = { ...selection, SCENARIOS: "bunny", DIAGNOSTICS: "true" };
+		assert.doesNotThrow(() => runInNewContext(script, { process: { env } }));
+		assert.throws(() => runInNewContext(script, { process: { env: { ...env, MACOS_ARM_ONLY: "true" } } }), /Bunny diagnostics require one focused runner/);
+	}
+});

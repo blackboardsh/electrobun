@@ -1,9 +1,61 @@
 """Fail quickly if the hosted desktop cannot capture pixels or receive input."""
 from pathlib import Path
 import json
+import os
 import sys
 import subprocess
 import time
+
+
+def macos_failure_snapshot(output, probe_pid):
+    """Read desktop state in an isolated process; never activate or send input."""
+    import platform
+    from importlib.metadata import version
+    import tkinter as tk
+
+    snapshot = {'python': sys.version, 'macOS': platform.mac_ver()[0],
+                'machine': platform.machine(), 'tk': tk.TkVersion,
+                'tcl': tk.TclVersion, 'probePid': probe_pid}
+    for package in ('PyAutoGUI', 'Pillow', 'pyobjc-core', 'pyobjc-framework-Cocoa',
+                    'pyobjc-framework-Quartz'):
+        try:
+            snapshot[package] = version(package)
+        except Exception as error:
+            snapshot[package] = f'{type(error).__name__}: {error}'
+    try:
+        import AppKit
+        frontmost = AppKit.NSWorkspace.sharedWorkspace().frontmostApplication()
+        if frontmost:
+            snapshot['frontmostApplication'] = {
+                'pid': frontmost.processIdentifier(), 'name': frontmost.localizedName(),
+                'bundleId': frontmost.bundleIdentifier()}
+        probe = AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(probe_pid)
+        if probe:
+            snapshot['probeApplication'] = {'active': bool(probe.isActive()),
+                                            'hidden': bool(probe.isHidden())}
+    except Exception as error:
+        snapshot['focusError'] = f'{type(error).__name__}: {error}'
+    # Preserve focus/version evidence even if the native capture hangs. The
+    # parent bounds the entire child as well as this individual command.
+    print(json.dumps(snapshot, sort_keys=True), flush=True)
+    subprocess.run(['/usr/sbin/screencapture', '-x', str(Path(output) / 'desktop-preflight-failure.png')],
+                   check=True, timeout=3)
+
+
+def capture_failure_diagnostics(output):
+    try:
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve()),
+                                 '--failure-diagnostics', str(output), str(os.getpid())],
+                                capture_output=True, text=True, timeout=8)
+        return {'exitCode': result.returncode, 'stdout': result.stdout[:4096],
+                'stderr': result.stderr[:2048]}
+    except Exception as error:
+        # TimeoutExpired may include the flushed focus snapshot. This evidence
+        # cannot replace the original input/capture failure or extend its budget.
+        partial = getattr(error, 'stdout', None) or b''
+        if isinstance(partial, bytes):
+            partial = partial.decode('utf-8', errors='replace')
+        return {'error': f'{type(error).__name__}: {error}'[:2048], 'stdout': partial[:4096]}
 
 
 def capture_geometry(root, button):
@@ -106,6 +158,11 @@ def main(argv=None):
         # Telemetry must not replace the original exception or the real
         # callback/pixel proofs with a successful diagnostic observation.
         original_error = sys.exc_info()[1]
+        if original_error is not None and sys.platform == 'darwin':
+            try:
+                state['failureDiagnostics'] = capture_failure_diagnostics(output)
+            except Exception as error:
+                state['failureDiagnostics'] = {'error': f'{type(error).__name__}: {error}'}
         try:
             state['finalGeometry'] = capture_geometry(root, button)
             state['finalCursor'] = tuple(gui.position())
@@ -126,4 +183,7 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) == 4 and sys.argv[1] == '--failure-diagnostics':
+        macos_failure_snapshot(sys.argv[2], int(sys.argv[3]))
+    else:
+        main()

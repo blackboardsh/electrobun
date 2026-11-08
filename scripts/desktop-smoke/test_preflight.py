@@ -3,7 +3,9 @@ from collections import namedtuple
 from contextlib import nullcontext
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -194,11 +196,16 @@ class FakeDesktop:
 
 
 class PreflightIntegrationTests(unittest.TestCase):
-    def exercise(self, environment, failure=None, exception=AssertionError):
+    def exercise(self, environment, failure=None, exception=AssertionError,
+                 platform='linux', diagnostics=None):
         raised = None
+        diagnostic_mock = Mock(return_value={'exitCode': 0, 'stdout': 'foreground snapshot'})
+        if diagnostics is not None:
+            diagnostic_mock.side_effect = diagnostics
         with tempfile.TemporaryDirectory() as directory:
             with patch.dict(sys.modules, {'tkinter': environment.tk, 'pyautogui': environment.gui}), \
-                    patch.object(preflight.sys, 'platform', 'linux'), \
+                    patch.object(preflight.sys, 'platform', platform), \
+                    patch.object(preflight, 'capture_failure_diagnostics', diagnostic_mock), \
                     patch.object(preflight.time, 'monotonic', side_effect=environment.clock.monotonic), \
                     patch.object(preflight.time, 'sleep', side_effect=environment.clock.sleep), \
                     patch.object(preflight.subprocess, 'run', side_effect=environment.move), \
@@ -215,6 +222,7 @@ class PreflightIntegrationTests(unittest.TestCase):
             state = json.loads(state_file.read_text()) if state_file.exists() else None
             return SimpleNamespace(state=state,
                                    exception=raised,
+                                   diagnostics=diagnostic_mock,
                                    screenshot_exists=(Path(directory) / 'desktop-preflight.png').exists())
 
     def test_delayed_geometry_receives_no_input_until_ready(self):
@@ -283,6 +291,33 @@ class PreflightIntegrationTests(unittest.TestCase):
         environment.gui.screenshot.assert_called_once()
         self.assertTrue(result.screenshot_exists)
 
+    def test_macos_failure_snapshot_cannot_turn_a_missing_click_into_success(self):
+        environment = FakeDesktop(deliver_click=False, cursor=(300, 200))
+        result = self.exercise(environment, platform='darwin',
+                               failure='Desktop did not deliver a real mouse click')
+        result.diagnostics.assert_called_once()
+        environment.gui.click.assert_called_once_with(240, 200)
+        environment.gui.screenshot.assert_not_called()
+        self.assertEqual(result.state['status'], 'failed')
+        self.assertEqual(result.state['failureDiagnostics']['exitCode'], 0)
+        self.assertFalse(result.screenshot_exists)
+
+    def test_macos_success_does_not_run_diagnostics(self):
+        result = self.exercise(FakeDesktop(cursor=(300, 200)), platform='darwin')
+        result.diagnostics.assert_not_called()
+        self.assertNotIn('failureDiagnostics', result.state)
+
+    def test_macos_diagnostic_failure_preserves_original_input_exception(self):
+        original = RuntimeError('original input failure')
+        environment = FakeDesktop(cursor=(300, 200))
+        environment.gui.click.side_effect = original
+        result = self.exercise(environment, platform='darwin', exception=RuntimeError,
+                               failure='original input failure', diagnostics=OSError('capture failed'))
+        self.assertIs(result.exception, original)
+        self.assertEqual(result.state['error'], 'RuntimeError: original input failure')
+        self.assertEqual(result.state['failureDiagnostics']['error'], 'OSError: capture failed')
+        environment.gui.click.assert_called_once()
+
     def test_failsafe_exception_propagates_without_retry(self):
         class FailSafeException(Exception):
             pass
@@ -315,6 +350,50 @@ class PreflightIntegrationTests(unittest.TestCase):
                 self.assertIs(result.exception, original)
                 environment.gui.click.assert_called_once_with(240, 200)
                 environment.gui.screenshot.assert_not_called()
+
+
+class FailureDiagnosticTests(unittest.TestCase):
+    def test_macos_snapshot_only_observes_focus_and_captures_after_flushing_evidence(self):
+        frontmost = SimpleNamespace(processIdentifier=lambda: 123, localizedName=lambda: 'Python',
+                                    bundleIdentifier=lambda: 'org.python.python')
+        probe = SimpleNamespace(isActive=lambda: True, isHidden=lambda: False)
+        lookup = Mock(return_value=probe)
+        appkit = SimpleNamespace(
+            NSWorkspace=SimpleNamespace(sharedWorkspace=lambda: SimpleNamespace(frontmostApplication=lambda: frontmost)),
+            NSRunningApplication=SimpleNamespace(runningApplicationWithProcessIdentifier_=lookup))
+        evidence = []
+        def capture(command, **kwargs):
+            self.assertEqual(command, ['/usr/sbin/screencapture', '-x', '/tmp/probe-output/desktop-preflight-failure.png'])
+            self.assertEqual(kwargs, {'check': True, 'timeout': 3})
+            self.assertEqual(evidence[0]['frontmostApplication']['pid'], 123)
+            self.assertEqual(evidence[0]['probeApplication'], {'active': True, 'hidden': False})
+        with patch.dict(sys.modules, {'AppKit': appkit, 'tkinter': SimpleNamespace(TkVersion=8.6, TclVersion=8.6)}), \
+                patch('importlib.metadata.version', return_value='test-version'), \
+                patch.object(preflight.subprocess, 'run', side_effect=capture), \
+                patch('builtins.print', side_effect=lambda text, **kwargs: evidence.append(json.loads(text))):
+            preflight.macos_failure_snapshot('/tmp/probe-output', 456)
+        lookup.assert_called_once_with(456)
+        self.assertEqual(evidence[0]['probePid'], 456)
+        self.assertEqual(evidence[0]['PyAutoGUI'], 'test-version')
+
+    def test_snapshot_uses_a_bounded_isolated_child_and_caps_log_output(self):
+        result = SimpleNamespace(returncode=1, stdout='x' * 10000, stderr='y' * 10000)
+        with patch.object(preflight.subprocess, 'run', return_value=result) as run:
+            snapshot = preflight.capture_failure_diagnostics(Path('/tmp/probe-output'))
+        command = run.call_args.args[0]
+        self.assertEqual(command, [sys.executable, str(Path(preflight.__file__).resolve()),
+                                   '--failure-diagnostics', '/tmp/probe-output', str(os.getpid())])
+        self.assertEqual(run.call_args.kwargs, {'capture_output': True, 'text': True, 'timeout': 8})
+        self.assertEqual(snapshot['exitCode'], 1)
+        self.assertEqual(len(snapshot['stdout']), 4096)
+        self.assertEqual(len(snapshot['stderr']), 2048)
+
+    def test_stalled_child_records_timeout_and_keeps_flushed_focus_evidence(self):
+        timeout = subprocess.TimeoutExpired(['diagnostic'], 8, output=b'{"probeActive":false}\n')
+        with patch.object(preflight.subprocess, 'run', side_effect=timeout):
+            snapshot = preflight.capture_failure_diagnostics(Path('/tmp/probe-output'))
+        self.assertIn('TimeoutExpired', snapshot['error'])
+        self.assertEqual(snapshot['stdout'], '{"probeActive":false}\n')
 
 
 if __name__ == '__main__':
