@@ -2478,7 +2478,9 @@ func runAppDataProtocolTest(enabled bool) error {
 		if createErr != nil {
 			return createErr
 		}
-		time.Sleep(longWait)
+		if err := waitForWebviewDocumentReady(webviewID, testHarnessURL, time.Duration(slowPlatformScaleFactor())*5*time.Second, observedWebviewEventURL); err != nil {
+			return err
+		}
 		resetCallbackState()
 		expected := "false"
 		if enabled {

@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"testing/synctest"
+	"time"
+)
 
 func TestHTMLContainingRedirectTargetIsNotCompletedNavigation(t *testing.T) {
 	var observations webviewObservations
@@ -131,4 +136,81 @@ func TestResetRemovesPriorEvidenceForSameView(t *testing.T) {
 	if observations.contains(18, "did-navigate", "views://zig") {
 		t.Fatal("reset retained evidence from a prior test")
 	}
+}
+
+func TestWebviewDocumentReadinessWaitsForInitialTargetLoad(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const target = "views://test-harness/index.html"
+		var observations webviewObservations
+		observations.record(8, "dom-ready", target)
+		observations.record(9, "dom-ready", target+"?previous=true")
+		observations.record(9, "will-navigate", target)
+		observations.record(9, "did-commit-navigation", target)
+		observations.record(9, "did-navigate", target)
+		started := time.Now()
+		err := waitForWebviewDocumentReady(9, target, 5*time.Second, func(webviewID uint32, eventName, url string) bool {
+			// The failing CI document loaded after the old 1.2-second sleep.
+			if time.Since(started) >= 2*time.Second {
+				observations.record(9, "dom-ready", target)
+			}
+			return observations.containsURL(webviewID, eventName, url)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if elapsed := time.Since(started); elapsed != 2*time.Second {
+			t.Fatalf("one-shot probe would run before target document readiness: elapsed=%s", elapsed)
+		}
+	})
+}
+
+func TestWebviewDocumentReadinessMissingEventFailsAtDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const target = "views://test-harness/index.html"
+		var observations webviewObservations
+		observations.record(8, "dom-ready", target)
+		observations.record(9, "dom-ready", target+"#other")
+		started := time.Now()
+		err := waitForWebviewDocumentReady(9, target, 60*time.Millisecond, observations.containsURL)
+		if err == nil {
+			t.Fatal("missing target document load was treated as ready")
+		}
+		if elapsed := time.Since(started); elapsed != 60*time.Millisecond {
+			t.Fatalf("readiness wait exceeded its deadline: %s", elapsed)
+		}
+		for _, detail := range []string{"webview 9", target, "dom-ready", "60ms"} {
+			if !strings.Contains(err.Error(), detail) {
+				t.Fatalf("timeout lacks %q: %v", detail, err)
+			}
+		}
+	})
+}
+
+func TestWebviewDocumentReadinessRejectsObservationAfterDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		err := waitForWebviewDocumentReady(9, "views://test-harness/index.html", time.Second, func(uint32, string, string) bool {
+			// A synchronous observation can be delayed behind a callback lock.
+			time.Sleep(2 * time.Second)
+			return true
+		})
+		if err == nil {
+			t.Fatal("readiness observed after the deadline passed")
+		}
+		if !strings.Contains(err.Error(), "after 2s") {
+			t.Fatalf("late observation lacks elapsed time: %v", err)
+		}
+	})
+}
+
+func TestWebviewDocumentReadinessAcceptsAlreadyLoadedDocument(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const target = "views://test-harness/index.html"
+		var observations webviewObservations
+		observations.record(9, "dom-ready", target)
+		started := time.Now()
+		err := waitForWebviewDocumentReady(9, target, time.Second, observations.containsURL)
+		if err != nil || time.Since(started) != 0 {
+			t.Fatalf("loaded document waited unnecessarily: %v", err)
+		}
+	})
 }
