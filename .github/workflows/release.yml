@@ -79,7 +79,7 @@ jobs:
       # Track the compiled pair explicitly; the published template catalog must match it.
       EXPECTED_PAIRED_COTTONTAIL_VERSION: '0.7.3'
       EXPECTED_COTTONTAIL_VERSION: '0.7.3'
-      EXPECTED_APP_COTTONTAIL_VERSION: '0.7.3'
+      EXPECTED_APP_COTTONTAIL_VERSION: '0.7.4-canary.2'
 
     steps:
       - uses: actions/checkout@v6
