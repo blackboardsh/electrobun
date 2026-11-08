@@ -134,7 +134,8 @@ export interface UpdateInfo {
 
 export interface UpdateArtifactV1 {
 	file: string;
-	/** Digest and size of the exact, uncompressed release tar. */
+	/** Digest and size of the exact, uncompressed release tar, resolved from the
+	 * checksum sidecar or accepted inline for older integrity-aware hosts. */
 	tarSha256?: string;
 	tarSize?: number;
 }
@@ -418,6 +419,21 @@ function isSafeArtifactFileName(value: string): boolean {
 	);
 }
 
+function validateArchiveIntegrity(
+	document: unknown,
+	errorMessage: string,
+): { tarSha256: string; tarSize: number } {
+	if (!isRecord(document) ||
+		typeof document["tarSha256"] !== "string" ||
+		!/^[a-f0-9]{64}$/.test(document["tarSha256"]) ||
+		typeof document["tarSize"] !== "number" ||
+		!Number.isSafeInteger(document["tarSize"]) ||
+		document["tarSize"] <= 0) {
+		throw new Error(errorMessage);
+	}
+	return { tarSha256: document["tarSha256"], tarSize: document["tarSize"] };
+}
+
 /** Encode the manifest's single filename as one URL path segment. */
 export function buildUpdateArtifactUrl(
 	baseUrl: string,
@@ -489,17 +505,8 @@ export function validateUpdateManifest(
 	const tarSha256 = artifactValue["tarSha256"];
 	const tarSize = artifactValue["tarSize"];
 	if (tarSha256 !== undefined || tarSize !== undefined) {
-		if (
-			typeof tarSha256 !== "string" ||
-			!/^[a-f0-9]{64}$/.test(tarSha256) ||
-			typeof tarSize !== "number" ||
-			!Number.isSafeInteger(tarSize) ||
-			tarSize <= 0
-		) {
-			throw new Error("Invalid update manifest: invalid tar integrity metadata");
-		}
-		artifact.tarSha256 = tarSha256;
-		artifact.tarSize = tarSize;
+		Object.assign(artifact, validateArchiveIntegrity(artifactValue,
+			"Invalid update manifest: invalid tar integrity metadata"));
 	}
 
 	return {
@@ -1865,7 +1872,8 @@ async function fetchManagedUpdate(
 	}
 }
 
-/** Both hosting modes read the ordinary update.json from one stable folder. */
+/** Both hosting modes read the ordinary update.json and optional hash-named
+ * checksum sidecar from one stable folder. */
 export async function resolveUpdateManifest(
 	info: LocalUpdateInfo,
 	options: {
@@ -1885,22 +1893,39 @@ export async function resolveUpdateManifest(
 	const arch = options.arch ?? currentArch;
 	const expected = { identifier: info.identifier, channel: info.channel, platform, arch };
 	const fetchResponse = options.fetchResponse ?? fetch;
-	const readDocument = async (response: Response): Promise<unknown> => {
+	const readDocument = async (response: Response, name = "update.json"): Promise<unknown> => {
 		if (!response.ok) throw new Error(`HTTP ${response.status}`);
 		const bytes = await readBoundedResponse(response, MAX_UPDATE_DOCUMENT_BYTES);
 		try { return JSON.parse(new TextDecoder().decode(bytes)); }
-		catch { throw new Error("update.json is not valid JSON"); }
+		catch { throw new Error(`${name} is not valid JSON`); }
 	};
 	const downloadBaseUrl = info.managed === undefined ? undefined : managedUpdateBaseUrl(info.managed);
 	const prefix = getPlatformPrefix(info.channel, platform, arch);
 	const manifestBase = `${(downloadBaseUrl ?? info.baseUrl).replace(/\/+$/, "")}/${prefix}`;
 	const cacheBuster = randomBytes(8).toString("hex");
 	const manifestUrl = `${manifestBase}-update.json?${cacheBuster}`;
-	const init = { signal: AbortSignal.timeout(30_000) };
-	const response = downloadBaseUrl === undefined
-		? await fetchResponse(manifestUrl, init)
-		: await fetchManagedUpdate(manifestUrl, managedInstallationId(), init, fetchResponse);
+	const installationId = downloadBaseUrl === undefined ? undefined : managedInstallationId();
+	const request = (url: string) => {
+		const init = { signal: AbortSignal.timeout(30_000) };
+		return installationId === undefined
+			? fetchResponse(url, init)
+			: fetchManagedUpdate(url, installationId, init, fetchResponse);
+	};
+	const response = await request(manifestUrl);
 	const manifest = validateUpdateManifest(await readDocument(response), expected);
+	// Shipped native clients require update.json's exact original shape. The
+	// hash in this filename binds optional integrity to the selected build while
+	// leaving the canonical metadata compatible with those clients. Previously
+	// published inline integrity remains supported without competing sources.
+	if (manifest.hash !== info.hash && manifest.artifact.tarSha256 === undefined) {
+		const checksum = await request(`${manifestBase}-${manifest.hash}-checksum.json?${cacheBuster}`);
+		if (checksum.status === 404) {
+			await checksum.body?.cancel();
+		} else {
+			Object.assign(manifest.artifact, validateArchiveIntegrity(
+				await readDocument(checksum, "checksum.json"), "Invalid update checksum: invalid tar integrity metadata"));
+		}
+	}
 	return { status: "available", manifest, ...(downloadBaseUrl === undefined ? {} : { downloadBaseUrl }) };
 }
 

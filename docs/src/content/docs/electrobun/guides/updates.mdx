@@ -4,10 +4,11 @@ description: "Publish update artifacts and automate cross-platform releases."
 ---
 
 Shipping updates in Electrobun doesn't require an update server — updates are
-just static files. Hutch creates the update metadata, compressed full bundle,
-and an optional delta patch at build time; the application-side `Updater`
-checks, downloads, and installs them. Anything that serves files over HTTPS
-works as the host: R2, S3, GitHub Releases, or a plain static server.
+just static files. Hutch creates the update metadata, checksum sidecar,
+compressed full bundle, and an optional delta patch at build time; the
+application-side `Updater` checks, downloads, and installs them. Anything that
+serves files over HTTPS works as the host: R2, S3, GitHub Releases, or a plain
+static server.
 
 This page covers the publishing side — where artifacts go and how to automate
 building them for every platform. The application-side API lives in the
@@ -65,26 +66,38 @@ redirects that stay on HTTP must keep the same loopback host and port.
 
 A stable macOS ARM64 build checks `stable-macos-arm64-update.json`; a
 canary Windows x64 build checks `canary-win-x64-update.json`. Hutch emits one
-manifest per target. Its `artifact.tarSha256` and `artifact.tarSize` fields
-describe the exact uncompressed tar's SHA-256 and size in bytes; the manifest
-still uses `schemaVersion: 1`. The updater also accepts older manifests that omit
-both integrity fields. If either field is present, both must be valid.
-Upload `artifacts/` without renaming its files, and publish each manifest after
-its full bundle and patches are available.
+release manifest per target, preserving its original `schemaVersion: 1` shape
+with an `artifact` object containing only `file`. Older native updaters reject
+unknown fields, so archive integrity metadata lives in a separate
+`<channel>-<os>-<arch>-<hash>-checksum.json` file.
+
+The checksum sidecar contains only `tarSha256` and `tarSize`: the SHA-256 and
+size in bytes of the exact uncompressed tar, including its signed/stapled files,
+headers, and padding. Its filename binds it to the manifest's target and build
+hash without repeating the release metadata. The updater validates the release
+manifest before requesting this sidecar. A `404` preserves support for older
+hosts without checksums; other request failures or invalid checksum data fail
+the update check. Previously published manifests with a valid inline
+`artifact.tarSha256` and `artifact.tarSize` pair remain supported by newer clients.
+
+Upload all of `artifacts/` without renaming its files, including the checksum
+sidecar. Publish each `*-update.json` after its full bundle, checksum, and patches
+are available.
 
 ### Remove previously published v2 manifests
 
 If you previously uploaded `*-update-v2.json` files, publish the new full
-bundles, patches, and canonical `*-update.json` manifests first. Then delete the
-old `<channel>-<os>-<arch>-update-v2.json` objects from your update host and purge
-any cached copies. Keep the current `*-update.json`, archives, and retained
-patches.
+bundles, patches, checksum sidecars, and compatible canonical `*-update.json`
+manifests first. Then delete the old `<channel>-<os>-<arch>-update-v2.json`
+objects from your update host and purge any cached copies. Keep the current
+`*-update.json`, its checksum sidecar,
+archives, and retained patches.
 
 The removed URLs must return HTTP `404`. Previously released updaters that
-check v2 first can then fall back to `update.json`; the current updater only
-requests `update.json`. Merely stopping v2 uploads leaves stale objects on
-hosts such as R2, which can prevent those existing clients from discovering
-new releases.
+check v2 first can then fall back to `update.json`; the current updater uses
+`update.json` and the optional checksum sidecar. Merely stopping v2 uploads
+leaves stale objects on hosts such as R2, which can prevent those existing
+clients from discovering new releases.
 
 The metadata names the exact `.tar.zst` artifact. When Hutch can reach the
 previous release it also creates a patch named after that release's bundle
@@ -108,8 +121,8 @@ place until the prepared replacement is activated; see
 Linux builds use USTAR for compatibility with installed update extractors;
 packaging fails if an archive path cannot be represented in that format.
 
-The bundle hash is a release-routing identifier. The manifest's tar digest checks
-the exact payload against the manifest; it is not a signature of the manifest.
+The bundle hash is a release-routing identifier. The checksum sidecar's tar
+digest checks the exact payload; it is not a signature of the release metadata.
 Serve updates over HTTPS and sign distributed
 applications with the platform's normal code-signing system when authenticity
 is required.

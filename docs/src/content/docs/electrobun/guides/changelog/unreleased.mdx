@@ -29,22 +29,32 @@ Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
   cross-runtime [Insights API reference](/electrobun/apis/insights/), and upload,
   publish, and build-configuration references. The services remain in preview.
 
-## Updater manifest fix
+## Updater manifest compatibility
 
-- Hutch now writes one `<channel>-<os>-<arch>-update.json` per target, including
-  the uncompressed tar's SHA-256 and byte size as `artifact.tarSha256` and
-  `artifact.tarSize`. It no longer generates a separate `*-update-v2.json`.
-  The manifest remains `schemaVersion: 1`.
-- The Updater API requests only `*-update.json`. Older manifests that omit both
-  integrity fields still work; supplied fields are validated together. Streamed
-  downloads, hash-named patch chains, and full-download fallback are unchanged.
+- Hutch preserves the original `<channel>-<os>-<arch>-update.json` shape,
+  including `artifact: { file }`. A preview change added integrity fields to
+  that object and broke updates for already-installed native clients whose
+  parsers reject unknown fields. Restoring the original shape lets those
+  clients discover updates again.
+- Exact archive integrity now lives in
+  `<channel>-<os>-<arch>-<hash>-checksum.json`, containing only `tarSha256` and
+  `tarSize` for the uncompressed tar. The hash in its filename binds the checksum
+  to one target/build without duplicating the manifest. Hutch no longer
+  generates `*-update-v2.json`.
+- The Updater API validates `*-update.json` before reading the checksum sidecar.
+  A missing sidecar (`404`) preserves older hosting behavior; malformed checksum
+  data or other request failures fail the check. Existing inline integrity
+  fields remain supported by newer clients. Additional manifest fields are
+  ignored while recognized fields remain validated. Streamed downloads,
+  hash-named patch chains, and full-download fallback are unchanged.
 - **Update-host cleanup:** If you uploaded `*-update-v2.json` to your servers,
-  publish the new canonical `*-update.json` and its full archive and patches,
-  then delete the old `<channel>-<os>-<arch>-update-v2.json` files and purge any
+  publish the compatible canonical `*-update.json`, checksum sidecar, full
+  archive, and patches. Then delete the old
+  `<channel>-<os>-<arch>-update-v2.json` files and purge any
   cached copies. Those URLs must return HTTP `404` so previously released
   clients that probe v2 can fall back to `update.json`. Leaving an old v2 file
   in place can hide newer releases from those clients. Keep the current
-  `update.json`, full archives, and retained patches.
+  `update.json`, checksum sidecar, full archives, and retained patches.
 
 ## macOS startup fixes
 

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { assertLifecycleInstallation, loadLifecycleHost } from "./updater-lifecycle-host.mjs";
+import { inspectLifecycleChecksum, publishLifecycleReleaseFiles } from "./updater-lifecycle-artifacts.mjs";
 
 async function fixture(t, source) {
 	const directory = await mkdtemp(join(tmpdir(), "electrobun-lifecycle-host-test-"));
@@ -25,11 +26,71 @@ test("external lifecycle host receives the real fixture context and owns publica
 	}`);
 	const calls = [];
 	const host = await loadLifecycleHost(file, { recordRequest: value => calls.push(value) });
-	const release = { root: "/artifacts", metadata: { version: "3.0.0" } };
-	await host.publishRelease(release, { includePatch: false });
+	const release = { root: "/artifacts", metadata: { version: "3.0.0" },
+		checksumPath: "/artifacts/stable-macos-arm64-new123-checksum.json", checksum: { tarSha256: "a".repeat(64), tarSize: 2048 } };
+	await host.publishRelease(release, { includePatch: false, includeIntegrity: false });
 	await host.dispose();
-	assert.deepEqual(calls, [{ release, options: { includePatch: false } }, { disposed: true }]);
+	assert.deepEqual(calls, [{ release, options: { includePatch: false, includeIntegrity: false } }, { disposed: true }]);
 	assert.equal(host.buildEnvironment.ELECTROBUN_UPDATER_E2E_MANAGED_APP_ID, "app_fixture");
+});
+
+async function artifactFixture(t) {
+	const root = await mkdtemp(join(tmpdir(), "electrobun-lifecycle-artifacts-test-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const source = join(root, "source");
+	const server = join(root, "server");
+	await mkdir(source);
+	const prefix = "stable-macos-arm64";
+	const metadata = { schemaVersion: 1, identifier: "dev.example.fixture", channel: "stable",
+		version: "2.0.0", hash: "new123", platform: "macos", arch: "arm64", artifact: { file: `${prefix}-Example.app.tar.zst` } };
+	const checksum = { tarSha256: "a".repeat(64), tarSize: 2048 };
+	const release = { root: source, metadata, checksum,
+		updatePath: join(source, `${prefix}-update.json`),
+		checksumPath: join(source, `${prefix}-${metadata.hash}-checksum.json`),
+		archivePath: join(source, metadata.artifact.file),
+		patchPath: join(source, `${prefix}-old123.patch`) };
+	await writeFile(release.updatePath, JSON.stringify(metadata));
+	await writeFile(release.checksumPath, JSON.stringify(checksum));
+	await writeFile(release.archivePath, "fixture archive");
+	await writeFile(release.patchPath, "fixture patch");
+	return { root, source, server, prefix, release, metadata, checksum,
+		tarIdentity: { sha256: checksum.tarSha256, size: checksum.tarSize } };
+}
+
+test("lifecycle verifies one hash-bound checksum without adding fields to the strict legacy manifest", async t => {
+	const f = await artifactFixture(t);
+	assert.deepEqual(inspectLifecycleChecksum(f.source, f.prefix, f.metadata, f.tarIdentity, "fixture"), {
+		checksumPath: f.release.checksumPath, checksum: f.checksum,
+	});
+	for (const metadata of [
+		{ ...f.metadata, futureField: true },
+		{ ...f.metadata, artifact: { ...f.metadata.artifact, ...f.checksum } },
+		{ ...f.metadata, hash: "../another" },
+	]) assert.throws(() => inspectLifecycleChecksum(f.source, f.prefix, metadata, f.tarIdentity, "fixture"));
+	assert.throws(() => inspectLifecycleChecksum(f.source, f.prefix, f.metadata, { ...f.tarIdentity, size: 4096 }, "fixture"), /differs/);
+	await writeFile(f.release.checksumPath, JSON.stringify({ ...f.checksum, version: f.metadata.version }));
+	assert.throws(() => inspectLifecycleChecksum(f.source, f.prefix, f.metadata, f.tarIdentity, "fixture"), /duplicate release metadata/);
+	await writeFile(f.release.checksumPath, JSON.stringify(f.checksum));
+	await writeFile(join(f.source, `${f.prefix}-another-checksum.json`), JSON.stringify(f.checksum));
+	assert.throws(() => inspectLifecycleChecksum(f.source, f.prefix, f.metadata, f.tarIdentity, "fixture"), /sidecar names/);
+});
+
+test("lifecycle publication preserves flat patch history and can simulate a missing checksum without changing update.json", async t => {
+	const f = await artifactFixture(t);
+	publishLifecycleReleaseFiles(f.release, f.server);
+	assert.deepEqual(new Set(await readdir(f.server)), new Set([
+		`${f.prefix}-update.json`, `${f.prefix}-new123-checksum.json`,
+		f.metadata.artifact.file, `${f.prefix}-old123.patch`,
+	]));
+	assert.equal(await readFile(join(f.server, `${f.prefix}-update.json`), "utf8"), JSON.stringify(f.metadata));
+	assert.equal(await readFile(join(f.server, `${f.prefix}-new123-checksum.json`), "utf8"), JSON.stringify(f.checksum));
+	await writeFile(join(f.server, `${f.prefix}-older456.patch`), "historical patch");
+	await writeFile(join(f.server, `${f.prefix}-older456-checksum.json`), "historical checksum");
+	publishLifecycleReleaseFiles(f.release, f.server, { includePatch: false, includeIntegrity: false });
+	await assert.rejects(readFile(join(f.server, `${f.prefix}-new123-checksum.json`)), { code: "ENOENT" });
+	assert.equal(await readFile(join(f.server, `${f.prefix}-update.json`), "utf8"), JSON.stringify(f.metadata));
+	assert.equal(await readFile(join(f.server, `${f.prefix}-older456.patch`), "utf8"), "historical patch");
+	assert.equal(await readFile(join(f.server, `${f.prefix}-older456-checksum.json`), "utf8"), "historical checksum");
 });
 
 test("invalid adapter export fails rather than silently running the static lifecycle", async t => {

@@ -196,6 +196,7 @@ describe("shared single-folder update contract", () => {
 					Updater.getLocalInfo = async () => local;
 					globalThis.fetch = (async (input: string | URL | Request) => {
 						urls.push(String(input));
+						if (new URL(String(input)).pathname.endsWith("-checksum.json")) return reply({}, 404);
 						return reply(next);
 					}) as typeof fetch;
 					const result = await Updater.checkForUpdate();
@@ -204,7 +205,7 @@ describe("shared single-folder update contract", () => {
 						updateAvailable: changedHash, updateReady: false,
 					});
 					expect(Updater.updateInfo()).toEqual(result);
-					expect(urls).toHaveLength(1);
+					expect(urls).toHaveLength(changedHash ? 2 : 1);
 					expect(new URL(urls[0]!).pathname).toBe(`${new URL(base).pathname}/stable-${OS}-${ARCH}-update.json`);
 					expect(new URL(urls[0]!).search).toMatch(/^\?[a-f0-9]{16}$/);
 				} finally {
@@ -224,11 +225,14 @@ describe("shared single-folder update contract", () => {
 					const requested: string[] = [];
 					const result = await resolveUpdateManifest({ ...local, channel }, { fetchResponse: async (input) => {
 						requested.push(input);
+						if (new URL(input).pathname.endsWith("-checksum.json")) return reply({}, 404);
 						return reply(document);
 					} });
-					expect(requested).toHaveLength(1);
+					expect(requested).toHaveLength(integrity ? 1 : 2);
 					expect(new URL(requested[0]!).pathname).toBe(`${new URL(base).pathname}/${prefix}-update.json`);
 					expect(new URL(requested[0]!).search).toMatch(/^\?[a-f0-9]{16}$/);
+					if (!integrity) expect(new URL(requested[1]!).pathname)
+						.toBe(`${new URL(base).pathname}/${prefix}-${document.hash}-checksum.json`);
 					expect(result).toEqual({ status: "available", manifest: document,
 						...(hosting === "managed" ? { downloadBaseUrl: base } : {}) });
 					if (result.status !== "available") throw new Error("Expected ordinary manifest");
@@ -241,6 +245,72 @@ describe("shared single-folder update contract", () => {
 				});
 			}
 		}
+
+		for (const channel of ["stable", "canary"] as const) {
+			test(`${hosting} ${channel} resolves a checksum for the selected hash without changing canonical metadata or patch paths`, async () => {
+				const prefix = getPlatformPrefix(channel, OS, ARCH);
+				const next = { ...manifest, channel, futureReleaseField: true,
+					artifact: { file: `${prefix}-Example.tar.zst`, futureArtifactField: true } };
+				const checksum = { tarSha256: "b".repeat(64), tarSize: 4096, futureChecksumField: true };
+				const paths: string[] = [];
+				const selected = await resolveUpdateManifest({ ...local, channel }, { fetchResponse: async (input, init) => {
+					const url = new URL(input);
+					paths.push(url.pathname);
+					expect(new Headers(init.headers).get("X-Electrobun-Installation-Id"))
+						.toBe(hosting === "managed" ? installationId : null);
+					expect(init.redirect).toBe(hosting === "managed" ? "manual" : undefined);
+					if (url.pathname.endsWith("-update.json")) return reply(next);
+					expect(url.pathname).toBe(`${new URL(base).pathname}/${prefix}-${next.hash}-checksum.json`);
+					return reply(checksum);
+				} });
+				expect(paths).toEqual([
+					`${new URL(base).pathname}/${prefix}-update.json`,
+					`${new URL(base).pathname}/${prefix}-${next.hash}-checksum.json`,
+				]);
+				if (selected.status !== "available") throw new Error("Expected ordinary manifest");
+				expect(selected.manifest.artifact).toEqual({ file: next.artifact.file,
+					tarSha256: checksum.tarSha256, tarSize: checksum.tarSize });
+				expect(selected.manifest).not.toHaveProperty("futureReleaseField");
+				expect(getPatchFileUrl(selected.downloadBaseUrl ?? local.baseUrl, prefix, "old123"))
+					.toBe(`${base}/${prefix}-old123.patch`);
+			});
+		}
+
+		test(`${hosting} rejects invalid or unavailable checksum metadata instead of silently disabling integrity`, async () => {
+			const next = { ...manifest, artifact: { file: manifest.artifact.file } };
+			for (const response of [
+				() => reply({}, 403), () => reply({}, 500),
+				() => new Response("not json"),
+				...[
+					null, [], {}, { tarSha256: "a".repeat(64) }, { tarSize: 4096 },
+					{ tarSha256: "A".repeat(64), tarSize: 4096 },
+					{ tarSha256: "a".repeat(64), tarSize: 0 },
+					{ tarSha256: "a".repeat(64), tarSize: -1 },
+					{ tarSha256: "a".repeat(64), tarSize: 1.5 },
+					{ tarSha256: "a".repeat(64), tarSize: Number.MAX_SAFE_INTEGER + 1 },
+				].map(document => () => reply(document)),
+				() => new Response(' '.repeat(1024 * 1024 + 1)),
+				() => { throw new Error("network unavailable"); },
+			]) {
+				let count = 0;
+				await expect(resolveUpdateManifest(local, { fetchResponse: async () => {
+					return ++count === 1 ? reply(next) : response();
+				} })).rejects.toThrow();
+				expect(count).toBe(2);
+			}
+		});
+
+		test(`${hosting} validates release identity and hash before constructing a checksum URL`, async () => {
+			for (const changes of [{ hash: "../other" }, { channel: "canary" }, { identifier: "com.other.app" },
+				{ platform: OS === "macos" ? "linux" : "macos" }, { arch: ARCH === "arm64" ? "x64" : "arm64" }]) {
+				let count = 0;
+				await expect(resolveUpdateManifest(local, { fetchResponse: async () => {
+					count++;
+					return reply({ ...manifest, ...changes, artifact: { file: manifest.artifact.file } });
+				} })).rejects.toThrow();
+				expect(count).toBe(1);
+			}
+		});
 
 		test(`${hosting} missing update.json makes one request without a v2 probe or alternate host`, async () => {
 			const urls: string[] = [];
@@ -308,6 +378,45 @@ describe("shared single-folder update contract", () => {
 				expect(ids).toEqual([hosting === "managed" ? installationId : null, null]);
 				if (result.status !== "available") throw new Error("Expected ordinary manifest");
 				expect(result.downloadBaseUrl ?? requestInfo.baseUrl).toStartWith(source.url.origin);
+			} finally {
+				await source.stop(true);
+				await target.stop(true);
+			}
+		});
+
+		test(`${hosting} checksum redirects retain the configured folder and do not leak managed installation identity`, async () => {
+			const next = { ...manifest, artifact: { file: manifest.artifact.file } };
+			const paths: string[] = [];
+			const ids: (string | null)[] = [];
+			const target = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request) {
+				paths.push(new URL(request.url).pathname);
+				ids.push(request.headers.get("X-Electrobun-Installation-Id"));
+				return reply({ tarSha256: "b".repeat(64), tarSize: 4096 });
+			} });
+			const source = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request) {
+				const url = new URL(request.url);
+				paths.push(url.pathname);
+				ids.push(request.headers.get("X-Electrobun-Installation-Id"));
+				if (url.pathname.endsWith("-update.json")) return reply(next);
+				return new Response(null, { status: 307, headers: { Location: new URL("/cdn/selected-checksum", target.url).href } });
+			} });
+			try {
+				const requestInfo = hosting === "managed"
+					? { ...info, managed: { ...managed, apiUrl: source.url.origin } }
+					: { ...info, baseUrl: `${source.url.origin}/nested/folder` };
+				const selected = await resolveUpdateManifest(requestInfo);
+				if (selected.status !== "available") throw new Error("Expected ordinary manifest");
+				const folder = hosting === "managed" ? "/v1/electrobun/apps/app_test/updates" : "/nested/folder";
+				expect(paths).toEqual([
+					`${folder}/stable-${OS}-${ARCH}-update.json`,
+					`${folder}/stable-${OS}-${ARCH}-${next.hash}-checksum.json`,
+					"/cdn/selected-checksum",
+				]);
+				expect(ids).toEqual([hosting === "managed" ? installationId : null,
+					hosting === "managed" ? installationId : null, null]);
+				expect(selected.manifest.artifact).toEqual({ file: next.artifact.file,
+					tarSha256: "b".repeat(64), tarSize: 4096 });
+				expect(selected.downloadBaseUrl ?? requestInfo.baseUrl).toBe(`${source.url.origin}${folder}`);
 			} finally {
 				await source.stop(true);
 				await target.stop(true);

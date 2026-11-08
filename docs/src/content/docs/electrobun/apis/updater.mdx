@@ -112,9 +112,18 @@ and `error`, and confirm the new version after relaunch.
 ## Local and update metadata
 
 `checkForUpdate()` requests `<channel>-<os>-<arch>-update.json` from the
-configured release host. The manifest can include `artifact.tarSha256` and
-`artifact.tarSize` to verify the exact uncompressed archive. Older manifests
-that omit both fields remain supported; a partial or invalid pair is an error.
+configured release host. After validating an available release, it can request
+`<channel>-<os>-<arch>-<hash>-checksum.json` from the same folder. The sidecar
+contains `tarSha256` and `tarSize` for the exact uncompressed archive; the
+canonical manifest keeps its original `artifact: { file }` shape for older
+clients.
+
+A missing sidecar (`404`) uses the existing update behavior. Other request
+failures, invalid JSON, or an invalid checksum/size pair fail the check.
+Previously published manifests with inline `artifact.tarSha256` and
+`artifact.tarSize` remain supported; both fields must be valid when present.
+The updater ignores additional manifest fields while validating the fields it
+uses.
 See [Updates](/electrobun/guides/updates/) for publishing and host migration.
 
 `getLocalInfo()` returns the packaged `version.json` data:

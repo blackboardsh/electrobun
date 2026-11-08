@@ -111,8 +111,26 @@ async function main() {
 			`${updateName} has architecture ${JSON.stringify(update.arch)}; expected ${JSON.stringify(arch)}`,
 		);
 	}
-	if (typeof update.hash !== "string" || update.hash.length === 0) {
-		fail(`${updateName} does not contain a non-empty hash`);
+	if (typeof update.hash !== "string" || !/^[a-z0-9]{1,13}$/.test(update.hash)) {
+		fail(`${updateName} does not contain a valid build hash`);
+	}
+	const artifact = update.artifact as Record<string, unknown> | undefined;
+	if (Object.keys(update).sort().join(",") !== "arch,artifact,channel,hash,identifier,platform,schemaVersion,version" ||
+		update.schemaVersion !== 1 || update.channel !== channel ||
+		typeof update.identifier !== "string" || !update.identifier ||
+		!artifact || Array.isArray(artifact) || Object.keys(artifact).join(",") !== "file" ||
+		typeof artifact.file !== "string" || !files.includes(artifact.file) ||
+		!artifact.file.startsWith(`${updatePrefix}-`) || !artifact.file.endsWith(archiveSuffix)) {
+		fail(`${updateName} must retain the original update metadata shape with artifact: { file }`);
+	}
+	const checksumName = `${updatePrefix}-${update.hash}-checksum.json`;
+	requireArtifact(files, checksumName, file => file === checksumName);
+	const checksum = JSON.parse(await readFile(join(artifactsDir, checksumName), "utf8"));
+	if (!checksum || Array.isArray(checksum) ||
+		Object.keys(checksum).sort().join(",") !== "tarSha256,tarSize" ||
+		typeof checksum.tarSha256 !== "string" || !/^[a-f0-9]{64}$/.test(checksum.tarSha256) ||
+		!Number.isSafeInteger(checksum.tarSize) || checksum.tarSize <= 0) {
+		fail(`${checksumName} must contain the exact tar SHA-256 and byte size`);
 	}
 
 	console.log(`Validated ${files.length} Kitchen artifacts for ${updatePrefix}.`);

@@ -39,8 +39,8 @@ export function parseCleanupArguments(args: string[]): Options {
 	return { expectedVersion: expectedVersion!, apply: mode === "--apply" };
 }
 
-async function readManifest(response: Response): Promise<any> {
-	if (!response.body) throw new Error("Canonical manifest has no body");
+async function readDocument(response: Response, label: string): Promise<any> {
+	if (!response.body) throw new Error(`${label} has no body`);
 	const reader = response.body.getReader();
 	const chunks: Uint8Array[] = [];
 	let size = 0;
@@ -49,13 +49,20 @@ async function readManifest(response: Response): Promise<any> {
 			const { value, done } = await reader.read();
 			if (done) break;
 			size += value.byteLength;
-			if (size > MAX_MANIFEST_BYTES) throw new Error("Canonical manifest exceeds size limit");
+			if (size > MAX_MANIFEST_BYTES) throw new Error(`${label} exceeds size limit`);
 			chunks.push(value);
 		}
 		return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 	} finally {
 		await reader.cancel();
 	}
+}
+
+function validTarIntegrity(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const { tarSha256, tarSize } = value as Record<string, unknown>;
+	return typeof tarSha256 === "string" && /^[a-f0-9]{64}$/.test(tarSha256) &&
+		typeof tarSize === "number" && Number.isSafeInteger(tarSize) && tarSize > 0;
 }
 
 export async function cleanupKitchenLegacyManifests(
@@ -74,7 +81,7 @@ export async function cleanupKitchenLegacyManifests(
 			await response.body?.cancel();
 			throw new Error(`Canonical manifest ${target}: HTTP ${response.status}`);
 		}
-		const manifest = await readManifest(response);
+		const manifest = await readDocument(response, `Canonical manifest ${target}`);
 		const [platform, arch] = target.split("-");
 		const artifact = manifest?.artifact;
 		const expectedFile = `${prefix}-ElectrobunKitchenSink-canary${platform === "macos" ? ".app" : ""}.tar.zst`;
@@ -83,10 +90,25 @@ export async function cleanupKitchenLegacyManifests(
 			manifest.version !== expectedVersion || manifest.channel !== "canary" ||
 			manifest.platform !== platform || manifest.arch !== arch ||
 			typeof manifest.hash !== "string" || !/^[a-z0-9]{1,13}$/.test(manifest.hash) ||
-			artifact?.file !== expectedFile ||
-			typeof artifact.tarSha256 !== "string" || !/^[a-f0-9]{64}$/.test(artifact.tarSha256) ||
-			!Number.isSafeInteger(artifact.tarSize) || artifact.tarSize <= 0
+			artifact?.file !== expectedFile
 		) {
+			throw new Error(`Canonical manifest ${target} must identify Kitchen canary ${expectedVersion} with valid tar integrity`);
+		}
+		if (artifact.tarSha256 === undefined && artifact.tarSize === undefined) {
+			// Resolve only the validated target/hash beneath the fixed Kitchen base.
+			// Cleanup needs proof of the replacement's integrity, so unlike normal
+			// update checks a missing sidecar must never permit deletion.
+			const checksum = await request(`${KITCHEN_ARTIFACT_PUBLIC_BASE_URL}/${prefix}-${manifest.hash}-checksum.json`, {
+				redirect: "error", cache: "no-store", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+			});
+			if (checksum.status !== 200) {
+				await checksum.body?.cancel();
+				throw new Error(`Checksum ${target}: HTTP ${checksum.status}`);
+			}
+			if (!validTarIntegrity(await readDocument(checksum, `Checksum ${target}`))) {
+				throw new Error(`Checksum ${target} must contain valid tar integrity`);
+			}
+		} else if (!validTarIntegrity(artifact)) {
 			throw new Error(`Canonical manifest ${target} must identify Kitchen canary ${expectedVersion} with valid tar integrity`);
 		}
 		const payload = await request(`${KITCHEN_ARTIFACT_PUBLIC_BASE_URL}/${artifact.file}`, {

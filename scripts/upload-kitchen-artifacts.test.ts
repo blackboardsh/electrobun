@@ -82,6 +82,9 @@ describe("Kitchen artifact publishing", () => {
 			),
 		).toBe(true);
 		for (const channel of ["canary", "stable"]) {
+			const checksum = `${channel}-win-arm64-new123-checksum.json`;
+			expect(kitchenArtifactKey(`staged/${checksum}`)).toBe(`kitchen/${checksum}`);
+			expect(isKitchenUpdateManifest(`kitchen/${checksum}`)).toBe(false);
 			expect(
 				isKitchenUpdateManifest(`kitchen/${channel}-win-arm64-update.json`),
 			).toBe(true);
@@ -96,13 +99,14 @@ describe("Kitchen artifact publishing", () => {
 		).toBe(false);
 	});
 
-	test("publishes the canonical manifest after its payloads", () => {
+	test("publishes the canonical manifest after its payloads and hash-named checksum", () => {
 		const directory = mkdtempSync(join(tmpdir(), "kitchen-publish-order-"));
 		const prefix = "stable-linux-x64";
 		const payload = `${prefix}-zz-payload.tar.zst`;
+		const checksum = `${prefix}-zznew123-checksum.json`;
 		const manifests = [`${prefix}-update.json`];
 		try {
-			for (const filename of [...manifests, payload]) {
+			for (const filename of [...manifests, payload, checksum]) {
 				writeFileSync(join(directory, filename), "test artifact");
 			}
 			const result = Bun.spawnSync([
@@ -114,11 +118,14 @@ describe("Kitchen artifact publishing", () => {
 			expect(result.exitCode).toBe(0);
 			const output = result.stdout.toString();
 			const payloadPublished = output.indexOf(`Validated kitchen/${payload}`);
+			const checksumPublished = output.indexOf(`Validated kitchen/${checksum}`);
 			expect(payloadPublished).toBeGreaterThanOrEqual(0);
+			expect(checksumPublished).toBeGreaterThanOrEqual(0);
 			for (const manifest of manifests) {
 				expect(output.indexOf(`Validated kitchen/${manifest}`)).toBeGreaterThan(
 					payloadPublished,
 				);
+				expect(output.indexOf(`Validated kitchen/${manifest}`)).toBeGreaterThan(checksumPublished);
 			}
 		} finally {
 			rmSync(directory, { recursive: true, force: true });

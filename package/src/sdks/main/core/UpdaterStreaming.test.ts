@@ -19,6 +19,7 @@ import {
 	createNativeUpdatePlan,
 	executeNativePreparation,
 	prepareNativeUpdate,
+	resolveUpdateManifest,
 	resolveInstalledChannelRootForPlatform,
 	validatePreparedUpdate,
 	validateUpdateManifest,
@@ -170,9 +171,14 @@ describe("native streamed update preparation", () => {
 	test("prepares an older manifest without optional archive integrity fields", async () => {
 		const f = fixture();
 		const legacy = { ...manifest(), artifact: { file: manifest().artifact.file } };
+		const selected = await resolveUpdateManifest(info, { fetchResponse: async (input) => {
+			return new URL(input).pathname.endsWith("-checksum.json")
+				? new Response(null, { status: 404 }) : Response.json(legacy);
+		} });
+		if (selected.status !== "available") throw new Error("Expected update manifest");
 		const prepared = await prepareNativeUpdate({
 			...f.options,
-			manifest: legacy,
+			manifest: selected.manifest,
 			async execute() {
 				const request = JSON.parse(readFileSync(f.requestPath, "utf8")) as NativePrepareUpdateRequest;
 				expect(request.base_url).toBe(info.baseUrl);
@@ -187,6 +193,28 @@ describe("native streamed update preparation", () => {
 		});
 		expect(prepared).toEqual(f.staged);
 		expect(existsSync(f.requestPath)).toBe(false);
+	});
+
+	test("passes sidecar integrity into native preparation without adding fields to hosted update.json", async () => {
+		const f = fixture();
+		const legacy = { ...manifest(), artifact: { file: manifest().artifact.file } };
+		const selected = await resolveUpdateManifest(info, { fetchResponse: async (input) => {
+			return new URL(input).pathname.endsWith("-checksum.json")
+				? Response.json({ tarSha256: "c".repeat(64), tarSize: 8192 }) : Response.json(legacy);
+		} });
+		if (selected.status !== "available") throw new Error("Expected update manifest");
+		await prepareNativeUpdate({
+			...f.options, manifest: selected.manifest,
+			async execute() {
+				const request = JSON.parse(readFileSync(f.requestPath, "utf8")) as NativePrepareUpdateRequest;
+				expect(request.tar_sha256).toBe("c".repeat(64));
+				expect(request.tar_size).toBe(8192);
+				expect(request.base_hash).toBe(info.hash);
+				expect(request.hash).toBe(legacy.hash);
+				f.publish();
+			},
+		});
+		expect(legacy.artifact).toEqual({ file: manifest().artifact.file });
 	});
 
 	test("derives the same fixed managed folder for native preparation without a release ID", async () => {
@@ -426,7 +454,7 @@ describe("archive integrity metadata compatibility", () => {
 
 	for (const channel of ["stable", "canary"] as const) {
 		for (const withIntegrity of [false, true]) {
-			test(`requests only ${channel} update.json ${withIntegrity ? "with" : "without"} archive integrity`, async () => {
+			test(`reads ${channel} update.json ${withIntegrity ? "with inline" : "without optional"} archive integrity`, async () => {
 				Updater.getLocalInfo = async () => ({ ...info, channel, baseUrl: `${info.baseUrl}/` });
 				const prefix = getPlatformPrefix(channel, OS, ARCH);
 				const next = { ...manifest(), channel, artifact: {
@@ -436,13 +464,18 @@ describe("archive integrity metadata compatibility", () => {
 				const urls: string[] = [];
 				globalThis.fetch = (async (url: string | URL | Request) => {
 					urls.push(String(url));
+					if (new URL(String(url)).pathname.endsWith("-checksum.json")) {
+						expect(withIntegrity).toBe(false);
+						expect(new URL(String(url)).pathname).toBe(`/releases/${prefix}-${next.hash}-checksum.json`);
+						return new Response(null, { status: 404 });
+					}
 					expect(new URL(String(url)).pathname).toBe(`/releases/${prefix}-update.json`);
 					return Response.json(next);
 				}) as unknown as typeof fetch;
 				expect(await Updater.checkForUpdate()).toMatchObject({
 					error: "", updateAvailable: true, version: next.version, hash: next.hash,
 				});
-				expect(urls).toHaveLength(1);
+				expect(urls).toHaveLength(withIntegrity ? 1 : 2);
 			});
 		}
 	}

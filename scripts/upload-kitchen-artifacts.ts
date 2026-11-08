@@ -16,6 +16,7 @@ const KITCHEN_ARTIFACT_NAME =
 
 const isStableUpdateArtifact = (filename: string): boolean =>
 	filename.endsWith("-update.json") ||
+	/-[a-z0-9]{1,13}-checksum\.json$/.test(filename) ||
 	filename.endsWith(".tar.zst") ||
 	/-[a-z0-9]+\.patch$/.test(filename);
 

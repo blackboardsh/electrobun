@@ -28,6 +28,7 @@ import { systemTarBinary } from "./windows-tar.mjs";
 import { updaterLifecycleBuildTarget, updaterLifecycleHutchBinary } from "./updater-lifecycle-target.mjs";
 import { assertRecipeMatchesInstalled, readCompressedTarIdentity } from "./archive-recipe-test-utils.mjs";
 import { assertLifecycleInstallation, loadLifecycleHost } from "./updater-lifecycle-host.mjs";
+import { inspectLifecycleChecksum, publishLifecycleReleaseFiles } from "./updater-lifecycle-artifacts.mjs";
 
 const FOCUSES = new Set(["build", "install", "update", "uninstall", "full"]);
 const INITIAL_VERSION = "1.0.0";
@@ -555,10 +556,7 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 	const archivePath = join(root, metadata.artifact.file);
 	assert.equal(pathExists(archivePath), true, `${label} full update archive`);
 	const tarIdentity = await readCompressedTarIdentity(archivePath);
-	const { tarSha256, tarSize } = metadata.artifact;
-	assert.match(tarSha256, /^[0-9a-f]{64}$/, `${label} exact tar digest`);
-	assert.equal(Number.isSafeInteger(tarSize) && tarSize > 0, true, `${label} exact tar size`);
-	assert.deepEqual({ sha256: tarSha256, size: tarSize }, tarIdentity, `${label} manifest integrity differs from CI archive`);
+	const { checksumPath, checksum } = inspectLifecycleChecksum(root, releasePrefix, metadata, tarIdentity, label);
 	const installerPath = exactlyOne(
 		names.filter((name) => platform.isInstaller(name)).map((name) => join(root, name)),
 		`${label} installer`,
@@ -591,11 +589,6 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 		true,
 		`${label} updater archive must retain the stable protocol prefix`,
 	);
-	assert.deepEqual(
-		new Set(Object.keys(metadata.artifact || {})),
-		new Set(["file", "tarSha256", "tarSize"]),
-		`${label} canonical update metadata must include archive integrity`,
-	);
 	assert.equal(metadata.patch, undefined, `${label} metadata unexpectedly advertised a patch descriptor`);
 	let patchPath;
 	if (previousRelease) {
@@ -618,6 +611,8 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 	return {
 		root,
 		updatePath,
+		checksumPath,
+		checksum,
 		archivePath,
 		patchPath,
 		installerPath,
@@ -627,25 +622,9 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 }
 
 async function publishRelease(release, options = {}) {
-	const includePatch = options.includePatch !== false;
-	mkdirSync(serverRoot, { recursive: true });
-	// Publish immutable payloads before the mutable target document. Deliberately
-	// leave every older source-hash patch in place so clients can traverse the
-	// complete release chain even after the update document advances.
-	copyFileSync(release.archivePath, join(serverRoot, basename(release.archivePath)));
-	if (includePatch && release.patchPath) {
-		copyFileSync(release.patchPath, join(serverRoot, basename(release.patchPath)));
-	}
-	const updatePath = join(serverRoot, basename(release.updatePath));
-	if (options.includeIntegrity === false) {
-		// Older producers use the same canonical URL without the optional pair.
-		writeFileSync(updatePath, JSON.stringify({
-			...release.metadata,
-			artifact: { file: release.metadata.artifact.file },
-		}));
-	} else {
-		copyFileSync(release.updatePath, updatePath);
-	}
+	// Older source-hash patches and checksum sidecars stay in the same flat
+	// folder while the one canonical update pointer advances.
+	publishLifecycleReleaseFiles(release, serverRoot, options);
 	if (lifecycleHost) await lifecycleHost.publishRelease(release, options);
 }
 
@@ -886,6 +865,7 @@ async function verifySuccessfulUpdate({
 	toRelease,
 	relaunchSentinelPath,
 	expectedDownloadPath,
+	expectedChecksumStatus = 200,
 	patchReleases,
 	requestStart,
 	eventStart,
@@ -966,10 +946,18 @@ async function verifySuccessfulUpdate({
 			request.status === 200,
 	);
 	assert.notEqual(metadataRequest, -1, `updater never fetched ${updateName}`);
+	const checksumName = `/${basename(toRelease.checksumPath)}`;
+	const checksumRequests = phaseRequests
+		.map((request, requestIndex) => ({ request, requestIndex }))
+		.filter(({ request }) => request.pathname.endsWith("-checksum.json"));
+	assert.equal(checksumRequests.length, 1, "updater must fetch one checksum for the selected build");
+	assert.equal(checksumRequests[0].request.pathname, checksumName, "updater requested a checksum for another build");
+	assert.equal(checksumRequests[0].request.status, expectedChecksumStatus, "checksum lookup status");
+	assert.equal(checksumRequests[0].requestIndex > metadataRequest, true, "checksum must follow validated update metadata");
 	assert.equal(
 		phaseRequests.some((request) => request.pathname.endsWith("-update-v2.json")),
 		false,
-		"updater must request only the canonical update.json, including on older hosts",
+		"updater must not probe a duplicate versioned manifest, including on older hosts",
 	);
 	assert.equal(
 		phaseRequests.every(
@@ -1008,7 +996,7 @@ async function verifySuccessfulUpdate({
 		);
 		const requestIndex = matchingRequests[0].requestIndex;
 		assert.equal(
-			requestIndex > (patchRequestIndexes.at(-1) ?? metadataRequest),
+			requestIndex > (patchRequestIndexes.at(-1) ?? checksumRequests[0].requestIndex),
 			true,
 			`patch request ${index + 1} was out of order: ${patchName}`,
 		);
@@ -1729,14 +1717,16 @@ async function main() {
 	assert.notEqual(v3.metadata.hash, v4.metadata.hash, "v3 and v4 produced the same hash");
 	assert.notEqual(v2.metadata.hash, v4.metadata.hash, "v2 and v4 produced the same hash");
 	assert.notEqual(v1.metadata.hash, v4.metadata.hash, "v1 and v4 produced the same hash");
-	// Build inspection validates the new integrity fields. Omit them only from
-	// this served document to exercise an older producer at the same update URL.
+	// Build inspection validates the checksum sidecar. Omit it from this host
+	// to exercise an older producer at the same canonical update URL.
 	await publishRelease(v4, { includePatch: false, includeIntegrity: false });
 	assert.deepEqual(
 		readJson(join(serverRoot, basename(v4.updatePath))).artifact,
 		{ file: v4.metadata.artifact.file },
-		"v4 must exercise canonical metadata without optional archive integrity",
+		"v4 must preserve the legacy canonical artifact metadata",
 	);
+	assert.equal(pathExists(join(serverRoot, basename(v4.checksumPath))), false,
+		"v4 must exercise a host without a checksum sidecar");
 	assert.equal(
 		pathExists(join(serverRoot, basename(v4.patchPath))),
 		false,
@@ -1762,6 +1752,7 @@ async function main() {
 		toRelease: v4,
 		relaunchSentinelPath: fallbackRelaunchSentinelPath,
 		expectedDownloadPath: "full",
+		expectedChecksumStatus: 404,
 		patchReleases: [v4],
 		requestStart: secondRequestStart,
 		eventStart: secondEventStart,

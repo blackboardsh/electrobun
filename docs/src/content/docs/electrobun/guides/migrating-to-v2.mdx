@@ -56,17 +56,24 @@ details and the situational cases.
 
 ## Returning to a single update manifest
 
-The single-manifest fix described in the
-[unreleased changelog](/electrobun/guides/changelog/unreleased/) restores
-`<channel>-<os>-<arch>-update.json` as the updater's only metadata URL. Hutch
-includes the exact uncompressed tar's SHA-256 and byte size in that file as
-`artifact.tarSha256` and `artifact.tarSize`. Both fields may be absent in older
-manifests; if supplied, they must be a valid pair.
+The compatibility fix described in the
+[unreleased changelog](/electrobun/guides/changelog/unreleased/) preserves one
+`<channel>-<os>-<arch>-update.json` release manifest with its original
+`artifact: { file }` shape. Its checksum-only sidecar,
+`<channel>-<os>-<arch>-<hash>-checksum.json`, contains the exact uncompressed tar's
+SHA-256 and byte size as `tarSha256` and `tarSize`. New updaters use the sidecar
+when available and retain older hosting behavior when it returns `404`.
+
+An earlier preview put these integrity fields inside `artifact`. Some shipped
+native clients reject unknown fields, so that change prevented them from
+checking for updates. Publish the compatible manifest shape and its checksum
+sidecar to restore their update path. Newer clients still accept the inline
+fields for compatibility with hosts that already published them.
 
 If your previous toolchain uploaded `*-update-v2.json`, publish the new
-canonical manifests and their artifacts, then delete the old v2 objects and
-purge cached copies. The removed URLs must return `404` so existing clients
-that check v2 first can fall back. See
+compatible canonical manifests, checksum sidecars, and their artifacts, then
+delete the old v2 objects and purge cached copies. The removed URLs must return
+`404` so existing clients that check v2 first can fall back. See
 [the update-host cleanup instructions](/electrobun/guides/updates/#remove-previously-published-v2-manifests).
 
 ## Upgrading from 2.0.5 to 2.0.6
@@ -90,10 +97,10 @@ the URL known to existing installations. New builds require an HTTPS
 `release.baseUrl`, except for loopback HTTP in local development; see the
 [release-host migration guidance](/electrobun/guides/updates/#upgrading-to-the-206-updater)
 if older clients use a remote HTTP host. Publish the complete generated
-`artifacts/` directory, making its manifests available after its bundles and
-patches. The original 2.0.6 toolchain, paired with Hutch 0.29, emitted an
-additional `*-update-v2.json` alongside `*-update.json`. When adopting the
-single-manifest fix, follow the [cleanup steps above](#returning-to-a-single-update-manifest)
+`artifacts/` directory, making its manifests available after its bundles,
+checksum sidecars, and patches. The original 2.0.6 toolchain, paired with Hutch
+0.29, emitted an additional `*-update-v2.json` alongside `*-update.json`. When
+adopting the single-manifest fix, follow the [cleanup steps above](#returning-to-a-single-update-manifest)
 so those old v2 files do not hide subsequent updates.
 
 Apps built with 2.0.6 reconstruct the original release tar in memory from the

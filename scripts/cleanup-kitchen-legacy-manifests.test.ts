@@ -21,7 +21,12 @@ function manifest(target: string) {
 	};
 }
 
-function fixture(override?: (url: string, method: string) => Response | undefined) {
+function legacyManifest(target: string) {
+	const document = manifest(target);
+	return { ...document, artifact: { file: document.artifact.file } };
+}
+
+function fixture(override?: (url: string, method: string) => Response | undefined, sidecars = false) {
 	const requests: { url: string; method: string }[] = [];
 	const signed: string[] = [];
 	const client = {
@@ -44,9 +49,12 @@ function fixture(override?: (url: string, method: string) => Response | undefine
 		if (method === "HEAD") {
 			return new Response(null, { headers: { "content-length": "1234" } });
 		}
+		if (sidecars && targets.some((target) => url === `${base}/canary-${target}-${manifest(target).hash}-checksum.json`)) {
+			return Response.json({ tarSha256: "a".repeat(64), tarSize: 4096 });
+		}
 		const target = targets.find((target) => url === `${base}/canary-${target}-update.json`);
 		if (!target) throw new Error(`Unexpected request ${url}`);
-		return Response.json(manifest(target));
+		return Response.json(sidecars ? legacyManifest(target) : manifest(target));
 	}) as typeof fetch;
 	return { requests, signed, dependencies: { fetch: request, client, log: () => {} } };
 }
@@ -84,6 +92,66 @@ describe("Kitchen canary legacy manifest cleanup", () => {
 		// HEAD length is compressed (1234); the uncompressed tarSize is 4096.
 		// Neither canonical manifests, payloads, patches nor stable objects are deleted.
 		expect(f.signed.every((key) => /^kitchen\/canary-(macos|linux|win)-(arm64|x64)-update-v2\.json$/.test(key))).toBe(true);
+	});
+
+	test("sidecar cleanup validates each target and exact build hash before signing any deletion", async () => {
+		const f = fixture(undefined, true);
+		await cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, f.dependencies);
+		expect(f.requests.slice(0, 18)).toEqual(targets.flatMap((target) => [
+			{ url: `${base}/canary-${target}-update.json`, method: "GET" },
+			{ url: `${base}/canary-${target}-${manifest(target).hash}-checksum.json`, method: "GET" },
+			{ url: `${base}/${manifest(target).artifact.file}`, method: "HEAD" },
+		]));
+		expect(f.requests.slice(18)).toEqual(expectedDeletes.map((key) => ({ url: `https://r2.invalid/${key}`, method: "DELETE" })));
+		expect(f.signed).toEqual(expectedDeletes);
+	});
+
+	test("sidecar dry-run validates replacements without signing deletions", async () => {
+		const f = fixture(undefined, true);
+		await cleanupKitchenLegacyManifests({ expectedVersion: version }, { ...f.dependencies, client: undefined });
+		expect(f.requests.map((r) => r.method)).toEqual(targets.flatMap(() => ["GET", "GET", "HEAD"]));
+		expect(f.signed).toEqual([]);
+	});
+
+	test("missing, invalid, redirected, oversized, or unavailable checksum on the last platform prevents all deletion", async () => {
+		const checksumUrl = `${base}/canary-win-x64-${manifest("win-x64").hash}-checksum.json`;
+		for (const response of [
+			() => new Response(null, { status: 404 }),
+			() => new Response(null, { status: 503 }),
+			() => new Response(null, { status: 302, headers: { location: "https://another.app/checksum.json" } }),
+			() => new Response(null),
+			() => new Response("not JSON"),
+			() => new Response(" ".repeat(64 * 1024 + 1)),
+			() => { throw new DOMException("Timed out", "TimeoutError"); },
+			...[null, [], {}, { tarSha256: "a".repeat(64) }, { tarSize: 4096 },
+				{ tarSha256: "invalid", tarSize: 4096 },
+				{ tarSha256: "a".repeat(64), tarSize: 0 },
+				{ tarSha256: "a".repeat(64), tarSize: Number.MAX_SAFE_INTEGER + 1 },
+				{ tarSha256: "a".repeat(64), tarSize: "4096" },
+			].map((body) => () => Response.json(body)),
+		]) {
+			const f = fixture((url) => url === checksumUrl ? response() : undefined, true);
+			await expect(cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, f.dependencies)).rejects.toThrow();
+			expect(f.signed).toEqual([]);
+			expect(f.requests.filter((r) => r.method === "DELETE")).toEqual([]);
+		}
+	});
+
+	test("a valid sidecar cannot hide partial or invalid inline integrity", async () => {
+		for (const integrity of [
+			{ tarSha256: "a".repeat(64) }, { tarSize: 4096 },
+			{ tarSha256: "invalid", tarSize: 4096 },
+		]) {
+			const f = fixture((url) => {
+				if (url !== `${base}/canary-win-x64-update.json`) return;
+				const document = legacyManifest("win-x64");
+				return Response.json({ ...document, artifact: { ...document.artifact, ...integrity } });
+			}, true);
+			await expect(cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, f.dependencies)).rejects.toThrow("Canonical manifest win-x64");
+			expect(f.requests.some((r) => r.url.endsWith(`canary-win-x64-${manifest("win-x64").hash}-checksum.json`))).toBe(false);
+			expect(f.signed).toEqual([]);
+			expect(f.requests.filter((r) => r.method === "DELETE")).toEqual([]);
+		}
 	});
 
 	test("wrong or missing metadata on the last platform prevents every deletion", async () => {
