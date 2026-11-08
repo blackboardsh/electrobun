@@ -3824,7 +3824,8 @@ static std::map<uint32_t, std::function<void()>> g_webview2TestHeldControllers;
 struct WebView2ContextMenuItemData {
     std::wstring id;
     std::wstring label;
-    std::wstring iconSvg;
+    std::vector<BYTE> iconPngLight;
+    std::vector<BYTE> iconPngDark;
     bool enabled = true;
 };
 
@@ -3833,6 +3834,73 @@ struct WebView2ContextMenuData {
     std::wstring menuId;
     winrt::Windows::Data::Json::IJsonValue payload{ nullptr };
 };
+
+static int webView2ContextMenuBase64Value(wchar_t value) {
+    if (value >= L'A' && value <= L'Z') return value - L'A';
+    if (value >= L'a' && value <= L'z') return value - L'a' + 26;
+    if (value >= L'0' && value <= L'9') return value - L'0' + 52;
+    if (value == L'+') return 62;
+    if (value == L'/') return 63;
+    if (value == L'=') return -2;
+    return -1;
+}
+
+static bool decodeWebView2ContextMenuPng(
+    const std::wstring& encoded,
+    std::vector<BYTE>& png) {
+    if (encoded.empty()) {
+        png.clear();
+        return true;
+    }
+    if (encoded.size() > 5500 || encoded.size() % 4 != 0) return false;
+
+    png.clear();
+    png.reserve((encoded.size() / 4) * 3);
+    for (size_t offset = 0; offset < encoded.size(); offset += 4) {
+        const bool isLastBlock = offset + 4 == encoded.size();
+        const int first = webView2ContextMenuBase64Value(encoded[offset]);
+        const int second = webView2ContextMenuBase64Value(encoded[offset + 1]);
+        const int third = webView2ContextMenuBase64Value(encoded[offset + 2]);
+        const int fourth = webView2ContextMenuBase64Value(encoded[offset + 3]);
+        if (first < 0 || second < 0 || third == -1 || fourth == -1) return false;
+        const bool oneByte = third == -2;
+        const bool twoBytes = fourth == -2;
+        if ((oneByte && (!twoBytes || !isLastBlock)) || (twoBytes && !isLastBlock)) return false;
+
+        png.push_back(static_cast<BYTE>((first << 2) | (second >> 4)));
+        if (!oneByte) {
+            png.push_back(static_cast<BYTE>(((second & 0x0f) << 4) | (third >> 2)));
+        }
+        if (!twoBytes) {
+            png.push_back(static_cast<BYTE>(((third & 0x03) << 6) | fourth));
+        }
+    }
+
+    static constexpr BYTE signature[] = { 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a };
+    if (png.size() < 24 || png.size() > 4096) return false;
+    for (size_t index = 0; index < sizeof(signature); index++) {
+        if (png[index] != signature[index]) return false;
+    }
+    if (png[12] != 'I' || png[13] != 'H' || png[14] != 'D' || png[15] != 'R') return false;
+    const uint32_t width =
+        (static_cast<uint32_t>(png[16]) << 24) |
+        (static_cast<uint32_t>(png[17]) << 16) |
+        (static_cast<uint32_t>(png[18]) << 8) |
+        static_cast<uint32_t>(png[19]);
+    const uint32_t height =
+        (static_cast<uint32_t>(png[20]) << 24) |
+        (static_cast<uint32_t>(png[21]) << 16) |
+        (static_cast<uint32_t>(png[22]) << 8) |
+        static_cast<uint32_t>(png[23]);
+    return width == 16 && height == 16;
+}
+
+static bool webView2MenuTextIsLight() {
+    const COLORREF color = GetSysColor(COLOR_MENUTEXT);
+    const unsigned luminance =
+        (GetRValue(color) * 299u + GetGValue(color) * 587u + GetBValue(color) * 114u) / 1000u;
+    return luminance >= 128;
+}
 
 static bool parseWebView2ContextMenuData(
     LPCWSTR resultJson,
@@ -3874,16 +3942,16 @@ static bool parseWebView2ContextMenuData(
                 return false;
             }
 
-            IJsonValue iconValue = item.GetNamedValue(L"iconSvg", nullptr);
-            if (iconValue) {
-                if (iconValue.ValueType() != JsonValueType::String) return false;
-                parsed.iconSvg = iconValue.GetString().c_str();
-                if (parsed.iconSvg.size() > 4096 ||
-                    parsed.iconSvg.find(L"<svg") == std::wstring::npos ||
-                    parsed.iconSvg.find(L"</svg>") == std::wstring::npos ||
-                    parsed.iconSvg.find(L"<script") != std::wstring::npos ||
-                    parsed.iconSvg.find(L"href=") != std::wstring::npos ||
-                    parsed.iconSvg.find(L"onload=") != std::wstring::npos) {
+            IJsonValue iconPngLight = item.GetNamedValue(L"iconPngLight", nullptr);
+            IJsonValue iconPngDark = item.GetNamedValue(L"iconPngDark", nullptr);
+            if (static_cast<bool>(iconPngLight) != static_cast<bool>(iconPngDark)) return false;
+            if (iconPngLight) {
+                if (iconPngLight.ValueType() != JsonValueType::String ||
+                    iconPngDark.ValueType() != JsonValueType::String ||
+                    !decodeWebView2ContextMenuPng(
+                        iconPngLight.GetString().c_str(), parsed.iconPngLight) ||
+                    !decodeWebView2ContextMenuPng(
+                        iconPngDark.GetString().c_str(), parsed.iconPngDark)) {
                     return false;
                 }
             }
@@ -4053,15 +4121,13 @@ public:
                                     for (const auto& itemData : data.items) {
                                         ComPtr<ICoreWebView2ContextMenuItem> item;
                                         ComPtr<IStream> iconStream;
-                                        std::string iconSvgUtf8;
-                                        if (!itemData.iconSvg.empty()) {
-                                            if (!electrobun::wideToUtf8(itemData.iconSvg, iconSvgUtf8)) {
-                                                result = E_INVALIDARG;
-                                                break;
-                                            }
+                                        const auto& iconPng = webView2MenuTextIsLight()
+                                            ? itemData.iconPngDark
+                                            : itemData.iconPngLight;
+                                        if (!iconPng.empty()) {
                                             iconStream.Attach(SHCreateMemStream(
-                                                reinterpret_cast<const BYTE*>(iconSvgUtf8.data()),
-                                                static_cast<UINT>(iconSvgUtf8.size())));
+                                                iconPng.data(),
+                                                static_cast<UINT>(iconPng.size())));
                                             if (!iconStream) {
                                                 result = E_OUTOFMEMORY;
                                                 break;
