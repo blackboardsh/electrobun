@@ -1,0 +1,51 @@
+name: Clean up Kitchen legacy canary manifests
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: Exact Kitchen version already published to all six canonical canary manifests
+        type: string
+        required: true
+      apply:
+        description: Delete the six obsolete canary update-v2.json objects after validation
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kitchen-legacy-canary-manifest-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.1'
+      - uses: ./.github/actions/install-hutch
+        with:
+          channel: canary
+      - name: Test cleanup guards
+        working-directory: package
+        run: hutch test ../scripts/cleanup-kitchen-legacy-manifests.test.ts
+      - name: Validate replacements and clean up legacy manifests
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          APPLY: ${{ inputs.apply }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode=--dry-run
+          if [[ "$APPLY" == true ]]; then mode=--apply; fi
+          hutch scripts/cleanup-kitchen-legacy-manifests.ts "--expected-version=$EXPECTED_VERSION" "$mode"
