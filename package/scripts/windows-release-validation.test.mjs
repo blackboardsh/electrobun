@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { nativeWindowsArchitecture, zigCompilerHostArchitecture } from "./zig-compiler-host.mjs";
-import { runSynchronizationProcess, synchronizationTargets } from "./core-synchronization-stress.mjs";
+import { coreTestsCompleted, runSynchronizationProcess, synchronizationTargets } from "./core-synchronization-stress.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = readFileSync(resolve(packageRoot, "../.github/workflows/release.yml"), "utf8");
@@ -181,6 +181,33 @@ test("Core watchdog preserves successful output and exit status", async () => {
   assert.equal(result.timedOut, false);
   assert.equal(result.code, 0);
   assert.match(result.stderr, /All 2 tests passed\./);
+});
+
+test("Core completion accepts successful Zig summaries with platform skips", () => {
+  // Captured Windows beta.6 output: the POSIX environment regression skips,
+  // while the other 49 Core tests pass. Middle test lines are omitted here.
+  const windowsOutput = [
+    "4/50 main.test.native profile root lookup survives unrelated environment removal while allocating...SKIP",
+    "50/50 insights_spool.test.legacy JSON migrates without changing plaintext or key and obeys independent size bounds...OK",
+    "49 passed; 1 skipped; 0 failed.",
+    "",
+  ].join("\r\n");
+  assert.equal(coreTestsCompleted(windowsOutput), true);
+  assert.equal(coreTestsCompleted("1/1 fixture.test.one...OK\nAll 1 tests passed.\n"), true);
+  assert.equal(coreTestsCompleted("All 50 tests passed.\n"), true);
+  assert.equal(coreTestsCompleted("1 passed; 0 skipped; 0 failed.\n"), true);
+});
+
+test("Core completion rejects failures, empty runs, incomplete or superseded summaries", () => {
+  for (const output of [
+    "", "1/50 fixture.test.one...OK\n", "All 0 tests passed.\n",
+    "0 passed; 50 skipped; 0 failed.\n", "0 passed; 0 skipped; 0 failed.\n",
+    "48 passed; 1 skipped; 1 failed.\n", "49 passed; 1 skipped; 0 failed",
+    "49 passed; 1 skipped.\n", "passed; 1 skipped; 0 failed.\n",
+    "All 50 tests passed.\n1 tests leaked memory.\n",
+    "49 passed; 1 skipped; 0 failed.\n1 errors were logged.\n",
+    "All 50 tests passed.\n1/50 fixture.test.next-run...",
+  ]) assert.equal(coreTestsCompleted(output), false, JSON.stringify(output));
 });
 
 test("Core watchdog kills a stalled child even when it keeps producing output", async () => {

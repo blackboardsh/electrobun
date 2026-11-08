@@ -11,6 +11,14 @@ import { zigCompilerHostArchitecture } from "./zig-compiler-host.mjs";
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const success = "PASS: contention=8000000 broadcast=4 idle-queue=1000";
 
+export function coreTestsCompleted(stderr) {
+  // Zig changes its summary when a platform-specific test is skipped. Require
+  // a completed, nonempty passing suite; later leak/error output is not success.
+  const summary = stderr.trimEnd().split(/\r?\n/).at(-1);
+  return /^All [1-9][0-9]* tests passed\.$/.test(summary) ||
+    /^[1-9][0-9]* passed; (?:0|[1-9][0-9]*) skipped; 0 failed\.$/.test(summary);
+}
+
 // Windows ARM runners must exercise both native execution and the x64
 // emulation that exposed the parking handoff failure. Elsewhere use native.
 export function synchronizationTargets({ platform = process.platform, processArch = process.arch,
@@ -129,7 +137,7 @@ async function main() {
             assert.ok(!result.timedOut, `${label} iteration ${iteration} exceeded its ${timeoutMs}ms whole-process deadline (possible synchronization deadlock): ${result.stderr}`);
             assert.equal(result.code, 0, `${label} iteration ${iteration}: ${result.stderr}`);
             if (fixture === "adapter") assert.ok(result.stderr.includes(success), `${label} did not complete all stress phases: ${result.stderr}`);
-            else assert.match(result.stderr, /All \d+ tests passed\./, `${label} did not finish the Core tests`);
+            else assert.ok(coreTestsCompleted(result.stderr), `${label} did not finish the Core tests: ${result.stderr}`);
           }
           console.log(`Passed ${repetitions} Core synchronization runs: ${label}`);
         }
