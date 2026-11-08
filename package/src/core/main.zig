@@ -7,18 +7,6 @@ const installation_identity = @import("installation_identity.zig");
 const allocator = std.heap.c_allocator;
 const install_root_name_environment_variable = "ELECTROBUN_INSTALL_ROOT_NAME";
 
-fn processEnviron() std.process.Environ {
-    return switch (builtin.os.tag) {
-        .windows => .{ .block = .global },
-        else => blk: {
-            const c_environ = std.c.environ;
-            var count: usize = 0;
-            while (c_environ[count] != null) : (count += 1) {}
-            break :blk .{ .block = .{ .slice = @ptrCast(c_environ[0..count :null]) } };
-        },
-    };
-}
-
 fn isSafeInstallRootName(value: []const u8) bool {
     if (value.len == 0 or value.len > 256 or
         std.mem.eql(u8, value, ".") or std.mem.eql(u8, value, "..")) return false;
@@ -33,10 +21,20 @@ fn isSafeInstallRootName(value: []const u8) bool {
 }
 
 fn installRootNameOverride() ?[:0]u8 {
-    const value = processEnviron().getAlloc(allocator, install_root_name_environment_variable) catch return null;
-    defer allocator.free(value);
+    return installRootNameOverrideWithAllocator(allocator);
+}
+
+fn installRootNameOverrideWithAllocator(gpa: std.mem.Allocator) ?[:0]u8 {
+    // The launcher-owned root remains unchanged during startup. JSC can add
+    // and remove unrelated variables concurrently, so never retain a counted
+    // slice of the live POSIX environ array while copying it into a map.
+    const value = if (builtin.os.tag == .windows)
+        (std.process.Environ{ .block = .global }).getAlloc(gpa, install_root_name_environment_variable) catch return null
+    else
+        gpa.dupe(u8, std.mem.span(std.c.getenv(install_root_name_environment_variable) orelse return null)) catch return null;
+    defer gpa.free(value);
     if (!isSafeInstallRootName(value)) return null;
-    return allocator.dupeSentinel(u8, value, 0) catch null;
+    return gpa.dupeSentinel(u8, value, 0) catch null;
 }
 
 // Lazily-initialized event-loop-free Io implementation. The library keeps its
@@ -2874,6 +2872,69 @@ test "native profile root override accepts only a safe root leaf" {
         try std.testing.expect(!isSafeInstallRootName("bad:name"));
         try std.testing.expect(!isSafeInstallRootName("trailing."));
     }
+}
+
+test "native profile root lookup survives unrelated environment removal while allocating" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const c = struct {
+        extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+        extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+    };
+    const root_key = install_root_name_environment_variable;
+    const removed_key = "ELECTROBUN_CORE_TEST_ENVIRONMENT_TAIL";
+    const original_root = if (std.c.getenv(root_key)) |value|
+        try std.testing.allocator.dupeSentinel(u8, std.mem.span(value), 0)
+    else
+        null;
+    defer {
+        if (original_root) |value| {
+            _ = c.setenv(root_key, value.ptr, 1);
+            std.testing.allocator.free(value);
+        } else _ = c.unsetenv(root_key);
+    }
+    try std.testing.expect(std.c.getenv(removed_key) == null);
+    try std.testing.expectEqual(@as(c_int, 0), c.setenv(root_key, "Legacy App", 1));
+    try std.testing.expectEqual(@as(c_int, 0), c.setenv(removed_key, "remove-during-copy", 1));
+    defer _ = c.unsetenv(removed_key);
+
+    const RemovingAllocator = struct {
+        removed: bool = false,
+        fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            if (!self.removed) {
+                if (c.unsetenv(removed_key) != 0) return null;
+                self.removed = true;
+            }
+            return std.testing.allocator.rawAlloc(len, alignment, ra);
+        }
+        fn resize(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, len: usize, ra: usize) bool {
+            return std.testing.allocator.rawResize(memory, alignment, len, ra);
+        }
+        fn remap(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, len: usize, ra: usize) ?[*]u8 {
+            return std.testing.allocator.rawRemap(memory, alignment, len, ra);
+        }
+        fn free(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ra: usize) void {
+            std.testing.allocator.rawFree(memory, alignment, ra);
+        }
+    };
+    var removing: RemovingAllocator = .{};
+    const gpa: std.mem.Allocator = .{
+        .ptr = &removing,
+        .vtable = &.{ .alloc = RemovingAllocator.alloc, .resize = RemovingAllocator.resize, .remap = RemovingAllocator.remap, .free = RemovingAllocator.free },
+    };
+    // Remove the trailing entry at exactly the point the old implementation
+    // began copying its borrowed, fixed-length environ slice. That leaves a
+    // null inside the old slice, deterministically reproducing the startup race.
+    const root = installRootNameOverrideWithAllocator(gpa) orelse return error.MissingInstallRoot;
+    defer gpa.free(root);
+    try std.testing.expect(removing.removed);
+    try std.testing.expectEqualStrings("Legacy App", root);
+    try std.testing.expectEqual(@as(c_int, 0), c.setenv(root_key, "changed", 1));
+    try std.testing.expectEqualStrings("Legacy App", root); // The returned value is owned.
+    try std.testing.expectEqual(@as(c_int, 0), c.setenv(root_key, "../unsafe", 1));
+    try std.testing.expect(installRootNameOverrideWithAllocator(gpa) == null);
+    try std.testing.expectEqual(@as(c_int, 0), c.unsetenv(root_key));
+    try std.testing.expect(installRootNameOverrideWithAllocator(gpa) == null);
 }
 
 export fn runNativeEventLoopTick(timeout_ms: c_int) void {
