@@ -363,7 +363,8 @@ class FailureDiagnosticTests(unittest.TestCase):
             NSRunningApplication=SimpleNamespace(runningApplicationWithProcessIdentifier_=lookup))
         evidence = []
         def capture(command, **kwargs):
-            self.assertEqual(command, ['/usr/sbin/screencapture', '-x', '/tmp/probe-output/desktop-preflight-failure.png'])
+            self.assertEqual(command, ['/usr/sbin/screencapture', '-x',
+                                       str(Path('/tmp/probe-output') / 'desktop-preflight-failure.png')])
             self.assertEqual(kwargs, {'check': True, 'timeout': 3})
             self.assertEqual(evidence[0]['frontmostApplication']['pid'], 123)
             self.assertEqual(evidence[0]['probeApplication'], {'active': True, 'hidden': False})
@@ -382,7 +383,7 @@ class FailureDiagnosticTests(unittest.TestCase):
             snapshot = preflight.capture_failure_diagnostics(Path('/tmp/probe-output'))
         command = run.call_args.args[0]
         self.assertEqual(command, [sys.executable, str(Path(preflight.__file__).resolve()),
-                                   '--failure-diagnostics', '/tmp/probe-output', str(os.getpid())])
+                                   '--failure-diagnostics', str(Path('/tmp/probe-output')), str(os.getpid())])
         self.assertEqual(run.call_args.kwargs, {'capture_output': True, 'text': True, 'timeout': 8})
         self.assertEqual(snapshot['exitCode'], 1)
         self.assertEqual(len(snapshot['stdout']), 4096)
