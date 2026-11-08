@@ -18,6 +18,82 @@ import desktop
 from desktop import stop, counter_difference, ocr_regions, ocr_token, rendered_surface, app_failure
 
 
+class HostViewportPreparationTests(unittest.TestCase):
+    def fixture(self, *, height=680, host_y=460, child_y=770, capture_cost=0, ocr_error=None):
+        clock, offset = [0.0], [0]
+        captures, reads, scrolls, observation = [], [], [], {}
+        def scroll(notches):
+            scrolls.append(notches)
+            offset[0] += notches * 40
+        def capture(sample):
+            clock[0] += capture_cost
+            frame = {'number': len(captures), 'host': 0 < host_y + offset[0] < height,
+                     'child': 0 < child_y + offset[0] < height}
+            captures.append(frame)
+            return frame
+        def recognize(frame, **kwargs):
+            reads.append(frame)
+            clock[0] += 0.1
+            if ocr_error:
+                raise ocr_error
+            return ('Mask & Passthrough Controls' if frame['host'] else '') + '\n' + (
+                'Search Target A' if frame['child'] else '')
+        def prepare():
+            return desktop.prepare_host_view('Mask & Passthrough Controls', 'Search Target A',
+                capture, recognize, scroll, notches=-1, observation=observation,
+                clock=lambda: clock[0], sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+                regions=lambda frame: [(frame, 0, '--psm 11', 1, 0)])
+        return SimpleNamespace(prepare=prepare, clock=clock, captures=captures, reads=reads,
+                               scrolls=scrolls, observation=observation)
+
+    def test_short_viewport_scrolls_real_host_until_both_anchors_share_one_frame(self):
+        fixture = self.fixture()
+        frame = fixture.prepare()
+        self.assertFalse(fixture.captures[0]['child'], 'The previous single-scroll fixture cannot see the target')
+        self.assertEqual(fixture.scrolls, [-1, -1, -1])
+        self.assertTrue(frame['host'] and frame['child'])
+        self.assertEqual(fixture.observation['outcome'], 'passed')
+        for index in range(0, len(fixture.reads), 2):
+            self.assertIs(fixture.reads[index], fixture.reads[index + 1])
+
+    def test_tall_viewport_preserves_original_single_initial_scroll(self):
+        fixture = self.fixture(height=1000)
+        fixture.prepare()
+        self.assertEqual(fixture.scrolls, [-1])
+
+    def test_impossible_joint_visibility_never_combines_anchors_from_different_frames(self):
+        fixture = self.fixture(host_y=90)
+        with self.assertRaisesRegex(AssertionError, 'Host control anchor.*left the visible viewport'):
+            fixture.prepare()
+        self.assertTrue(fixture.captures[0]['host'])
+        self.assertTrue(fixture.captures[-1]['child'])
+        self.assertFalse(any(frame['host'] and frame['child'] for frame in fixture.captures))
+        self.assertEqual(fixture.observation['outcome'], 'failed')
+
+    def test_missing_child_fails_at_scroll_limit(self):
+        fixture = self.fixture(child_y=10000)
+        with self.assertRaisesRegex(desktop.TextObservationTimeout, 'jointly visible.*8 host scrolls'):
+            fixture.prepare()
+        self.assertEqual(len(fixture.scrolls), 8)
+        self.assertLess(fixture.clock[0], 45)
+
+    def test_capture_exhausting_existing_deadline_cannot_trigger_ocr_or_more_input(self):
+        fixture = self.fixture(height=1000, capture_cost=44)
+        with self.assertRaises(desktop.TextObservationTimeout):
+            fixture.prepare()
+        self.assertEqual(fixture.clock[0], 45)
+        self.assertEqual(fixture.scrolls, [-1])
+        self.assertEqual(fixture.reads, [])
+
+    def test_ocr_failure_propagates_without_another_scroll(self):
+        original = OSError('OCR unavailable')
+        fixture = self.fixture(ocr_error=original)
+        with self.assertRaises(OSError) as raised:
+            fixture.prepare()
+        self.assertIs(raised.exception, original)
+        self.assertEqual(fixture.scrolls, [-1])
+
+
 class TextObservationTests(unittest.TestCase):
     def inspect_image(self, outputs, *, deadline=5, costs=None, regions=None):
         clock = [0.0]

@@ -846,6 +846,62 @@ def image_has_text(image, expected, recognize, *, deadline, observation=None,
         observation['ocrElapsedSeconds'] = clock() - started
 
 
+def prepare_host_view(host, child, capture, recognize, scroll, *, notches,
+                      response_timeout=45, max_scrolls=8, observation=None,
+                      require_running=None, clock=None, sleep=None, regions=None,
+                      recognize_batch=None):
+    """Use real host scrolling to expose both anchors in one visible frame."""
+    clock, sleep = clock or time.monotonic, sleep or time.sleep
+    require_running = require_running or (lambda: None)
+    observation = observation if observation is not None else {}
+    started = clock()
+    deadline = started + response_timeout
+    observation.update(host=host, child=child, responseTimeoutSeconds=response_timeout,
+                       maxScrolls=max_scrolls, samples=[], outcome='pending')
+    try:
+        for count in range(1, max_scrolls + 1):
+            require_running()
+            if clock() >= deadline:
+                break
+            # Retain the original initial notch, then scroll only after a
+            # complete frame proves the child is still outside the viewport.
+            scroll(notches)
+            sleep(min(1, max(0, deadline - clock())))
+            if clock() >= deadline:
+                break
+            sample = {'scrolls': count, 'captureStartedSeconds': clock() - started}
+            observation['samples'].append(sample)
+            image = capture(sample)
+            sample['captureFinishedSeconds'] = clock() - started
+            if clock() >= deadline:
+                break
+            frame_deadline = min(deadline, clock() + 20)
+            sample['host'] = {}
+            host_visible = image_has_text(image, host, recognize, deadline=frame_deadline,
+                observation=sample['host'], clock=clock, regions=regions,
+                recognize_batch=recognize_batch)
+            if not host_visible:
+                raise AssertionError(f'Host control anchor {host!r} left the visible viewport during preparation')
+            sample['child'] = {}
+            child_visible = image_has_text(image, child, recognize, deadline=frame_deadline,
+                observation=sample['child'], clock=clock, regions=regions,
+                recognize_batch=recognize_batch)
+            require_running()
+            if clock() >= deadline:
+                break
+            if child_visible:
+                observation.update(outcome='passed', matchedSample=len(observation['samples']) - 1)
+                return image
+        raise TextObservationTimeout(
+            f'Host {host!r} and child {child!r} did not become jointly visible within '
+            f'{response_timeout:g} seconds and {max_scrolls} host scrolls')
+    except Exception as error:
+        observation.update(outcome='failed', error=str(error))
+        raise
+    finally:
+        observation['elapsedSeconds'] = clock() - started
+
+
 class TextAnalysis:
     """One immutable frame; its private result never updates driver state."""
     def __init__(self, image, expected, recognize, *, deadline, clock, regions, recognize_batch=None):
@@ -1228,9 +1284,21 @@ def inspect_app(plan):
                 await_text(plan['scrollReadyText'])
                 # The right-hand host margin stays outside the 600px OOPIF.
                 click_control(gui, (rect[0] + rect[2] * 0.9, rect[1] + rect[3] * 0.4))
-                scroll_host(gui, plan['initialScrollHost'])
-                time.sleep(1)
-            if plan.get('readyText'):
+                result['hostViewportPreparation'] = {}
+                def capture_preparation(sample):
+                    image = capture('host-viewport-preparation')
+                    sample['screenshot'] = shots[-1]
+                    sample['windowScreenshot'] = shots[-1].replace('.png', '-window.png')
+                    return image
+                prepare_host_view(plan['scrollReadyText'], plan['readyText'], capture_preparation,
+                    lambda image, **kwargs: recognize_text(image, **kwargs,
+                        command=pytesseract.pytesseract.tesseract_cmd),
+                    lambda notches: scroll_host(gui, notches), notches=plan['initialScrollHost'],
+                    require_running=require_running, observation=result['hostViewportPreparation'],
+                    recognize_batch=lambda images, **kwargs: recognize_text_batch(images, **kwargs,
+                        command=pytesseract.pytesseract.tesseract_cmd))
+                checks.append('rendered-ready-text')
+            elif plan.get('readyText'):
                 await_text(plan['readyText'])
                 checks.append('rendered-ready-text')
             time.sleep(2)
