@@ -157,7 +157,7 @@ Windows and Linux URL schemes and file associations are not yet implemented.
 ## Main Process
 
 `build.mainProcess` selects the runtime and compiler. It defaults to
-`"cottontail"`.
+`"bun"`.
 
 | Value | Configuration | Project build input |
 | --- | --- | --- |
@@ -633,9 +633,16 @@ for a cross-platform hook.
 
 ## Release Configuration
 
-`release.baseUrl` is the public artifact base used by update metadata.
-`release.generatePatch` defaults to `true`; disable it when a local canary or
-stable build should skip downloading and diffing the previous release.
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `baseUrl` | Unset | Artifact folder for a static host; optional verified custom HTTPS origin for managed hosting. |
+| `managed.appId` | Unset | Opt into Electrobun Managed Deploys with the app ID from Dash. |
+| `managed.apiUrl` | `https://api.electrobun.dev` | Advanced management API override for staging/local testing. |
+| `updateAuthority` | `"direct"` | `"external"` or `"none"` disables the direct updater; neither implements a store update integration. |
+| `generatePatch` | `true` | Generate a delta from the previously published full archive. Set `false` to skip downloading and diffing it during a local packaged build. |
+
+For a static host, `release.baseUrl` is the shared folder containing every
+target's original artifact filenames:
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
@@ -652,6 +659,57 @@ export default {
   },
 } satisfies ElectrobunConfig;
 ```
+
+For [Managed Deploys](/electrobun/guides/managed-deploys/), set
+`release.managed.appId` instead. The public update URL is derived automatically;
+no custom domain or explicit API URL is required. Managed canary names and
+identifiers are derived from the base app configuration. Stable and canary
+remain separate builds.
+
+With managed hosting, an optional `baseUrl` must be a verified HTTPS origin on
+the standard port, without a path, credentials, query, or fragment. Insights
+for the same app inherits this custom origin unless its own `apiUrl` overrides
+it. A static host's `baseUrl` may include a folder path. Neither hosting choice
+requires Insights. See [Updates](/electrobun/guides/updates/) for the unchanged
+static-host publishing protocol.
+
+## Insights Configuration
+
+[Electrobun Insights](/electrobun/guides/insights/) is independent of release
+hosting and is off by default on every channel.
+
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `insights.appId` | Required when `insights` is present | Public app ID from Dash; use the same ID as managed hosting when both are configured. |
+| `insights.enabled` | `false` | Initial collection preference. A persisted runtime `setEnabled` choice overrides this build default. |
+| `insights.apiUrl` | Hosted API, or the matching managed custom origin | Advanced ingestion API override for staging/local testing. |
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "My App",
+    identifier: "com.example.my-app",
+    version: "2.0.0",
+  },
+  insights: {
+    appId: "YOUR_APP_ID",
+    enabled: false,
+  },
+} satisfies ElectrobunConfig;
+```
+
+This prepares the client for an explicit runtime opt-in. Omitting the entire
+`insights` block leaves it unconfigured. Setting `enabled: true` explicitly
+opts in by default, subject to the user's persisted choice. Never put a deploy
+API key in app configuration.
+
+`release.managed.apiUrl` does not supply the Insights override: set both
+overrides when testing both services against staging. Dev collection requires
+explicit `enabled: true` and a loopback HTTP endpoint; the hosted service does
+not ingest dev builds. Disabling direct updates with `updateAuthority` does not
+disable Insights.
 
 ## Carrot Packaging
 

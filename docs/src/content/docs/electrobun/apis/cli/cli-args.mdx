@@ -154,6 +154,66 @@ release channel.
 Hutch does not cross-compile an Electrobun release. Run the command on native
 macOS, Windows, and Linux CI workers for a complete matrix.
 
+## `hutch electrobun upload`
+
+Stage the existing artifact folder in
+[Electrobun Managed Deploys](/electrobun/guides/managed-deploys/):
+
+```sh
+hutch electrobun build --env=canary
+hutch electrobun upload --dry-run
+hutch electrobun upload
+```
+
+Upload infers the channel, version, and targets from the generated files and
+manifests. Every runner contributes to the same `<channel>-<version>` release.
+It does not need a target list or `--env`, and uploading does not publish.
+Only stable/canary artifacts are supported; dev builds produce none.
+
+| Option | Purpose |
+| --- | --- |
+| `--artifacts=<folder>` | Read a copied or nondefault artifact folder. Keep its generated `managed-deploy.json` sidecar. |
+| `--app=<id>` | Supply the managed app ID when generated public defaults are not available. `ELECTROBUN_APP_ID` also supplies it. |
+| `--release=<id>` | Optional check: it must match the inferred `<channel>-<version>`. It cannot create an alternate release for the same version. |
+| `--api-url=<origin>` | Override the management API for local/staging testing. |
+| `--api-key=<key>` | Supply an app-scoped deploy key. `ELECTROBUN_API_KEY` is the usual CI/environment alternative. |
+| `--dry-run` | Validate and print the local inventory without uploading. |
+
+Hutch uploads bytes directly to R2 using scoped signed URLs. Retrying the same
+command resumes an interrupted upload. The command runs in Hutch's Zig core
+without evaluating the project config, installing packages, or running a
+JavaScript runtime. Builds write the public defaults used by this command;
+deploy credentials stay in the calling environment.
+
+`hutch electrobun deploy` is an alias for upload.
+
+## `hutch electrobun publish`
+
+Validate and publish an already uploaded release:
+
+```sh
+hutch electrobun publish --app=YOUR_APP_ID --release=canary-2.0.0 --audience=prerelease --dry-run
+hutch electrobun publish --app=YOUR_APP_ID --release=canary-2.0.0 --audience=prerelease
+hutch electrobun publish --app=YOUR_APP_ID --release=canary-2.0.0 --audience=public
+```
+
+`--release` is required; use the release ID reported by upload. The audience
+is `prerelease` or `public` (the default). Prerelease selects the app's enrolled
+installation IDs; public selects ordinary installs on that release's channel.
+Neither audience can change a stable build into a canary build or vice versa.
+
+This command uses the same app, API, and key options as upload. Its `--dry-run`
+reads and checks the server's release without changing routing. The final CI
+job needs only Hutch, the app/release IDs, and the deploy key; it does not need
+artifacts, a project checkout, or a package runner. Make it depend on every
+intended build/upload job completing successfully. The dashboard provides the
+same publication actions.
+
+A release becomes closed to uploads after publication to either audience.
+Changed builds need a new version. See the
+[publication flow](/electrobun/guides/managed-deploys/#publish-after-all-uploads-finish)
+for release review, prerelease groups, and retained patch files.
+
 ## `hutch electrobun run`
 
 Launch an existing application bundle for the selected environment without

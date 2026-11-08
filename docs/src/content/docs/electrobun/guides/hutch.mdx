@@ -123,6 +123,13 @@ hutch electrobun build --env=stable
 
 Hutch's Electrobun build environments are `dev`, `canary`, and `stable`.
 
+For [Managed Deploys](/electrobun/guides/managed-deploys/), run
+`hutch electrobun upload` after building on each runner, then run
+`hutch electrobun publish --app=<app-id> --release=<channel-version>` after all
+uploads finish. Upload discovers platforms from the generated artifacts;
+publish needs no local artifacts. Both commands run natively in Hutch and do
+not require a JavaScript runtime or package manager.
+
 Template channels are separate from Hutch's release channel. Electrobun beta
 templates can require stable Hutch; `--beta` selects the template catalog,
 not a Hutch release version. Follow any minimum-version error from init and

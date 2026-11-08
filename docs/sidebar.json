@@ -114,6 +114,14 @@
           {
             "label": "Updates",
             "link": "/electrobun/guides/updates/"
+          },
+          {
+            "label": "Managed Deploys (Preview)",
+            "link": "/electrobun/guides/managed-deploys/"
+          },
+          {
+            "label": "Insights (Preview)",
+            "link": "/electrobun/guides/insights/"
           }
         ]
       },
@@ -163,6 +171,10 @@
           {
             "label": "App",
             "link": "/electrobun/apis/app/"
+          },
+          {
+            "label": "Insights",
+            "link": "/electrobun/apis/insights/"
           },
           {
             "label": "Events",

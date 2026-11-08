@@ -1,0 +1,206 @@
+---
+title: "Electrobun Insights"
+description: "Opt into app lifecycle analytics and custom events through Electrobun's native core."
+---
+
+Electrobun Insights is a preview analytics service managed through your Dash
+account. It reports app opens, approximate open duration, OS/architecture, and
+app versions/builds, and accepts custom events from your app.
+
+Insights is **off by default**. It uses its own ingestion endpoint and does
+not piggyback on update checks. You can use it with
+[Managed Deploys](/electrobun/guides/managed-deploys/), a self-hosted release
+folder, or a build that disables Electrobun's direct updater. Hosting, Insights,
+and directory registration are independent choices; these services require
+Dash Pro during the preview.
+
+## Configure Insights without starting collection
+
+Create an app in [Electrobun Apps in Dash](https://docs.electrobun.dev/dash/electrobun-apps/)
+and enable its Insights service.
+Add its app ID to your existing `electrobun.config.ts`:
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "My App",
+    identifier: "com.example.my-app",
+    version: "2.0.0",
+  },
+  insights: {
+    appId: "YOUR_APP_ID",
+    enabled: false,
+  },
+} satisfies ElectrobunConfig;
+```
+
+This configures the native client but leaves collection disabled until your
+app enables it. Omitting `enabled` has the same default. Omitting the entire
+`insights` block leaves the reporter unconfigured, so a later `setEnabled(true)`
+has no configured service to enable.
+
+For Bun and Cottontail, enable collection from your app's own consent/settings
+flow, after obtaining any consent your app requires:
+
+```typescript
+import { Insights } from "electrobun/main";
+
+// Call when the user chooses to enable analytics.
+Insights.setEnabled(true);
+
+// Call when the user chooses to disable analytics.
+Insights.setEnabled(false);
+```
+
+If your app should collect by default, set `insights.enabled: true` explicitly.
+An installation's persisted `setEnabled` choice takes precedence over that build
+default across restarts and updates. Disabling collection clears queued events
+and the active session journal; requests already sent may finish. Server policy
+cannot override local opt-out.
+
+The same native client is available through the Bun, Cottontail, Zig, Rust, Go,
+and Odin SDKs. Normal bundled SDK startup reads the configuration and normal
+teardown saves session state. See the [Insights API](/electrobun/apis/insights/)
+for the language-specific calls.
+
+## Automatic lifecycle data
+
+While collection is enabled, the Zig core records:
+
+- An app/profile installation ID, app version and build hash, channel, OS, and
+  architecture.
+- `electrobun.app.open` and `electrobun.app.close` events, with a shared
+  `appSessionId` and original session times.
+- Approximate process-open duration while the machine is awake.
+- `electrobun.app.interrupted` on the next launch when the previous run did not
+  record a clean end.
+
+Open duration does not measure foreground attention. An interrupted session is
+not a crash diagnosis: a process kill, power loss, or another unclean shutdown
+can produce it. There is no crash-report upload in this preview.
+
+One app-open period is one session. Your app does not need user accounts or a
+sign-in integration for this data. Signing in is not an automatic analytics
+event and does not start a new duration segment.
+
+Duration is checkpointed locally roughly once a minute, without a network
+heartbeat. Normal shutdown saves final duration and the close event without
+waiting for network delivery. The next launch delivers queued records and
+recovers an interrupted session's last checkpoint with its original timestamps
+and app version. Time between launches is not counted. Session/day totals are
+cumulative so delivery retries cannot count the same duration twice.
+
+## Custom events and optional user association
+
+Use events for app-specific actions:
+
+```typescript
+import { Insights } from "electrobun/main";
+
+const queued = Insights.track("export_completed", {
+  format: "pdf",
+  pages: 3,
+});
+```
+
+`true` means the event was accepted into the local queue, not that the server
+received it. A disabled client, invalid payload, or disabled custom collection
+returns `false`. Prefer event names and properties that describe behavior
+without including private document contents, passwords, or tokens.
+
+If your app has its own user accounts, you may associate **future custom
+events** with an opaque ID from that system:
+
+```typescript
+import { Insights } from "electrobun/main";
+
+Insights.identify("user_123");
+Insights.track("workspace_created", { template: "blank" });
+
+// Clear the association when appropriate for your app.
+Insights.reset();
+```
+
+`identify` and `reset` do not create or split sessions, change open duration, or
+replace the installation ID. Send your own login/logout events only if your
+application needs them.
+
+See [event limits](/electrobun/apis/insights/#event-limits) for supported names,
+flat scalar properties, and payload size limits.
+
+## Installation identity
+
+Use [`app.getInstallationId()`](/electrobun/apis/app/) to display or copy the
+installation ID in an About/Help menu or settings. It works independently of
+Insights and returns the same identity used by managed updates and prerelease
+routing.
+
+The ID is randomly generated and persisted in the local app profile; it is not
+a hardware serial number, a Dash account, or an authenticated app user. Restarts
+and updates retain it. Separate profiles have separate IDs; deleting local
+data can create a new ID, and copying a profile can copy its ID.
+
+## Offline delivery and local storage
+
+The shared core owns queuing, session recovery, and delivery for every SDK.
+The current preview keeps at most 128 queued events or 512 KiB of event payload,
+expires queued events after 30 days, and drops oldest queued entries when the
+queue fills. The persisted active-session journal is additional to that event
+queue. The service also discards events outside its retained detail window.
+
+This is best-effort analytics. Offline records may arrive later than current
+events, and an app that never opens again may leave its final session incomplete.
+Calling `flush()` requests background delivery; it is not a network-delivery
+acknowledgement.
+
+Local identity and queued/session state use versioned authenticated encryption,
+with the key stored beside the files. This obscures casual inspection and
+detects corruption; it does not hide data from the machine's owner. Existing
+plain JSON state migrates when next persisted. One app process should own a
+user-data profile at a time: independent concurrent processes sharing that
+directory can overwrite queued state. Use separate profiles for those instances.
+
+## Collection policy and dashboard data
+
+In Dash, use the app's Insights view to inspect installation activity, approximate
+duration, OS/architecture, version/build adoption, and custom events. Queued
+delivery and interrupted-session recovery mean these are approximate, eventually
+received observations rather than an exact count of people currently online.
+
+With local consent, basic lifecycle, duration, version, and platform collection
+continues when the developer's custom-event allowance is exhausted or the paid
+subscription expires. Analytics responses carry the custom-collection policy;
+the core persists it and drops disabled custom events without blocking basic
+events. A subsequent ordinary analytics response can reactivate custom events.
+There is no separate policy-polling endpoint or hourly heartbeat.
+
+Use the app's dashboard for its current service limits and retention.
+
+## Endpoint configuration
+
+The default public ingestion endpoint is automatic:
+
+```text
+https://api.electrobun.dev/v1/electrobun/apps/<appId>/insights
+```
+
+The app contains a public app ID and ingestion URL, never a deploy API key.
+An installation ID helps group events; it is not a secret that authenticates
+the sender. Owner dashboard access and upload/publication keys are separate.
+
+If the same app configures a
+[managed custom origin](/electrobun/guides/managed-deploys/#custom-domains),
+Insights uses that origin with the same app-scoped Insights path unless
+`insights.apiUrl` explicitly overrides it. The hostname is bound to one app.
+`release.managed.apiUrl` does **not** become the Insights endpoint override;
+when testing both services against staging, override both settings.
+
+Dev builds require explicit `insights.enabled: true` **and** a loopback HTTP
+test endpoint. The hosted service accepts packaged stable/canary builds, not
+dev-build traffic. Use a local service when developing ingestion behavior.
+
+For external-store builds, `release.updateAuthority: "external"` or `"none"`
+disables direct updates without disabling Insights. Those settings do not
+implement a store integration.

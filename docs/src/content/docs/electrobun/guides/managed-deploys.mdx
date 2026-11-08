@@ -1,0 +1,250 @@
+---
+title: "Electrobun Managed Deploys"
+description: "Upload each runner's artifacts, review a release in Dash, and publish to prerelease installs or everyone."
+---
+
+Electrobun Managed Deploys is a preview hosting service managed through your
+Dash account. It stages the files Hutch builds, lets you review the accumulated
+release, and publishes them through Electrobun's ordinary update URLs.
+
+Managed Deploys, [Electrobun Insights](/electrobun/guides/insights/), and an app's
+directory listing are independent services. Enable the ones you want in
+[Electrobun Apps in Dash](https://docs.electrobun.dev/dash/electrobun-apps/).
+These services require Dash Pro during the preview;
+hosting does not enable analytics or create a public directory listing.
+
+You can continue hosting Electrobun releases on any static HTTPS host. The
+[self-hosted update workflow](/electrobun/guides/updates/#static-release-hosting),
+artifact names, and patch-chain behavior are unchanged.
+
+## Configure an app
+
+Open **Electrobun Apps** from Dash's Quick Access, create an app, and enable
+Managed Deploys. Copy its app ID into your existing `electrobun.config.ts`:
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "My App",
+    identifier: "com.example.my-app",
+    version: "2.0.0",
+  },
+  release: {
+    managed: { appId: "YOUR_APP_ID" },
+  },
+} satisfies ElectrobunConfig;
+```
+
+The service URL is automatic. You do not need a custom domain, an app-specific
+subdomain, or an `apiUrl` value. Insights is still off with this configuration.
+
+Keep the base app name and identifier in `app`. Hutch derives the canary app
+name and managed canary identifier so canary and stable can coexist. There is
+no separate canary identity to configure.
+
+## Build and upload on each runner
+
+Create an app-scoped deploy key in Dash and store it in your CI secrets or local
+shell environment as `ELECTROBUN_API_KEY`. Never put it in app configuration,
+source code, or the packaged application.
+
+Run these commands on each OS/architecture you ship:
+
+```sh
+hutch electrobun build --env=canary
+hutch electrobun upload --dry-run
+hutch electrobun upload
+```
+
+For stable, build with `--env=stable`; upload is the same command. Dev builds
+do not produce release artifacts. Stable and canary are separate builds and
+cannot point at one another's artifacts.
+
+Upload reads the artifact filenames and update manifests to discover the app
+version, channel, and targets. Every runner with the same version and channel
+contributes to one release; no target list or upload environment is required.
+Hutch validates and hashes the files, then uploads their bytes directly to R2
+with short-lived signed upload URLs scoped to that app's files. Retry the same
+upload command to resume an interrupted upload.
+
+The upload and publish commands run in Hutch's native core. They do not run
+JavaScript, evaluate `electrobun.config.ts`, or require Bun, Cottontail, npm,
+pnpm, or Yarn. Your normal build may still use its chosen runtime and package
+manager. A managed build saves public upload defaults in
+`.hutch/managed-deploy.json` and includes `managed-deploy.json` in the artifact
+folder. These files contain no deploy key. Keep the artifact sidecar when
+copying the folder to another machine, then use `--artifacts=<folder>`.
+
+Uploads appear in the app's release view as runners finish. Review the files,
+platforms, and validation results there. Uploading alone does not make a
+release visible to installed applications.
+
+## Publish after all uploads finish
+
+Use a separate CI job that depends on every intended build/upload job
+succeeding. The publish job needs only Hutch and the deploy key:
+
+```sh
+hutch electrobun publish --app=YOUR_APP_ID --release=canary-2.0.0 --audience=public --dry-run
+hutch electrobun publish --app=YOUR_APP_ID --release=canary-2.0.0 --audience=public
+```
+
+The release ID is `<channel>-<version>`, also printed by upload. The publish
+job reads and validates the release already stored on the server; it needs no
+local artifact folder or project checkout. The service checks the files it
+has, while your CI dependencies determine when all intended runners are done.
+You can also review and publish the same release in Dash.
+
+Once published to either audience, a release no longer accepts uploads or
+replacement files. Use a new app version for a changed managed build. This
+managed-hosting rule does not change self-hosted Electrobun's existing
+hash-based behavior when a version number is reused.
+
+Publishing changes which uploaded release the update URL serves. It does not
+rename or copy the artifact files. Publishing only macOS leaves Windows and
+Linux on their existing releases. Bun/Cottontail apps can check for updates
+through the [Updater API](/electrobun/apis/updater/); native main processes use
+their own updater integration, as they do for a static host. Enabling hosting
+does not schedule update checks inside the app.
+
+## Publish to prerelease installs first
+
+Most projects can test with canary builds and publish their stable builds
+directly. A prerelease group is useful when you need to try a stable build on
+production machines or share it with selected early adopters before everyone
+sees it.
+
+The following example assumes you have built and uploaded version `2.0.0`
+with `--env=stable` on each intended runner.
+
+1. Show [`app.getInstallationId()`](/electrobun/apis/app/) in your app's About,
+   Help, or settings screen, ideally with a copy action.
+2. Register those installation IDs in the app's **Prerelease installs** group
+   in Dash. Labels can help you recognize them later.
+3. Publish the uploaded release to that group:
+
+```sh
+hutch electrobun publish --app=YOUR_APP_ID --release=stable-2.0.0 --audience=prerelease
+```
+
+After testing, publish the same release publicly:
+
+```sh
+hutch electrobun publish --app=YOUR_APP_ID --release=stable-2.0.0 --audience=public
+```
+
+Stable/canary are build channels. Prerelease/public are audiences within either
+channel. Uploading a newer version does not automatically select it for the
+prerelease group. Group membership persists after public publication; an
+independently selected newer prerelease also stays selected when another
+release is published publicly.
+
+The installation ID is a persisted app/profile identity shared with Insights;
+retrieving it does not enable analytics. It is a routing hint, not a password
+or private-download credential. The app ID in the URL, or the verified custom
+hostname, selects the app before installation membership is checked.
+
+This preview does not provide percentage rollouts or automated smoke tests.
+Use a new version for forward fixes.
+
+## Update URLs and patch chains
+
+The default base URL is supplied by the managed app configuration:
+
+```text
+https://api.electrobun.dev/v1/electrobun/apps/<appId>/updates/
+```
+
+The updater requests ordinary flat filenames beneath it:
+
+| File | Example |
+| --- | --- |
+| Current update metadata | `stable-macos-arm64-update.json` |
+| Next patch from the installed hash | `stable-macos-arm64-<currentHash>.patch` |
+| Full download | The exact archive filename in `update.json` |
+
+There is one `update.json` per channel/target, with no separate managed
+manifest format. The app never adds a version folder to this URL. At each
+patch step it requests the current hash's patch from the same base URL; the
+service locates that patch among retained releases. Missing or unusable
+patches retain Electrobun's full-download fallback. Hutch generates patches
+using the publicly selected release; the hosting service does not generate
+patches for you.
+
+Managed requests send `X-Electrobun-Installation-Id`. Registered prerelease
+installs receive their selected prerelease, and other installs receive the
+public selection. The header is stripped when a redirect leaves the configured
+origin. Self-hosted update requests do not acquire this managed header.
+
+## Storage and cleanup
+
+Dash groups original artifact filenames by channel and version. The managed
+service keeps the current and previous public release for each platform and
+the selected prerelease. It can retire full downloads and manifests from older
+unreferenced releases while keeping their patches available. A platform omitted
+from a newer release keeps its existing files and selection.
+
+Patches remain by default. Use **Delete** with confirmation to remove individual
+files, or **Prune** in the app's **Settings → Advanced** to preview patch files
+by version cutoff or age and optional platform. Review the selected file count
+and bytes before deleting. An optional patch-age retention setting enables
+automatic pruning; it is off by default. Deleting a needed patch makes older
+clients fall back to a full download. Deleting an active manifest or required
+full archive withdraws that release's target from update routing; it does not
+automatically promote an older release into the vacated selection.
+
+## Custom domains
+
+Register and verify a custom hostname in the app's Dash settings, then set its
+HTTPS origin alongside the managed app ID:
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "My App",
+    identifier: "com.example.my-app",
+    version: "2.0.0",
+  },
+  release: {
+    managed: { appId: "YOUR_APP_ID" },
+    baseUrl: "https://updates.example.com",
+  },
+} satisfies ElectrobunConfig;
+```
+
+For managed hosting, `baseUrl` is an HTTPS origin on the standard port, with no
+path, credentials, query, or fragment. Files are requested from its root, such
+as `https://updates.example.com/stable-macos-arm64-update.json`.
+
+Dash provides the DNS ownership proof and CNAME target. A CNAME maps a hostname,
+not a URL folder; the service must also verify the app binding and activate
+HTTPS. Each hostname serves only its bound app. The default app-scoped hosted
+URL remains available.
+
+If Insights is configured with the same app ID and no explicit
+`insights.apiUrl`, it uses this origin at
+`/v1/electrobun/apps/<appId>/insights`. Upload and publication continue using
+the management API; the custom delivery origin does not receive deploy keys.
+
+You can instead operate your own HTTPS reverse proxy outside this service.
+Terminate TLS there and rewrite root artifact requests to the canonical
+app-scoped update path. Forward range/conditional headers and the installation
+ID header, and forward Insights POST bodies to the app's Insights path. Use an
+upstream proxy request, not a cross-origin redirect, because redirects strip
+the installation ID. A DNS CNAME alone cannot perform this rewrite.
+
+## Other distribution methods
+
+`release.updateAuthority` defaults to `"direct"`. Setting it to `"external"`
+or `"none"` disables Electrobun's direct updater without disabling Insights.
+An app-store update check or action that opens a store must be implemented
+separately; this setting does not add store submission or distribution support.
+
+Keep a self-hosted endpoint available for existing clients when moving an app
+to managed hosting: those clients still know the URL embedded in their current
+build. Publish a bridge release at that endpoint with the managed configuration
+in the new app, then test a subsequent update from the upgraded installation.

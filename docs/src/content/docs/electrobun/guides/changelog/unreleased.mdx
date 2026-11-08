@@ -4,6 +4,31 @@ title: "Unreleased"
 
 Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
 
+## Managed services preview
+
+- [Electrobun Managed Deploys](/electrobun/guides/managed-deploys/) adds staged
+  per-runner uploads and separate public/prerelease publication through Dash.
+  Hutch's native `upload` command infers release identity and platforms from
+  the existing artifact folder; `publish` validates the accumulated release
+  without requiring local artifacts or a JavaScript runner.
+- Managed update URLs preserve the ordinary flat filenames and hash-named
+  patch chain, including full-download fallback. Existing static-hosted apps
+  keep their release layout and behavior. Stable and canary remain separate
+  builds; optional custom hostnames are bound to one managed app.
+- [`app.getInstallationId()`](/electrobun/apis/app/) exposes the persistent
+  installation identity shared by managed updates and Insights. Developers can
+  show it in About/Help or settings for prerelease enrollment without enabling
+  analytics. The equivalent getter is available in every native SDK.
+- [Electrobun Insights](/electrobun/guides/insights/) adds opt-in lifecycle,
+  duration, version/platform analytics, and custom events through a separate
+  endpoint. It is off by default and works independently of hosting. Bun,
+  Cottontail, Zig, Rust, Go, and Odin share the native queue, persisted consent,
+  offline delivery, and session recovery behavior. Optional user associations
+  affect future custom events without splitting app sessions.
+- Public docs now have separate Managed Deploys and Insights guides, a
+  cross-runtime [Insights API reference](/electrobun/apis/insights/), and upload,
+  publish, and build-configuration references. The services remain in preview.
+
 ## Updater manifest fix
 
 - Hutch now writes one `<channel>-<os>-<arch>-update.json` per target, including

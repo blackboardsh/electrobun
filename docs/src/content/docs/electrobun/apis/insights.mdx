@@ -1,0 +1,166 @@
+---
+title: "Insights"
+description: "Track custom events and control Electrobun Insights from any supported main-process SDK."
+---
+
+Electrobun Insights is a preview API available in Bun, Cottontail, Zig, Rust,
+Go, and Odin. All SDKs use the same native queue and lifecycle recorder.
+Collection is off by default. Configure the app through
+[`insights` in electrobun.config.ts](/electrobun/apis/cli/build-configuration/#insights-configuration)
+and see the [Insights guide](/electrobun/guides/insights/) for lifecycle,
+consent, offline storage, and dashboard behavior.
+
+## Bun and Cottontail
+
+Both runtimes use the named `Insights` export:
+
+```typescript
+import { Insights } from "electrobun/main";
+
+const queued = Insights.track("export_completed", { format: "pdf", pages: 3 });
+```
+
+### `track(name, properties?)`
+
+```typescript docs=syntax
+declare function track(name: string, properties?: InsightsProperties): boolean;
+type InsightsProperties = Record<string, string | number | boolean | null>;
+```
+
+Queues one custom event with stable identity and timestamp fields. `true`
+means accepted locally, not acknowledged by the service. `false` means the
+client is disabled/unavailable, custom collection is paused, or the event is
+outside the accepted limits. Properties default to an empty object.
+
+### `setEnabled(enabled)`
+
+```typescript
+import { Insights } from "electrobun/main";
+
+Insights.setEnabled(true);
+Insights.setEnabled(false);
+```
+
+Sets and persists the local collection preference for configured Insights.
+The choice overrides `insights.enabled` in later builds. Disabling clears
+pending events and the active session journal; a request already in flight
+may finish. Enabling Insights does not enable the updater. If the client has
+no Insights configuration, this call does not create one.
+
+### `identify(userId)` and `reset()`
+
+```typescript
+import { Insights } from "electrobun/main";
+
+Insights.identify("user_123");
+Insights.track("project_created", { template: "blank" });
+Insights.reset();
+```
+
+Associates an opaque app user ID with future custom events. The ID must be
+nonempty, contain no NUL, and fit within 256 UTF-8 bytes. `reset()` clears
+that association for future events. Neither method changes the installation
+ID, starts a new app session, or divides the current duration into segments.
+They do not automatically emit login or logout events.
+
+### `flush()`
+
+Requests background delivery of queued records and returns immediately. It
+does not wait for acknowledgement. Normal SDK teardown saves close/duration
+records for later delivery; calling `flush()` does not make shutdown delivery
+guaranteed.
+
+### `configure(config)`
+
+```typescript docs=syntax
+declare function configure(config: {
+  appId: string;
+  apiUrl?: string;
+  enabled?: boolean;
+}): boolean;
+```
+
+Advanced explicit setup using public ingestion settings. It returns whether
+native configuration succeeded. The bundled app supplies its version/build,
+channel, platform, and storage location. Prefer declarative build configuration
+so normal SDK startup can initialize lifecycle recording consistently. Never
+include a deploy key. If managed updates are configured too, use the same app ID.
+
+### Installation ID
+
+Use [`app.getInstallationId()`](/electrobun/apis/app/) for About/Help screens
+and managed prerelease registration:
+
+```typescript
+import { app } from "electrobun/main";
+
+const installationId = app.getInstallationId();
+```
+
+The legacy `Insights.getInstallationId(): string | null` returns the same
+identity when Insights is configured. It may initialize the reporter according
+to its settings but does not opt the user in. The shared `app` getter performs
+identity-only setup and works without configuring Insights.
+
+## Native SDKs
+
+Use these calls after the SDK's normal bundled-app initialization. That setup
+reads the optional Insights configuration; normal SDK teardown handles
+session persistence. The lower-level native APIs return whether an event was
+queued and may also report serialization or native-call errors.
+
+| Operation | Zig | Rust | Go | Odin |
+| --- | --- | --- | --- | --- |
+| Track | `try core.insightsTrack(name, properties)` | `core.insights_track(name, properties_json)?` | `core.InsightsTrack(name, properties)` | `eb.insightsTrack(&core, name, properties_json)` |
+| Enable/disable | `core.insightsSetEnabled(enabled)` | `core.insights_set_enabled(enabled)` | `core.InsightsSetEnabled(enabled)` | `eb.insightsSetEnabled(&core, enabled)` |
+| Associate user | `try core.insightsIdentify(user_id)` | `core.insights_identify(Some(user_id))?` | `core.InsightsIdentify(user_id)` | `eb.insightsIdentify(&core, user_id)` |
+| Clear association | `core.insightsReset()` | `core.insights_reset()` | `core.InsightsReset()` | `eb.insightsReset(&core)` |
+| Request delivery | `core.insightsFlush()` | `core.insights_flush()` | `core.InsightsFlush()` | `eb.insightsFlush(&core)` |
+
+Zig serializes an input value and Go accepts `map[string]any`; their values
+must satisfy the same flat-property limits as TypeScript. Rust and Odin accept
+the properties as a JSON string. Go's track call returns `(bool, error)` and
+its identify call returns an error for invalid input; handle those errors in
+your app. The `eb` alias in the Odin column refers to the Electrobun SDK import.
+
+Examples inside an already initialized app:
+
+```zig docs=fragment
+const queued = try core.insightsTrack("export_completed", .{ .format = "pdf" });
+_ = queued;
+```
+
+```rust docs=fragment
+let queued = core.insights_track("export_completed", r#"{"format":"pdf"}"#)?;
+```
+
+```go docs=fragment
+queued, err := core.InsightsTrack("export_completed", map[string]any{"format": "pdf"})
+```
+
+```odin docs=fragment
+queued := eb.insightsTrack(&core, "export_completed", "{\"format\":\"pdf\"}")
+```
+
+See the [shared installation-ID reference](/electrobun/apis/app/#native-sdks)
+for each native getter and returned-value ownership.
+
+## Event limits
+
+| Field | Limit |
+| --- | --- |
+| Event name | 80 ASCII bytes; starts with a letter or digit, followed by letters, digits, spaces, `_`, `.`, `:`, or `-` |
+| Properties | At most 16 flat key/value pairs |
+| Property key | 64 ASCII bytes; same characters as an event name except spaces |
+| Property value | String, finite number, boolean, or `null`; no arrays or nested objects |
+| String value | 256 UTF-8 bytes |
+| Serialized event | 8 KiB, including event ID, timestamp, sequence, optional user association, and properties |
+
+The serialized-event limit excludes the separate batch header containing app
+version/build and platform metadata. The native core validates these limits
+even when a language wrapper accepts a larger value. The lifecycle names
+`electrobun.app.open`, `electrobun.app.close`, and `electrobun.app.interrupted`
+are reserved for the core and are rejected by `track()`.
+Queue capacity and
+delivery behavior are described in
+[offline delivery](/electrobun/guides/insights/#offline-delivery-and-local-storage).
