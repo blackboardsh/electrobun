@@ -3987,11 +3987,6 @@ public:
             return S_FALSE;
         }
 
-        HRESULT scriptResult = webview->AddScriptToExecuteOnDocumentCreated(
-            kWebView2ContextMenuCaptureScript,
-            nullptr);
-        if (FAILED(scriptResult)) return scriptResult;
-
         HRESULT result = webview11->add_ContextMenuRequested(
             Callback<ICoreWebView2ContextMenuRequestedEventHandler>(
                 [environment9](
@@ -4142,7 +4137,17 @@ public:
             }).Get(),
             &contextMenuRequestedToken);
         contextMenuRequestedRegistered = SUCCEEDED(result);
-        return result;
+        if (FAILED(result)) return result;
+
+        HRESULT scriptResult = webview->AddScriptToExecuteOnDocumentCreated(
+            kWebView2ContextMenuCaptureScript,
+            nullptr);
+        if (FAILED(scriptResult)) {
+            webview11->remove_ContextMenuRequested(contextMenuRequestedToken);
+            contextMenuRequestedRegistered = false;
+            return scriptResult;
+        }
+        return S_OK;
     }
 
     void setContainerHwnd(HWND hwnd) {
