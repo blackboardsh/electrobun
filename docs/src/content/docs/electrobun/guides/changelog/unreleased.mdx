@@ -46,6 +46,15 @@ Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
   in place can hide newer releases from those clients. Keep the current
   `update.json`, full archives, and retained patches.
 
+## macOS startup fixes
+
+- Cottontail loads Electrobun's native library and CEF before starting its
+  JavaScript worker, preventing a race between CEF allocator initialization and
+  JavaScriptCore allocations.
+- Native profile-directory lookup safely reads the installation-root override
+  while other threads change environment variables during startup, preventing
+  an intermittent crash.
+
 ## Native UI fixes
 
 - Range sliders now support clicking the track and dragging the thumb, including
