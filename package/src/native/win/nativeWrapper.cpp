@@ -7890,6 +7890,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // simply fail QueryInterface and retain the JS fallback.
                             ComPtr<ICoreWebView2Settings> settings;
                             if (webview && SUCCEEDED(webview->get_Settings(&settings)) && settings) {
+                                // Keep WebView2's native Inspect command available with its default menu.
+                                settings->put_AreDevToolsEnabled(TRUE);
                                 ComPtr<ICoreWebView2Settings9> settings9;
                                 if (SUCCEEDED(settings.As(&settings9)) && settings9) {
                                     settings9->put_IsNonClientRegionSupportEnabled(TRUE);
