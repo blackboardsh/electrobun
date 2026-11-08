@@ -2,6 +2,7 @@
 
 import { defineTest, expect, sleep } from "../test-framework/types";
 import { createTestHarnessRPC } from "./rpc.test";
+import { assertBlockedNavigation } from "./navigation-observations";
 
 async function assertViewsUrlWithSuffixLoads(
   url: string,
@@ -213,12 +214,13 @@ export const navigationTests = [
     description: "Test that navigation rules block non-allowlisted URLs",
     timeout: 15000,
     async run({ createWindow, log }) {
-      let willNavigateFired = false;
-      let didNavigateFired = false;
-      let blockedUrl = "";
+      const initialUrl = "views://test-harness/index.html";
+      const blockedUrl = "https://google.com";
+      const willNavigateDetails: unknown[] = [];
+      const didNavigateDetails: unknown[] = [];
 
       const win = await createWindow({
-        url: "views://test-harness/index.html",
+        url: initialUrl,
         title: "Nav Rules Block Test",
         renderer: 'cef', // Intentionally falls back in a system-only build.
       });
@@ -232,19 +234,16 @@ export const navigationTests = [
       await sleep(100);
 
       // Use webview-specific events for better isolation
-      let navigatedUrls: string[] = [];
-
       win.webview.on("will-navigate", (e: any) => {
-        willNavigateFired = true;
-        blockedUrl = e.data?.detail || e.detail || "";
-        log(`will-navigate fired for: ${blockedUrl}`);
+        const detail = e.data?.detail ?? e.detail;
+        willNavigateDetails.push(detail);
+        log(`will-navigate fired for: ${detail}`);
       });
 
       win.webview.on("did-navigate", (e: any) => {
-        didNavigateFired = true;
-        const url = e.data?.detail || e.detail || "";
-        navigatedUrls.push(url);
-        log(`did-navigate fired for: ${url}`);
+        const detail = e.data?.detail ?? e.detail;
+        didNavigateDetails.push(detail);
+        log(`did-navigate fired for: ${detail}`);
       });
 
       log("Setting navigation rules: block all except blackboard.sh");
@@ -257,21 +256,10 @@ export const navigationTests = [
       await sleep(100);
 
       log("Attempting to load google.com (should be blocked)");
-      win.webview.loadURL("https://google.com");
+      win.webview.loadURL(blockedUrl);
       await sleep(1500);
 
-      // will-navigate should fire (navigation attempt detected)
-      expect(willNavigateFired).toBe(true);
-      expect(blockedUrl).toContain("google.com");
-      
-      // did-navigate should NOT fire (navigation was blocked)
-      if (didNavigateFired) {
-        log(`WARNING: did-navigate fired with URLs: ${navigatedUrls.join(", ")}`);
-        // Check if it fired for the blocked URL or just the existing page
-        const hasGoogleUrl = navigatedUrls.some(url => url.includes("google.com"));
-        expect(hasGoogleUrl).toBe(false); // If did-navigate fired, it should NOT be for google.com
-      }
-      expect(didNavigateFired).toBe(false);
+      assertBlockedNavigation(initialUrl, blockedUrl, willNavigateDetails, didNavigateDetails);
       
       log("Navigation was blocked as expected");
       log(`Blocked URL: ${blockedUrl}`);
