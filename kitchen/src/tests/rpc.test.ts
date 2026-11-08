@@ -9,6 +9,7 @@ import type {
   TestHarnessRPC,
 } from "../test-harness/index";
 import { waitForHostSocketOpen } from "./rpc-stress-readiness";
+import { reportRpcStressFailure } from "./rpc-stress-diagnostics";
 
 function createStressMessageCollector() {
   const ids = new Set<number>();
@@ -45,6 +46,7 @@ function createStressMessageCollector() {
 
 type StressValueCollector<T> = {
   set(value: T): void;
+  peek(): T | undefined;
   wait(label: string, timeoutMs?: number): Promise<T>;
 };
 
@@ -55,6 +57,7 @@ function createStressValueCollector<T>(): StressValueCollector<T> {
     set(nextValue: T) {
       value = nextValue;
     },
+    peek: () => value,
     async wait(label: string, timeoutMs = 10000) {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
@@ -108,6 +111,7 @@ function assertAllStressMessagesArrived(label: string, stats: StressMessageStats
 // Create RPC config for test harness
 type StressHandlers = {
   ready?: () => void;
+  echoReceived?: () => void;
   bunStressMessages?: ReturnType<typeof createStressMessageCollector>;
   webviewMessageSummary?: StressValueCollector<StressMessageStats>;
   webviewRequestSummary?: StressValueCollector<StressRequestSummary>;
@@ -122,7 +126,10 @@ export function createTestHarnessRPC(
     maxRequestTime,
     handlers: {
       requests: {
-        echo: ({ value }) => value,
+        echo: ({ value }) => {
+          stressHandlers.echoReceived?.();
+          return value;
+        },
         add: ({ a, b }) => a + b,
         throwError: ({ message }) => {
           throw new Error(message || "Intentional test error");
@@ -509,10 +516,12 @@ export const rpcTests = [
     async run({ createWindow, log }) {
       const messageCount = 5000;
       const requestCount = 1000;
+      let hostEchoRequests = 0;
       const bunStressMessages = createStressMessageCollector();
       const webviewMessageSummary = createStressValueCollector<StressMessageStats>();
       const webviewRequestSummary = createStressValueCollector<StressRequestSummary>();
       const rpc = createTestHarnessRPC(30000, {
+        echoReceived: () => { hostEchoRequests += 1; },
         bunStressMessages,
         webviewMessageSummary,
         webviewRequestSummary,
@@ -534,6 +543,7 @@ export const rpcTests = [
       const socketState = await waitForHostSocketOpen(webviewRpc);
       log(`Host socket open before native burst: ${JSON.stringify(socketState)}`);
       log("Starting webview stress burst via bun -> webview RPC message");
+      const burstStarted = Date.now();
       webviewRpc.send.startStressFromBun({ messageCount, requestCount });
 
       log(`Sending ${messageCount} large fire-and-forget messages from bun to webview concurrently`);
@@ -560,12 +570,34 @@ export const rpcTests = [
         "webview -> bun request summary",
         45000,
       );
-      expect(webviewRequestResult.received).toBe(requestCount);
-      if (webviewRequestResult.errorCount > 0) {
-        log(`Webview -> bun request errors: ${JSON.stringify(webviewRequestResult.errors)}`);
+      try {
+        expect(webviewRequestResult.received).toBe(requestCount);
+        if (webviewRequestResult.errorCount > 0) {
+          log(`Webview -> bun request errors: ${JSON.stringify(webviewRequestResult.errors)}`);
+        }
+        expect(webviewRequestResult.errorCount).toBe(0);
+        expect(webviewRequestResult.mismatchCount).toBe(0);
+      } catch (error) {
+        reportRpcStressFailure(() => {
+          const outbound = webviewMessageSummary.peek();
+          return {
+            elapsedMs: Date.now() - burstStarted,
+            expectedRequests: requestCount,
+            hostEchoRequests,
+            hostQueue: win.webview.getHostMessageQueueStats(),
+            requestSummary: webviewRequestResult,
+            outboundMessages: outbound ? {
+              count: outbound.count,
+              expectedCount: outbound.expectedCount,
+              missingCount: outbound.missing.length,
+              missing: outbound.missing.slice(0, 20),
+              duplicateCount: outbound.duplicates.length,
+              duplicates: outbound.duplicates.slice(0, 20),
+            } : null,
+          };
+        }, log);
+        throw error;
       }
-      expect(webviewRequestResult.errorCount).toBe(0);
-      expect(webviewRequestResult.mismatchCount).toBe(0);
       log(`Completed ${webviewRequestResult.received} webview -> bun requests`);
 
       const webviewStats = await webviewMessageSummary.wait(
