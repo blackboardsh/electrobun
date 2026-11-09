@@ -713,7 +713,7 @@ pub fn reconstruct(allocator: Allocator, io: Io, recipe: Recipe, app_root: Io.Di
         if (span.literal_hex) |literal| {
             var offset: usize = 0;
             while (offset < literal.len) {
-                const count = @min(buffer.len, (literal.len - offset) / 2);
+                const count: usize = @min(buffer.len, (literal.len - offset) / 2);
                 const bytes = try std.fmt.hexToBytes(buffer[0..count], literal[offset .. offset + count * 2]);
                 archive_hash.update(bytes);
                 try writer.writeAll(bytes);
@@ -937,6 +937,37 @@ test "exact recipe replays PAX headers, padding, metadata and signatures without
     try app.writeFile(io, .{ .sub_path = "bin/main", .data = "changed executable byte\x00\xff" });
     var discard: Io.Writer.Discarding = .init(&.{});
     try std.testing.expectError(error.FileHashMismatch, reconstruct(allocator, io, parsed.value, app, &discard.writer));
+}
+
+test "reconstruction replays literal spans longer than the copy buffer" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var original: Io.Writer.Allocating = .init(allocator);
+    defer original.deinit();
+    try testAppend(&original.writer, "Example.app/", '5', "", "");
+    for (0..160) |i| {
+        var path: [32]u8 = undefined;
+        try testAppend(&original.writer, try std.fmt.bufPrint(&path, "Example.app/{d}/", .{i}), '5', "", "");
+    }
+    var end: [2048]u8 = @splat(0);
+    try original.writer.writeAll(&end);
+    try tmp.dir.writeFile(io, .{ .sub_path = "source.tar", .data = original.written() });
+    const source = try tmp.dir.openFile(io, "source.tar", .{});
+    defer source.close(io);
+    var receipt = try index(allocator, io, source);
+    defer receipt.deinit();
+    try std.testing.expect(for (receipt.value.spans) |span| {
+        if (span.literal_hex) |literal| if (literal.len / 2 > copy_buffer_size) break true;
+    } else false);
+    try tmp.dir.createDir(io, "app", .default_dir);
+    var app = try tmp.dir.openDir(io, "app", .{});
+    defer app.close(io);
+    var reconstructed: Io.Writer.Allocating = .init(allocator);
+    defer reconstructed.deinit();
+    try reconstruct(allocator, io, receipt.value, app, &reconstructed.writer);
+    try std.testing.expectEqualSlices(u8, original.written(), reconstructed.written());
 }
 
 test "archive paths reject traversal everywhere and Windows aliases only on Windows" {
