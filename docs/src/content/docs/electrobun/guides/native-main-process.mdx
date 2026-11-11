@@ -161,6 +161,15 @@ builds on Windows also resolve Zig for cgo. `build`, `run`, and `dev` call the
 same preparation automatically; use `sync` to advance an unpinned direct-Hutch
 project to the current channel head.
 
+## Updates
+
+All native SDKs support the [shared updater](/electrobun/apis/updater-native/).
+Configure `release.baseUrl` or `release.managed.appId` as for Bun/Cottontail;
+the core handles metadata, installation identity, downloads, and helpers.
+Native code queues work, polls typed operation results, and approves or vetoes
+apply before waiting for `quitReady` and performing normal app teardown.
+No network checks or application exits happen automatically.
+
 ## Native limitations
 
 - Native main processes currently build for the host operating system and

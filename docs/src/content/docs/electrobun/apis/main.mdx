@@ -198,7 +198,7 @@ What exists where:
 | Global shortcuts | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | [Paths](/electrobun/apis/paths/) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Typed RPC (`createRPC`) | ✓ | ✓ | raw bridge ² | raw bridge ² | raw bridge ² | raw bridge ² |
-| [Updater](/electrobun/apis/updater/) | ✓ | ✓ | — | — | — | — |
+| [Updater](/electrobun/apis/updater/) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | [Installation ID](/electrobun/apis/app/) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | [Insights](/electrobun/apis/insights/) (preview, opt-in) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | [Electrobun UI](/electrobun/apis/ui/overview/) (`main/ui`) ³ | ✓ | ✓ | ✓ ⁴ | — | — | — |
@@ -213,6 +213,10 @@ the full pattern). The webview-side SDK is identical for every runtime.
 ³ Electrobun UI is experimental and supports macOS, Windows, and Linux X11.
 See the [UI guide](/electrobun/guides/electrobun-ui/) for platform limitations.
 ⁴ Through the `zig-ui` template; see [Electrobun UI from Zig](/electrobun/apis/ui/zig/).
+
+All runtimes use the core-owned updater. Bun and Cottontail expose promises;
+[native SDKs](/electrobun/apis/updater-native/) expose typed queued operations,
+state, events, and explicit apply approval.
 
 Pages for TypeScript-only features say so at the top; everything else shows
 a tab per supported runtime.

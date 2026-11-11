@@ -29,6 +29,23 @@ Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
   cross-runtime [Insights API reference](/electrobun/apis/insights/), and upload,
   publish, and build-configuration references. The services remain in preview.
 
+## Shared native updater
+
+- The Zig core now owns updater checks, downloads, preparation, apply handoff,
+  and result reconciliation for every SDK. Bun and Cottontail retain their
+  existing `Updater` public API and `before-quit` approval behavior.
+- [Zig, Go, Odin, and Rust](/electrobun/apis/updater-native/) gain typed queued
+  requests, operation snapshots, event polling, cancellation, and explicit
+  apply approval or veto. The apply helper starts only after approval; `quitReady`
+  confirms handoff before ordinary application teardown. Core workers never
+  call language-runtime callbacks or force an application exit.
+- Existing static-host filenames, patch chains, checksum sidecars, managed
+  installation identity, and direct-update authority rules are preserved.
+  Configuration alone does not schedule network checks.
+- Regression coverage checks the JavaScript API facade, native SDK ownership
+  and schema handling, missing-symbol errors, approval/veto, worker shutdown,
+  and compatibility with the established release protocol.
+
 ## Updater manifest compatibility
 
 - Hutch preserves the original `<channel>-<os>-<arch>-update.json` shape,

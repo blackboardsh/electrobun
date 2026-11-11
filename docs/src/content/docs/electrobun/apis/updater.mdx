@@ -4,11 +4,11 @@ description: "Check, download, apply, and observe Electrobun application updates
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-<Aside type="note">
-The Updater API is available in the Cottontail and Bun runtimes only. Native
-main processes (Zig, Rust, Go, Odin) currently ship without an update API —
-see [Native main process](/electrobun/guides/native-main-process/).
-</Aside>
+Electrobun's Zig core owns update checks, downloads, preparation, and apply
+handoff for Bun, Cottontail, Zig, Rust, Go, and Odin. Bun and Cottontail keep
+the existing promise-based `Updater` API shown below. Native applications use
+the [typed request and polling API](/electrobun/apis/updater-native/), including
+an explicit application approval step before applying an update.
 
 Hutch stable and canary builds create update metadata plus a compressed full
 bundle. When a previous release is available, Hutch also creates a delta patch.
@@ -29,6 +29,12 @@ export default {
   },
 } satisfies ElectrobunConfig;
 ```
+
+For [Managed Deploys](/electrobun/guides/managed-deploys/), configure
+`release.managed.appId` instead. Every SDK uses the same configuration: the core
+derives bundled metadata, installation identity, and update paths. Applications
+do not need to launch or configure update helpers themselves. Configuring the
+updater does not schedule network checks; your app decides when to check.
 
 From 2.0.6, native update preparation requires an HTTPS base URL without
 credentials, query parameters, or a fragment. HTTP is allowed only for local
@@ -55,8 +61,10 @@ if (update.updateAvailable) {
 }
 ```
 
-`applyUpdate()` first asks the normal `before-quit` handlers for permission. If
-they allow the quit, a native helper revalidates the staged bundle,
+`applyUpdate()` asks the normal `before-quit` handlers for permission before
+starting an apply helper. A veto leaves the application running. After approval,
+the core arms the helper and confirms handoff before the SDK begins normal
+application shutdown. The native helper revalidates the staged bundle,
 replaces the installed app transactionally, refreshes platform integration,
 and launches the new version. The helper waits for the running app to exit before
 swapping its files, including on Windows. If replacement, platform integration,
@@ -81,8 +89,9 @@ patch, or failed patch attempt falls back to streaming the full archive into
 staging. The installed app remains untouched during preparation.
 
 <Aside type="note">
-The `dev` channel never reports an available update. Exercise updater behavior
-with a packaged canary or stable build.
+The `dev` channel and `release.updateAuthority: "external"` or `"none"` disable
+Electrobun's direct updater. Exercise update installation with a packaged canary
+or stable build using direct update authority. Insights remains independent.
 </Aside>
 
 ## Disk space during preparation
@@ -177,3 +186,7 @@ completion, and errors. Native preparation currently reports its overall
 operation rather than individual patch-hop or byte-progress events.
 `UpdateStatusEntry` contains `status`, `message`, `timestamp`, and optional
 structured `details`.
+
+Native SDKs poll the same statuses and optional progress fields on their own
+application thread; the core worker never calls into a language runtime. See
+[native event polling and ownership](/electrobun/apis/updater-native/#events-and-lifetime).

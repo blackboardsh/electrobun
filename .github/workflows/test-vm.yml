@@ -200,6 +200,8 @@ jobs:
             vulkaninfo --summary
             if [[ "$UPDATER_ONLY" == true ]]; then
               hutch test:updater-lifecycle
+              hutch test:updater-unit
+              hutch test:updater-lifecycle:zig
               cd src/extractor
               ../../vendors/zig/zig build test
             else

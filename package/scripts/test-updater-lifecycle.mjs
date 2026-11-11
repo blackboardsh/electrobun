@@ -29,6 +29,7 @@ import { updaterLifecycleBuildTarget, updaterLifecycleHutchBinary } from "./upda
 import { assertRecipeMatchesInstalled, readCompressedTarIdentity } from "./archive-recipe-test-utils.mjs";
 import { assertLifecycleInstallation, loadLifecycleHost } from "./updater-lifecycle-host.mjs";
 import { inspectLifecycleChecksum, publishLifecycleReleaseFiles } from "./updater-lifecycle-artifacts.mjs";
+import { parseUpdaterLifecycleBackend, updaterLifecycleFixturePath, writeUpdaterLifecycleControl } from "./updater-lifecycle-fixture.mjs";
 
 const FOCUSES = new Set(["build", "install", "update", "uninstall", "full"]);
 const INITIAL_VERSION = "1.0.0";
@@ -47,13 +48,15 @@ const RESULT_PATTERN = /^\.electrobun-update-([0-9a-f]{32})\.result\.json$/;
 const PLAN_PATTERN = /^\.electrobun-update-([0-9a-f]{32})\.json$/;
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const fixtureTemplate = join(packageRoot, "test-apps", "updater-lifecycle");
+const backendOptions = parseUpdaterLifecycleBackend(process.argv.slice(2));
+const backend = backendOptions.backend;
+const fixtureTemplate = updaterLifecycleFixturePath(packageRoot, backend);
 const packageJson = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
 const packageHutchPragma = readFileSync(
 	join(packageRoot, "hutch.config.ts"),
 	"utf8",
 ).split(/\r?\n/, 1)[0];
-const focus = parseFocus(process.argv.slice(2));
+const focus = parseFocus(backendOptions.args);
 const token = randomBytes(6).toString("hex");
 const identifier = `dev.example.updater-lifecycle.${token}`;
 const appName = `UpdaterLifecycleE2E-${token}`;
@@ -147,7 +150,7 @@ function parseFocus(args) {
 	for (const arg of args) {
 		if (arg === "--help") {
 			console.log(
-				"Usage: node scripts/test-updater-lifecycle.mjs [--focus=build|install|update|uninstall|full]\n" +
+				"Usage: node scripts/test-updater-lifecycle.mjs [--backend=bun|zig] [--focus=build|install|update|uninstall|full]\n" +
 					"Environment: ELECTROBUN_UPDATER_E2E_HUTCH=<launcher> selects a local Hutch launcher; " +
 					"HUTCH_ENGINE_BINARY=<engine> overrides its engine; " +
 					"ELECTROBUN_UPDATER_E2E_HOST_ADAPTER=<module> supplies a managed test host; " +
@@ -473,11 +476,7 @@ function createFixtureProject(projectRoot, builtVersion) {
 		managedExitPath,
 		managedServices: Boolean(lifecycleHost),
 	};
-	writeFileSync(
-		join(projectRoot, "src", "control.ts"),
-		`export const control = ${JSON.stringify(control, null, 2)} as const;\n`,
-		"utf8",
-	);
+	writeUpdaterLifecycleControl(projectRoot, backend, control);
 }
 
 function buildEnvironment(version, baseUrl) {
@@ -1072,6 +1071,26 @@ async function verifySuccessfulUpdate({
 			`patch chain unexpectedly launched intermediate ${intermediateRelease.metadata.version}`,
 		);
 	}
+	if (backend === "zig") {
+		assertOrderedPhaseEvents(phaseEvents, [
+			{ event: "download-completed", version: sourceVersion },
+			{ event: "before-apply-vetoed", version: sourceVersion, verify: entry =>
+				entry.details?.hash === toRelease.metadata.hash && entry.details.quitReady === false
+				&& entry.details.updateReady === true && entry.details.plansBefore === entry.details.plansAfter },
+			{ event: "apply-handoff-ready", version: sourceVersion, verify: entry =>
+				entry.details?.hash === toRelease.metadata.hash && entry.details.quitReady === true },
+			{ event: "launched", version: targetVersion },
+		], `${sourceVersion} -> ${targetVersion} native quit veto and handoff`);
+		const identities = recordedEvents().filter(entry => entry.event === "installation-identity");
+		assert.ok(identities.some(entry => entry.version === sourceVersion));
+		assert.ok(identities.some(entry => entry.version === targetVersion));
+		const id = identities[0]?.details?.installationId;
+		assert.match(id, /^[0-9a-f]{32}$/, "native fixture must expose its core-owned installation ID");
+		for (const entry of identities) {
+			assert.equal(entry.details.installationId, id, "native installed identity changed across updates");
+			if (lifecycleHost) assert.equal(entry.details.insightsId, id, "native managed updates and Insights must share identity");
+		}
+	}
 
 	return { resultPath, result };
 }
@@ -1627,7 +1646,7 @@ function platformAdapter() {
 }
 
 async function main() {
-	console.log(`[updater-e2e] platform=${platform.name} focus=${focus}`);
+	console.log(`[updater-e2e] platform=${platform.name} backend=${backend} focus=${focus}`);
 	console.log(`[updater-e2e] devkit target=${fixtureTarget.os}-${fixtureTarget.arch}; runner=${process.arch}`);
 	console.log(`[updater-e2e] isolated root=${temporaryRoot}`);
 	await prepareHutch();

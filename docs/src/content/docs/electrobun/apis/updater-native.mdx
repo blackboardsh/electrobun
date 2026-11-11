@@ -1,0 +1,221 @@
+---
+title: "Native Updater"
+description: "Queue, observe, and approve core-owned updates from Zig, Go, Odin, and Rust."
+---
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+Zig, Go, Odin, and Rust use the same updater engine as Bun and Cottontail.
+Configure `release.baseUrl` for a static host or `release.managed.appId` for
+[Managed Deploys](/electrobun/guides/managed-deploys/). The core reads bundle
+metadata, derives update paths, and uses the shared installation identity;
+applications do not construct helper commands or supply installation IDs.
+The existing [release filenames and checksum sidecars](/electrobun/apis/updater/#local-and-update-metadata)
+are unchanged.
+
+SDK startup or first use configures local bundle paths and reconciles previous
+update results. It does not check the network. The app chooses when to check;
+the `dev` channel and `external`/`none` update authority disable direct updates.
+
+## Request, then observe
+
+An accepted request means the core queued the operation. It does not mean the
+operation succeeded. Retain its operation ID and poll the matching record in
+the snapshot's `operations` list, which includes bounded recent results.
+Do not infer your request's completion from the snapshot's current operation:
+another request may already be running.
+
+Use a timer or application task to poll while the native event loop continues
+running. Requests and snapshots do not wait for network transfers, and the core
+worker never calls into your language runtime. The following fragments queue
+one check and show one later polling tick; keep the operation ID between ticks.
+
+<Tabs>
+<TabItem label="Zig">
+
+```zig
+// Inside an error-returning task; std and electrobun are imported.
+const request = try core.updaterCheck();
+defer request.deinit();
+if (!request.value.accepted) return error.UpdateRequestRejected;
+const operation_id = try core.allocator.dupe(u8,
+    request.value.operationId orelse return error.MissingOperationId);
+defer core.allocator.free(operation_id);
+
+// Later polling tick; release each snapshot after reading it.
+const snapshot = try core.updaterGetState();
+defer snapshot.deinit();
+for (snapshot.value.operations) |operation| {
+    if (!std.mem.eql(u8, operation.operationId, operation_id)) continue;
+    std.debug.print("Update operation: {s}\n", .{@tagName(operation.state)});
+    if (operation.state == .completed) {
+        if (operation.updateInfo) |info| {
+            std.debug.print("Update available: {}\n", .{info.updateAvailable});
+        }
+    }
+}
+```
+
+Rejected requests retain the core message in `request.value.@"error"`.
+Typed responses are `std.json.Parsed(T)`; their strings remain valid until
+`.deinit()`. Copy any ID or message needed beyond that lifetime.
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+// Inside a function returning error; electrobun and fmt are imported.
+request, err := core.UpdaterCheck()
+if err != nil { return err }
+operationID := request.OperationID
+
+// Later polling tick:
+snapshot, err := core.UpdaterGetState()
+if err != nil { return err }
+for _, operation := range snapshot.Operations {
+    if operation.OperationID != operationID { continue }
+    fmt.Println("Update operation:", operation.State)
+    if operation.State == electrobun.UpdaterCompleted && operation.UpdateInfo != nil {
+        fmt.Println("Update available:", operation.UpdateInfo.UpdateAvailable)
+    }
+}
+```
+
+Rejected requests return an `error`. Responses contain Go-owned strings and
+slices and need no manual cleanup.
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+// Inside a proc returning electrobun.Error; fmt and strings are imported.
+request, err := electrobun.updaterCheck(core)
+defer electrobun.updaterRequestResultDeinit(&request)
+if err != .None { return err }
+request_id, present := request.operationId.?
+if !present { return .InvalidJson }
+operation_id, clone_err := strings.clone(request_id)
+if clone_err != nil { return .AllocationFailed }
+defer delete(operation_id)
+
+// Later polling tick:
+snapshot, state_err := electrobun.updaterGetState(core)
+defer electrobun.updaterStateDeinit(&snapshot)
+if state_err != .None { return state_err }
+for operation in snapshot.operations {
+    if operation.operationId != operation_id { continue }
+    fmt.println("Update operation:", operation.state)
+    if operation.state == .completed {
+        if info, has_info := operation.updateInfo.?; has_info {
+            fmt.println("Update available:", info.updateAvailable)
+        }
+    }
+}
+```
+
+Deinitialize request results even when the error is `.UpdaterRejected`: that
+result owns the core error message. State, local-info, and event responses use
+`updaterStateDeinit`, `updaterLocalInfoDeinit`, and `updaterEventsDeinit`.
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+// Inside a function returning Result<_, electrobun::UpdaterError>.
+use electrobun::UpdaterOperationState;
+
+let request = core.updater_check()?;
+let operation_id = request.operation_id.expect("accepted request has an ID");
+
+// Later polling tick:
+let snapshot = core.updater_state()?;
+if let Some(operation) = snapshot.operations.iter()
+    .find(|operation| operation.operation_id == operation_id)
+{
+    println!("Update operation: {:?}", operation.state);
+    if operation.state == UpdaterOperationState::Completed {
+        if let Some(info) = &operation.update_info {
+            println!("Update available: {}", info.update_available);
+        }
+    }
+}
+```
+
+Rejected requests return `UpdaterError::Rejected`. Responses own their
+`String` and `Vec` data and are released normally by Rust.
+
+</TabItem>
+</Tabs>
+
+Handle `failed` and `cancelled` records explicitly. A missing record is not
+success: operation history is bounded. For a completed check, read that record's
+`updateInfo.updateAvailable`; for a completed download, read `updateReady`.
+Retain the new operation ID each time you queue the next action.
+
+## Apply approval and shutdown
+
+The sequence is:
+
+1. Queue **check** and wait for its completed record. If an update is available,
+   queue **download** and wait for its completed record with `updateReady`.
+2. Queue **requestApply**. When the matching current operation reaches
+   `awaitingApproval`, read its `approval.id` and `approval.preparedHash`.
+   No apply helper has started yet.
+3. Evaluate your application's save/veto policy **without stopping the event
+   loop**. Keep this decision separate from any quit callback that terminates
+   the application. Submit **approveApply** with the
+   same operation ID, approval ID, and an explicit Boolean decision. Submit
+   each decision once. `false` vetoes the apply and leaves the app running.
+4. After approving, keep the event loop alive. Only a snapshot for that same
+   operation with `quitReady: true` confirms helper handoff. Then perform
+   ordinary application teardown, including UI disposal and core shutdown.
+
+Neither request acceptance nor `completed` alone permits quitting. Native SDKs
+never invoke your quit callbacks or force an exit. The helper waits for the old
+process to exit before replacing it. A failed or cancelled operation leaves the
+application responsible for reporting the outcome; it must not assume an update
+was installed. Startup reconciliation reports the helper's later result.
+
+The methods below use `core` as the SDK handle; Odin takes `core` as its first
+argument. `op` is the retained operation ID and `approval` is its approval ID.
+
+| Action | Zig | Go | Odin | Rust |
+| --- | --- | --- | --- | --- |
+| Check | `core.updaterCheck()` | `core.UpdaterCheck()` | `updaterCheck(core)` | `core.updater_check()` |
+| Download | `core.updaterDownload()` | `core.UpdaterDownload()` | `updaterDownload(core)` | `core.updater_download()` |
+| Request apply | `core.updaterRequestApply()` | `core.UpdaterRequestApply()` | `updaterRequestApply(core)` | `core.updater_request_apply()` |
+| Approve/veto | `core.updaterApproveApply(op, approval, approved)` | `core.UpdaterApproveApply(op, approval, approved)` | `updaterApproveApply(core, op, approval, approved)` | `core.updater_approve_apply(op, approval, approved)` |
+| Cancel | `core.updaterCancel(op)` | `core.UpdaterCancel(op)` | `updaterCancel(core, op)` | `core.updater_cancel(op)` |
+| Reconcile result | `core.updaterReconcile()` | `core.UpdaterReconcile()` | `updaterReconcile(core)` | `core.updater_reconcile()` |
+
+Cancellation is a request, so inspect its response and the operation's terminal
+record. It cannot revoke an update already handed off. In Zig, inspect the
+request's `accepted` and error fields; Go/Rust return errors for rejection, and
+Odin returns `.UpdaterRejected` with an owned result.
+
+## Events and lifetime
+
+Poll events with `core.updaterGetEvents(after, limit)` in Zig,
+`core.UpdaterGetEvents(after, limit)` in Go,
+`electrobun.updaterGetEvents(core, after, limit)` in Odin, or
+`core.updater_events(after, limit)` in Rust. Start with cursor `0` and pass the
+returned `nextSequence` (`NextSequence` in Go, `next_sequence` in Rust) unchanged
+to the next poll. If `overflow` is true, use a state snapshot to recover retained
+operation results. Event batches are bounded; they are not a permanent log.
+
+Events contain status, message, timestamp, operation ID, and optional typed
+details such as byte counts and progress. Current preparation helpers report
+coarse operation phases, not continuous byte or individual patch-hop progress.
+Use an indeterminate indicator when progress is absent. The status names match
+the [JavaScript API](/electrobun/apis/updater/#status-reporting).
+
+Use one application Core handle. Zig `Core.close()`, Odin `coreClose`, and Rust
+`Core` drop stop updater work configured through that handle before unloading
+the library. Go's `RunMainThread` shuts down its configured updater when the
+event loop returns. Applications managing a different lifecycle must call
+`UpdaterShutdown()` explicitly; the other SDKs also expose explicit shutdown.
+Shutdown joins the updater worker but preserves a successfully handed-off helper.
+
+SDK bindings release core-owned response strings internally. Zig raw JSON
+methods return copies that must be freed with `core.allocator`; typed response
+cleanup follows the examples above. Missing updater symbols in an older core
+produce an explicit unavailable error, with no alternative updater engine.

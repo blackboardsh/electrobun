@@ -295,15 +295,21 @@ pub fn macosChannelRootFromMetadata(
     }
 
     if (metadata.hash) |hash| {
+        const recipe_filename = try std.fmt.allocPrint(allocator, "{s}.recipe.json", .{hash});
+        defer allocator.free(recipe_filename);
         const tar_filename = try std.fmt.allocPrint(allocator, "{s}.tar", .{hash});
         defer allocator.free(tar_filename);
+        // Current recipes replace retained tars after streamed preparation.
+        // Check both formats per candidate so the modern root wins ties.
         for (candidates[0..count]) |candidate| {
-            const retained_tar = try std.fs.path.join(
-                allocator,
-                &.{ candidate.?, "self-extraction", tar_filename },
-            );
-            defer allocator.free(retained_tar);
-            if (isRegularFile(io, retained_tar)) return allocator.dupe(u8, candidate.?);
+            for ([_][]const u8{ recipe_filename, tar_filename }) |filename| {
+                const current_state = try std.fs.path.join(
+                    allocator,
+                    &.{ candidate.?, "self-extraction", filename },
+                );
+                defer allocator.free(current_state);
+                if (isRegularFile(io, current_state)) return allocator.dupe(u8, candidate.?);
+            }
         }
     }
     for (candidates[0..count]) |candidate| {
@@ -483,6 +489,59 @@ test "macOS state root finds the early v1 display-name layout by current tar" {
     );
     defer std.testing.allocator.free(expected);
     try std.testing.expectEqualStrings(expected, root);
+}
+
+test "macOS recipe-only legacy roots beat stale markers and preserve modern current-state precedence" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    for ([_][]const u8{ "stable", "canary" }) |channel| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const app_data_base = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+        defer allocator.free(app_data_base);
+        const legacy_name = if (std.mem.eql(u8, channel, "stable"))
+            try allocator.dupe(u8, "Example App")
+        else
+            try std.fmt.allocPrint(allocator, "Example App-{s}", .{channel});
+        defer allocator.free(legacy_name);
+        const modern = try std.fs.path.join(allocator, &.{ app_data_base, "com.example.app", channel });
+        defer allocator.free(modern);
+        const legacy = try std.fs.path.join(allocator, &.{ app_data_base, "com.example.app", legacy_name });
+        defer allocator.free(legacy);
+        for ([_][]const u8{ modern, legacy }) |root| {
+            const extraction = try std.fs.path.join(allocator, &.{ root, "self-extraction" });
+            defer allocator.free(extraction);
+            try std.Io.Dir.cwd().createDirPath(io, extraction);
+        }
+        const marker = try std.fs.path.join(allocator, &.{ modern, ".electrobun-uninstall.json" });
+        defer allocator.free(marker);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "{}" });
+        const legacy_recipe = try std.fs.path.join(allocator, &.{ legacy, "self-extraction", "currenthash.recipe.json" });
+        defer allocator.free(legacy_recipe);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = legacy_recipe, .data = "current recipe" });
+        const metadata = InstallMetadata{
+            .identifier = "com.example.app",
+            .channel = channel,
+            .name = "example-app",
+            .display_name = "Example App",
+            .hash = "currenthash",
+        };
+        const legacy_selected = try macosChannelRootFromMetadata(allocator, io, app_data_base, &metadata);
+        defer allocator.free(legacy_selected);
+        try std.testing.expectEqualStrings(legacy, legacy_selected);
+
+        // Candidate precedence is independent of storage format. A modern
+        // current tar or recipe must win over the legacy current recipe.
+        for ([_][]const u8{ "currenthash.tar", "currenthash.recipe.json" }) |filename| {
+            const current = try std.fs.path.join(allocator, &.{ modern, "self-extraction", filename });
+            defer allocator.free(current);
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = current, .data = "current state" });
+            defer std.Io.Dir.cwd().deleteFile(io, current) catch {};
+            const modern_selected = try macosChannelRootFromMetadata(allocator, io, app_data_base, &metadata);
+            defer allocator.free(modern_selected);
+            try std.testing.expectEqualStrings(modern, modern_selected);
+        }
+    }
 }
 
 test "bootstrap is required until both standalone install records exist" {

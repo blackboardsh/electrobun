@@ -15,6 +15,7 @@ import "core:dynlib"
 import "core:encoding/json"
 import "core:fmt"
 import "core:math"
+import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:reflect"
@@ -38,6 +39,9 @@ Error :: enum {
 	EnvVarNotFound,
 	InvalidScreenCaptureRegion,
 	AllocationFailed,
+	UpdaterUnavailable,
+	UpdaterRejected,
+	UpdaterSchemaMismatch,
 }
 
 // ---------------------------------------------------------------------------
@@ -883,6 +887,8 @@ UpdatePreloadScriptToWebViewFn :: proc "c" (u32, cstring, cstring, bool)
 SendMessageToWebviewFn :: proc "c" (u32, cstring) -> bool
 PopNextQueuedHostMessageFn :: proc "c" (^u32) -> cstring
 FreeCoreStringFn :: proc "c" (cstring)
+UpdaterRequestFn :: proc "c" (cstring) -> cstring
+UpdaterEventsFn :: proc "c" (u64, u32) -> cstring
 WebviewSetPageZoomFn :: proc "c" (u32, f64)
 WebviewGetPageZoomFn :: proc "c" (u32) -> f64
 WebviewFindInPageFn :: proc "c" (u32, cstring, bool, bool)
@@ -973,6 +979,11 @@ Symbols :: struct {
 	sendHostMessageToWebviewViaTransport:   SendMessageToWebviewFn,
 	popNextQueuedHostMessage:               PopNextQueuedHostMessageFn,
 	freeCoreString:                         FreeCoreStringFn,
+	updaterConfigure:                      CstringToBoolFn,
+	updaterRequest:                        UpdaterRequestFn,
+	updaterGetState:                       GetCstringFn,
+	updaterGetEvents:                      UpdaterEventsFn,
+	updaterShutdown:                       VoidFn,
 	installationConfigure:                CstringToBoolFn,
 	getInstallationId:                    GetCstringFn,
 	insightsConfigure:                     CstringToBoolFn,
@@ -1056,6 +1067,7 @@ Symbols :: struct {
 Core :: struct {
 	allocator: runtime.Allocator,
 	symbols:   Symbols,
+	updater_configured: bool,
 }
 
 // Mirrors zig's Core.load. Loads libElectrobunCore from the executable's
@@ -1095,6 +1107,12 @@ coreLoad :: proc(allocator := context.allocator) -> (core: Core, err: Error) {
 }
 
 coreClose :: proc(self: ^Core) {
+	// Join workers started through this application handle before unloading.
+	// Normal applications use one Core handle; an unused secondary handle
+	// must not shut down the process-wide updater.
+	if self.updater_configured {
+		updaterShutdown(self)
+	}
 	insightsShutdown(self)
 	// Drop the core's pointer to our trampoline before unloading the library so
 	// a late quit request can't jump into freed code.
@@ -1105,6 +1123,426 @@ coreClose :: proc(self: ^Core) {
 	g_quit_requested_user_handler = nil
 	dynlib.unload_library(self.symbols.__handle)
 	self.symbols.__handle = nil
+}
+
+// The native core owns update I/O, preparation, and helper handoff. These
+// polling APIs never invoke application callbacks or stop the event loop.
+// Returned strings/slices belong to their result: call the corresponding
+// updater*Deinit (or deinit) once, including a rejected request's result.
+UpdaterManagedInfo :: struct {
+	appId: string,
+	apiUrl: string,
+	baseUrl: string,
+}
+
+UpdaterLocalInfo :: struct {
+	version: string,
+	hash: string,
+	baseUrl: string,
+	channel: string,
+	name: string,
+	displayName: string,
+	identifier: string,
+	managed: Maybe(UpdaterManagedInfo),
+	updateAuthority: string,
+	_storage: ^mem.Dynamic_Arena `json:"-"`,
+	_allocator: runtime.Allocator `json:"-"`,
+}
+
+UpdaterUpdateInfo :: struct {
+	version: string,
+	hash: string,
+	updateAvailable: bool,
+	updateReady: bool,
+	error: string,
+}
+
+UpdaterApproval :: struct {
+	id: string,
+	preparedHash: string,
+}
+
+UpdaterOperationState :: enum {
+	Unknown, idle, queued, running, awaitingApproval, completed, failed, cancelled,
+}
+
+UpdaterOperationKind :: enum {
+	Unknown, check, download, requestApply, reconcile,
+}
+
+// States retain queued/running/approval progress as well as terminal results. A completed operation alone does not authorize application
+// teardown: quitReady becomes true only after the approved helper is armed.
+UpdaterOperation :: struct {
+	operationId: string,
+	operation: UpdaterOperationKind,
+	state: UpdaterOperationState,
+	error: Maybe(string),
+	updateInfo: Maybe(UpdaterUpdateInfo),
+}
+
+UpdaterState :: struct {
+	schemaVersion: u32,
+	revision: u64,
+	operationId: Maybe(string),
+	operation: Maybe(UpdaterOperationKind),
+	operationState: UpdaterOperationState,
+	localInfo: UpdaterLocalInfo,
+	updateInfo: UpdaterUpdateInfo,
+	approval: Maybe(UpdaterApproval),
+	quitReady: bool,
+	channelRoot: string,
+	operations: []UpdaterOperation,
+	_storage: ^mem.Dynamic_Arena `json:"-"`,
+	_allocator: runtime.Allocator `json:"-"`,
+}
+
+UpdaterRequestResult :: struct {
+	schemaVersion: u32,
+	accepted: bool,
+	operationId: Maybe(string),
+	error: Maybe(string),
+	_storage: ^mem.Dynamic_Arena `json:"-"`,
+	_allocator: runtime.Allocator `json:"-"`,
+}
+
+UpdaterStatusDetails :: struct {
+	fromHash: Maybe(string),
+	toHash: Maybe(string),
+	currentHash: Maybe(string),
+	latestHash: Maybe(string),
+	patchNumber: Maybe(u64),
+	totalPatchesApplied: Maybe(u64),
+	progress: Maybe(f64),
+	bytesDownloaded: Maybe(u64),
+	totalBytes: Maybe(u64),
+	usedPatchPath: Maybe(bool),
+	errorMessage: Maybe(string),
+	url: Maybe(string),
+	zstdPath: Maybe(string),
+	exitCode: Maybe(i64),
+}
+
+UpdaterEvent :: struct {
+	sequence: u64,
+	operationId: Maybe(string),
+	status: string,
+	message: string,
+	timestamp: i64,
+	details: Maybe(UpdaterStatusDetails),
+}
+
+UpdaterEvents :: struct {
+	schemaVersion: u32,
+	entries: []UpdaterEvent,
+	// Pass this cursor unchanged as after_sequence on the next poll.
+	nextSequence: u64,
+	oldestSequence: u64,
+	overflow: bool,
+	_storage: ^mem.Dynamic_Arena `json:"-"`,
+	_allocator: runtime.Allocator `json:"-"`,
+}
+
+updaterStateDeinit :: proc(value: ^UpdaterState) { updater_release(value) }
+updaterLocalInfoDeinit :: proc(value: ^UpdaterLocalInfo) { updater_release(value) }
+updaterRequestResultDeinit :: proc(value: ^UpdaterRequestResult) { updater_release(value) }
+updaterEventsDeinit :: proc(value: ^UpdaterEvents) { updater_release(value) }
+
+@(private = "file")
+updater_release :: proc(value: ^$T) {
+	if value._storage != nil {
+		mem.dynamic_arena_destroy(value._storage)
+		free(value._storage, value._allocator)
+	}
+	value^ = {}
+}
+
+@(private = "file")
+updater_available :: proc(self: ^Core) -> bool {
+	return self.symbols.updaterConfigure != nil && self.symbols.updaterRequest != nil &&
+	       self.symbols.updaterGetState != nil && self.symbols.updaterGetEvents != nil &&
+	       self.symbols.updaterShutdown != nil && self.symbols.freeCoreString != nil
+}
+
+// Configure from resolved bundle paths only. Core reads metadata, derives its
+// private paths, and shares the installation ID. This performs no update check.
+// Explicit configuration is optional; the first updater call resolves paths.
+updaterConfigure :: proc(self: ^Core, paths: BundlePaths) -> Error {
+	if !updater_available(self) { return .UpdaterUnavailable }
+	if len(paths.exe_dir) == 0 || len(paths.resources_dir) == 0 ||
+	   strings.contains(paths.exe_dir, "\x00") || strings.contains(paths.resources_dir, "\x00") {
+		return .InvalidExePath
+	}
+	config := struct {
+		schemaVersion: u32,
+		exeDir: string,
+		resourcesDir: string,
+	}{1, paths.exe_dir, paths.resources_dir}
+	data, marshal_err := json.marshal(config, {}, self.allocator)
+	if marshal_err != nil { return .InvalidJson }
+	defer delete(data, self.allocator)
+	config_z := dupe_cstring(self, string(data))
+	if config_z == nil { return .AllocationFailed }
+	defer delete(config_z, self.allocator)
+	if !self.symbols.updaterConfigure(config_z) {
+		return updater_core_error(self)
+	}
+	self.updater_configured = true
+	return .None
+}
+
+@(private = "file")
+updater_ensure_configured :: proc(self: ^Core) -> Error {
+	if !updater_available(self) { return .UpdaterUnavailable }
+	if self.updater_configured { return .None }
+	paths := resolveBundlePaths(self.allocator) or_return
+	defer bundlePathsDeinit(&paths, self.allocator)
+	return updaterConfigure(self, paths)
+}
+
+@(private = "file")
+updater_core_error :: proc(self: ^Core) -> Error {
+	if self.symbols.electrobun_core_last_error != nil {
+		return error_from_last_error(last_error_string(self))
+	}
+	return .ElectrobunCoreFailure
+}
+
+// Frees the native allocation on success, rejection, and malformed responses.
+// An arena owns all decoded fields, including partial parses on failure.
+@(private = "file")
+updater_decode :: proc(self: ^Core, raw: cstring, value: ^$T) -> Error {
+	if raw == nil { return updater_core_error(self) }
+	defer self.symbols.freeCoreString(raw)
+	storage := new(mem.Dynamic_Arena, self.allocator)
+	if storage == nil { return .AllocationFailed }
+	mem.dynamic_arena_init(storage, self.allocator, self.allocator, block_size = 4096)
+	allocator := mem.dynamic_arena_allocator(storage)
+	value._storage = storage
+	value._allocator = self.allocator
+	// Odin's typed JSON decoder accepts numeric enums and narrows integers.
+	// Validate the wire header and enum strings before decoding typed fields.
+	wire, wire_err := json.parse_string(string(raw), spec = .JSON, allocator = allocator)
+	object, object_ok := wire.(json.Object)
+	if wire_err != .None || !object_ok {
+		updater_release(value)
+		return .InvalidJson
+	}
+	version, version_ok := object["schemaVersion"].(json.Float)
+	if !version_ok || version != 1 {
+		updater_release(value)
+		return .UpdaterSchemaMismatch
+	}
+	valid := true
+	when T == UpdaterState {
+		valid = updater_valid_wire_state(object)
+	} else when T == UpdaterRequestResult {
+		_, accepted_ok := object["accepted"].(json.Boolean)
+		valid = accepted_ok && updater_wire_nullable_string(object["operationId"]) && updater_wire_nullable_string(object["error"])
+	} else when T == UpdaterEvents {
+		valid = updater_valid_wire_events(object)
+	}
+	if !valid {
+		updater_release(value)
+		return .InvalidJson
+	}
+	parse_err := json.unmarshal_string(string(raw), value, spec = .JSON, allocator = allocator)
+	value._storage = storage
+	value._allocator = self.allocator
+	if parse_err != nil {
+		updater_release(value)
+		return .InvalidJson
+	}
+	if value.schemaVersion != 1 {
+		updater_release(value)
+		return .UpdaterSchemaMismatch
+	}
+	return .None
+}
+
+@(private = "file")
+updater_wire_nullable_string :: proc(value: json.Value) -> bool {
+	if _, null := value.(json.Null); null { return true }
+	_, ok := value.(json.String)
+	return ok
+}
+
+@(private = "file")
+updater_wire_integer :: proc(value: json.Value, nonnegative := true) -> bool {
+	number, ok := value.(json.Float)
+	return ok && !math.is_nan(number) && !math.is_inf(number) && math.floor(number) == number && (!nonnegative || number >= 0)
+}
+
+@(private = "file")
+updater_valid_wire_events :: proc(object: json.Object) -> bool {
+	if !updater_wire_integer(object["nextSequence"]) || !updater_wire_integer(object["oldestSequence"]) { return false }
+	if _, ok := object["overflow"].(json.Boolean); !ok { return false }
+	entries, ok := object["entries"].(json.Array)
+	if !ok { return false }
+	for item in entries {
+		entry, entry_ok := item.(json.Object)
+		if !entry_ok || !updater_wire_integer(entry["sequence"]) || !updater_wire_integer(entry["timestamp"], false) { return false }
+		if _, status_ok := entry["status"].(json.String); !status_ok { return false }
+		if _, message_ok := entry["message"].(json.String); !message_ok { return false }
+		if operation_id, present := entry["operationId"]; present && !updater_wire_nullable_string(operation_id) { return false }
+	}
+	return true
+}
+
+@(private = "file")
+updater_wire_operation_state :: proc(value: json.Value) -> bool {
+	name, ok := value.(json.String)
+	if !ok { return false }
+	switch string(name) {
+	case "idle", "queued", "running", "awaitingApproval", "completed", "failed", "cancelled":
+		return true
+	}
+	return false
+}
+
+@(private = "file")
+updater_wire_operation :: proc(value: json.Value, nullable := false) -> bool {
+	if _, null := value.(json.Null); null { return nullable }
+	name, ok := value.(json.String)
+	if !ok { return false }
+	switch string(name) {
+	case "check", "download", "requestApply", "reconcile": return true
+	}
+	return false
+}
+
+@(private = "file")
+updater_valid_wire_state :: proc(object: json.Object) -> bool {
+	if !updater_wire_operation_state(object["operationState"]) || !updater_wire_operation(object["operation"], true) {
+		return false
+	}
+	if _, ok := object["quitReady"].(json.Boolean); !ok { return false }
+	if !updater_wire_integer(object["revision"]) || !updater_wire_nullable_string(object["operationId"]) { return false }
+	if _, ok := object["localInfo"].(json.Object); !ok { return false }
+	if _, ok := object["updateInfo"].(json.Object); !ok { return false }
+	operations, ok := object["operations"].(json.Array)
+	if !ok { return false }
+	for item in operations {
+		operation, operation_ok := item.(json.Object)
+		if !operation_ok || !updater_wire_operation_state(operation["state"]) || !updater_wire_operation(operation["operation"]) {
+			return false
+		}
+	}
+	return true
+}
+
+updaterGetState :: proc(self: ^Core) -> (state: UpdaterState, err: Error) {
+	updater_ensure_configured(self) or_return
+	updater_decode(self, self.symbols.updaterGetState(), &state) or_return
+	switch state.operationState {
+	case .idle, .queued, .running, .awaitingApproval, .completed, .failed, .cancelled:
+	case .Unknown:
+		updaterStateDeinit(&state)
+		return {}, .InvalidJson
+	}
+	if state.operationState == .awaitingApproval && state.approval == nil {
+		updaterStateDeinit(&state)
+		return {}, .InvalidJson
+	}
+	if operation, present := state.operation.?; present && operation == .Unknown {
+		updaterStateDeinit(&state)
+		return {}, .InvalidJson
+	}
+	for operation in state.operations {
+		if len(operation.operationId) == 0 || operation.operation == .Unknown || operation.state == .Unknown {
+			updaterStateDeinit(&state)
+			return {}, .InvalidJson
+		}
+	}
+	return state, .None
+}
+
+updaterGetLocalInfo :: proc(self: ^Core) -> (info: UpdaterLocalInfo, err: Error) {
+	state := updaterGetState(self) or_return
+	info = state.localInfo
+	info._storage = state._storage
+	info._allocator = state._allocator
+	return info, .None
+}
+
+// Poll the bounded event stream. overflow means older entries were discarded;
+// use updaterGetState to recover the current and retained operation states.
+updaterGetEvents :: proc(self: ^Core, after_sequence: u64 = 0, limit: u32 = 100) -> (events: UpdaterEvents, err: Error) {
+	updater_ensure_configured(self) or_return
+	updater_decode(self, self.symbols.updaterGetEvents(after_sequence, limit), &events) or_return
+	return events, .None
+}
+
+@(private = "file")
+UpdaterRequest :: struct {
+	schemaVersion: u32,
+	action: string,
+	operationId: string `json:"operationId,omitempty"`,
+	approvalId: string `json:"approvalId,omitempty"`,
+	approved: Maybe(bool) `json:"approved,omitempty"`,
+}
+
+@(private = "file")
+updater_request :: proc(self: ^Core, request: UpdaterRequest) -> (result: UpdaterRequestResult, err: Error) {
+	updater_ensure_configured(self) or_return
+	data, marshal_err := json.marshal(request, {}, self.allocator)
+	if marshal_err != nil { return {}, .InvalidJson }
+	defer delete(data, self.allocator)
+	request_z := dupe_cstring(self, string(data))
+	if request_z == nil { return {}, .AllocationFailed }
+	defer delete(request_z, self.allocator)
+	updater_decode(self, self.symbols.updaterRequest(request_z), &result) or_return
+	if !result.accepted {
+		if message, present := result.error.?; !present || len(message) == 0 {
+			updaterRequestResultDeinit(&result)
+			return {}, .InvalidJson
+		}
+		return result, .UpdaterRejected
+	}
+	if operation_id, present := result.operationId.?; !present || len(operation_id) == 0 || result.error != nil {
+		updaterRequestResultDeinit(&result)
+		return {}, .InvalidJson
+	}
+	return result, .None
+}
+
+updaterCheck :: proc(self: ^Core) -> (result: UpdaterRequestResult, err: Error) {
+	return updater_request(self, {schemaVersion = 1, action = "check"})
+}
+
+updaterDownload :: proc(self: ^Core) -> (result: UpdaterRequestResult, err: Error) {
+	return updater_request(self, {schemaVersion = 1, action = "download"})
+}
+
+// Queues preparation for apply. This never approves quitting or stops the app.
+// Poll for approval, run the application's quit policy on its own thread, then
+// submit that operation's exact approval token with updaterApproveApply.
+updaterRequestApply :: proc(self: ^Core) -> (result: UpdaterRequestResult, err: Error) {
+	return updater_request(self, {schemaVersion = 1, action = "requestApply"})
+}
+
+// approved=false vetoes this apply attempt. After approved=true, wait for
+// state.quitReady before normal teardown; request acceptance is insufficient.
+updaterApproveApply :: proc(self: ^Core, operation_id, approval_id: string, approved: bool) -> (result: UpdaterRequestResult, err: Error) {
+	return updater_request(self, {
+		schemaVersion = 1, action = "approveApply", operationId = operation_id,
+		approvalId = approval_id, approved = approved,
+	})
+}
+
+updaterCancel :: proc(self: ^Core, operation_id: string) -> (result: UpdaterRequestResult, err: Error) {
+	return updater_request(self, {schemaVersion = 1, action = "cancel", operationId = operation_id})
+}
+
+updaterReconcile :: proc(self: ^Core) -> (result: UpdaterRequestResult, err: Error) {
+	return updater_request(self, {schemaVersion = 1, action = "reconcile"})
+}
+
+// Joins the worker. coreClose calls this before unloading libElectrobunCore.
+updaterShutdown :: proc(self: ^Core) -> Error {
+	if self.symbols.updaterShutdown == nil { return .UpdaterUnavailable }
+	self.symbols.updaterShutdown()
+	self.updater_configured = false
+	return .None
 }
 
 // Loads or creates the core-owned app/profile ID without enabling Insights.
@@ -2431,6 +2869,10 @@ deinit :: proc {
 	pathsDeinit,
 	windowRegistryDeinit,
 	bundlePathsDeinit,
+	updaterStateDeinit,
+	updaterLocalInfoDeinit,
+	updaterRequestResultDeinit,
+	updaterEventsDeinit,
 }
 
 // ---------------------------------------------------------------------------
@@ -2494,6 +2936,8 @@ missing_symbol_name :: proc(table: ^$T) -> (name: string, missing: bool) {
 @(private = "file")
 optional_insights_symbol :: proc(name: string) -> bool {
 	switch name {
+	case "updaterConfigure", "updaterRequest", "updaterGetState", "updaterGetEvents", "updaterShutdown":
+		return true
 	case "installationConfigure", "getInstallationId":
 		return true
 	case "insightsConfigure", "insightsTrack", "insightsIdentify", "insightsReset",

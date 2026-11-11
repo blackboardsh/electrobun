@@ -144,9 +144,21 @@ export function createVmTestCommands({
 			cwd: kitchenDir,
 		},
 		{
+			label: "Shared updater and SDK tests",
+			command: hutchBinary,
+			args: ["test:updater-unit"],
+			cwd: packageDir,
+		},
+		{
 			label: "Full install/update/uninstall lifecycle",
 			command: hutchBinary,
 			args: ["test:updater-lifecycle"],
+			cwd: packageDir,
+		},
+		{
+			label: "Zig install/update/uninstall lifecycle",
+			command: hutchBinary,
+			args: ["test:updater-lifecycle:zig"],
 			cwd: packageDir,
 		},
 		{

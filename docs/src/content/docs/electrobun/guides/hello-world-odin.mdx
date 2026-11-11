@@ -234,9 +234,14 @@ for you are explicit here:
   }
   ```
 
+- **Updates run in the shared core.** `updaterCheck`, `updaterDownload`, and
+  `updaterRequestApply` queue work; `updaterGetState` and `updaterGetEvents`
+  return typed values. Release responses with their `updater*Deinit` proc,
+  including rejected request results. See the [native updater flow](/electrobun/apis/updater-native/)
+  for approval, veto, and normal teardown after `quitReady`.
 - **Some TS APIs have no Odin equivalent.** There is no typed RPC layer (the
   bridge is raw JSON via `sendHostMessageToWebview` and
-  `popNextQueuedHostMessage`), no updater, and no typed menu builders. See
+  `popNextQueuedHostMessage`) and no typed menu builders. See
   [Native main process](/electrobun/guides/native-main-process/) for the
   full comparison.
 

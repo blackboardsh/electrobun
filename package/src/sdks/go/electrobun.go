@@ -535,9 +535,12 @@ type WgpuContext struct {
 	Device   unsafe.Pointer
 }
 
+// Core is the native app handle. Use one live Core per app process; native
+// updater state is shared by the process.
 type Core struct {
 	lib     unsafe.Pointer
 	symbols map[string]unsafe.Pointer
+	updater updaterClient
 }
 
 func LoadWgpuNative() (*WgpuNative, error) {
@@ -629,6 +632,10 @@ func LoadCore() (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
+	return loadCoreFromBundle(bundlePaths)
+}
+
+func loadCoreFromBundle(bundlePaths BundlePaths) (*Core, error) {
 	libPath := filepath.Join(bundlePaths.ExeDir, coreLibraryName())
 	pathCString := C.CString(libPath)
 	defer C.free(unsafe.Pointer(pathCString))
@@ -638,6 +645,7 @@ func LoadCore() (*Core, error) {
 	}
 
 	core := &Core{lib: lib, symbols: make(map[string]unsafe.Pointer)}
+	core.updater.bundlePaths = bundlePaths
 	for _, name := range requiredSymbols {
 		nameCString := C.CString(name)
 		symbol := C.eb_dlsym(lib, nameCString)
@@ -654,6 +662,13 @@ func LoadCore() (*Core, error) {
 		C.free(unsafe.Pointer(nameCString))
 	}
 	for _, name := range []string{"installationConfigure", "getInstallationId"} {
+		nameCString := C.CString(name)
+		core.symbols[name] = C.eb_dlsym(lib, nameCString)
+		C.free(unsafe.Pointer(nameCString))
+	}
+	// Resolve optional updater symbols without configuring it or checking for
+	// updates. Older cores remain usable; updater methods report unavailable.
+	for _, name := range updaterSymbols {
 		nameCString := C.CString(name)
 		core.symbols[name] = C.eb_dlsym(lib, nameCString)
 		C.free(unsafe.Pointer(nameCString))
@@ -2221,6 +2236,7 @@ func (c *Core) WgpuSurfacePresentMainThread(surface unsafe.Pointer) (int, error)
 // main() (the main goroutine, which this package pins to the main OS thread).
 func (c *Core) RunMainThread(appInfo AppInfo) error {
 	defer c.InsightsShutdown()
+	defer c.updaterShutdownIfConfigured()
 	identifier, freeIdentifier, err := cString(appInfo.Identifier, "app identifier")
 	if err != nil {
 		return err

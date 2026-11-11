@@ -231,12 +231,17 @@ main process makes some steps explicit that Cottontail handles for you:
   main thread until the app quits, so windows and webviews are created from a
   spawned worker thread. The template sleeps ~150ms first to let the loop
   start; the core marshals UI calls back to the main thread internally.
-- **Error handling is Zig-native.** Every fallible call returns
-  `error.ElectrobunCoreFailure`, with the real message printed to stderr as
-  `[electrobun-zig] core error: ...` — handle it with `catch` as usual.
+- **Error handling is Zig-native.** Fallible calls return Zig error unions;
+  native failures commonly use `error.ElectrobunCoreFailure` with detail on
+  stderr. Updater requests also return an `accepted` flag and core error text.
+- **Updates run in the shared core.** `updaterCheck`, `updaterDownload`, and
+  `updaterRequestApply` queue operations; `updaterGetState` and
+  `updaterGetEvents` return owned typed snapshots. Call `.deinit()` on each
+  response. See the [native updater flow](/electrobun/apis/updater-native/)
+  for approval, veto, and normal teardown after `quitReady`.
 - **Some TS APIs have no Zig equivalent.** There is no typed RPC layer (the
   bridge is raw JSON via `sendHostMessageToWebview` and
-  `popNextQueuedHostMessage`), no updater, and no typed menu builders. See
+  `popNextQueuedHostMessage`) and no typed menu builders. See
   [Native main process](/electrobun/guides/native-main-process/) for the full
   comparison.
 

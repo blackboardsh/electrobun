@@ -939,6 +939,52 @@ test "exact recipe replays PAX headers, padding, metadata and signatures without
     try std.testing.expectError(error.FileHashMismatch, reconstruct(allocator, io, parsed.value, app, &discard.writer));
 }
 
+test "exact recipe preserves opaque binary PAX xattrs across extraction and JSON replay" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var original: Io.Writer.Allocating = .init(allocator);
+    defer original.deinit();
+    try testAppend(&original.writer, "Example.app/", '5', "", "");
+    try testAppend(&original.writer, "Example.app/Resources/", '5', "", "");
+    // Embedded newlines, equals signs, NULs and invalid UTF-8 are opaque value
+    // bytes. They must not become path overrides or be normalized as text.
+    const xattr = try testPax(allocator, "SCHILY.xattr.com.apple.FinderInfo", "\x00\xff\x80\npath=outside/version.json\x00=\r\n");
+    defer allocator.free(xattr);
+    const second_xattr = try testPax(allocator, "LIBARCHIVE.xattr.user.opaque", "\xfe\x00\nsize=999999\n\x81");
+    defer allocator.free(second_xattr);
+    const path = try testPax(allocator, "path", "Example.app/Resources/version.json");
+    defer allocator.free(path);
+    const pax = try std.mem.concat(allocator, u8, &.{ xattr, path, second_xattr });
+    defer allocator.free(pax);
+    try testAppend(&original.writer, "PaxHeader", 'x', pax, "");
+    const identity = "{\"hash\":\"next123\",\"version\":\"2.0.0\"}";
+    try testAppend(&original.writer, "Example.app/placeholder", '0', identity, "");
+    try testAppend(&original.writer, "Example.app/Resources/payload", '0', "payload after local PAX", "");
+    try original.writer.splatByteAll(0, 1024);
+
+    var input: Io.Reader = .fixed(original.written());
+    var receipt = try extractReader(allocator, io, &input, null, tmp.dir);
+    defer receipt.deinit();
+    try std.testing.expectEqual(@as(usize, 3), receipt.value.entries.len);
+    try std.testing.expectEqualStrings("Resources/version.json", receipt.value.entries[1].path);
+    try std.testing.expectEqual(@as(u64, identity.len), receipt.value.entries[1].size);
+    try std.testing.expectEqualStrings("Resources/payload", receipt.value.entries[2].path);
+    var json: Io.Writer.Allocating = .init(allocator);
+    defer json.deinit();
+    try writeJson(receipt.value, &json.writer);
+    var parsed = try parse(allocator, json.written());
+    defer parsed.deinit();
+    var app = try tmp.dir.openDir(io, "Example.app", .{ .iterate = true });
+    defer app.close(io);
+    try verifyTree(allocator, io, parsed.value, app);
+    var reconstructed: Io.Writer.Allocating = .init(allocator);
+    defer reconstructed.deinit();
+    try reconstruct(allocator, io, parsed.value, app, &reconstructed.writer);
+    try std.testing.expectEqualSlices(u8, original.written(), reconstructed.written());
+}
+
 test "archive paths reject traversal everywhere and Windows aliases only on Windows" {
     for ([_][]const u8{ "", ".", "..", "/absolute", "a/../b", "a//b", "a\\b" }) |path| {
         try std.testing.expectError(error.InvalidArchivePath, validatePath(path));

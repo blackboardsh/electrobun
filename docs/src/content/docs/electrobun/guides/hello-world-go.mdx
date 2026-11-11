@@ -244,6 +244,10 @@ rebuilds it when watched source files change. Press Ctrl+C to stop it.
 - **Errors are plain `error` values.** Every core call returns an `error`;
   `core.LastError()` surfaces the core's last error string
   (`electrobun_core_last_error`).
+- **Updates run in the shared core.** `UpdaterCheck`, `UpdaterDownload`, and
+  `UpdaterRequestApply` queue work; `UpdaterGetState` and `UpdaterGetEvents`
+  return typed Go values. Follow the [native updater flow](/electrobun/apis/updater-native/)
+  to approve or veto apply and wait for `QuitReady` before normal teardown.
 - **Template.** `hutch electrobun init go-app --template=go-maze-wgpu`
   scaffolds a full example with RPC messaging and WGPU rendering.
 

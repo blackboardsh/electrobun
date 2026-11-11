@@ -111,7 +111,11 @@ async function buildFixture(directory, runtimeArch) {
   assert.ok(existsSync(zig), "Install the repository Zig toolchain or set ZIG_BINARY");
   const source = join(directory, "core.zig");
   await writeFile(source, await readFile(join(packageRoot, "src", "core", "main.zig"), "utf8") + nativeFixture);
-  for (const dependency of ["synchronization.zig", "insights.zig", "insights_spool.zig", "installation_identity.zig"]) {
+  for (const dependency of [
+    "synchronization.zig", "insights.zig", "insights_spool.zig", "installation_identity.zig",
+    "updater.zig", "updater_protocol.zig", "updater_http.zig", "updater_handoff.zig", "updater_results.zig",
+    "updater_spawn.c", "updater_spawn.h",
+  ]) {
     await writeFile(join(directory, dependency), await readFile(join(packageRoot, "src", "core", dependency)));
   }
   const extension = process.platform === "darwin" ? "dylib" : process.platform === "win32" ? "dll" : "so";
@@ -121,7 +125,10 @@ async function buildFixture(directory, runtimeArch) {
   const target = process.platform === "win32"
     ? ["-target", runtimeArch === "arm64" ? "aarch64-windows-gnu" : "x86_64-windows-gnu"]
     : [];
-  const child = spawn(zig, ["build-lib", source, ...target, "-dynamic", "-lc", "-O", "Debug", `-femit-bin=${library}`], { stdio: ["ignore", "pipe", "pipe"], timeout: 540_000 });
+  const child = spawn(zig, [
+    "build-lib", source, ...target, "-dynamic", "-lc", "-O", "Debug",
+    "-cflags", "-std=c11", "--", join(directory, "updater_spawn.c"), `-femit-bin=${library}`,
+  ], { stdio: ["ignore", "pipe", "pipe"], timeout: 540_000 });
   let output = "";
   for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { output += chunk; });
   await new Promise((resolve, reject) => {

@@ -735,7 +735,11 @@ test "prepare update refuses a missing request before creating state" {
 }
 
 fn testTarEntry(writer: *Io.Writer, name: []const u8, kind: u8, data: []const u8) !void {
-    if (name.len > 100) return error.TestPathTooLong;
+    return testTarEntryWithPrefix(writer, name, "", kind, data);
+}
+
+fn testTarEntryWithPrefix(writer: *Io.Writer, name: []const u8, prefix: []const u8, kind: u8, data: []const u8) !void {
+    if (name.len > 100 or prefix.len > 155) return error.TestPathTooLong;
     var header: [512]u8 = @splat(0);
     @memcpy(header[0..name.len], name);
     @memcpy(header[100..108], "0000755\x00");
@@ -747,6 +751,7 @@ fn testTarEntry(writer: *Io.Writer, name: []const u8, kind: u8, data: []const u8
     header[156] = kind;
     @memcpy(header[257..263], "ustar\x00");
     @memcpy(header[263..265], "00");
+    @memcpy(header[345..][0..prefix.len], prefix);
     var checksum: u32 = 0;
     for (header) |byte| checksum += byte;
     _ = try std.fmt.bufPrint(header[148..154], "{o:0>6}", .{checksum});
@@ -758,6 +763,10 @@ fn testTarEntry(writer: *Io.Writer, name: []const u8, kind: u8, data: []const u8
 }
 
 fn testTar(a: A, root: []const u8, identity: Identity) ![]u8 {
+    return testTarWithMetadataPrefix(a, root, identity, false);
+}
+
+fn testTarWithMetadataPrefix(a: A, root: []const u8, identity: Identity, metadata_prefix: bool) ![]u8 {
     var writer: Io.Writer.Allocating = .init(a);
     defer writer.deinit();
     try testTarEntry(&writer.writer, root, '5', "");
@@ -767,7 +776,11 @@ fn testTar(a: A, root: []const u8, identity: Identity) ![]u8 {
     try testTarEntry(&writer.writer, try std.fmt.allocPrint(a, "{s}/{s}", .{ root, resources }), '5', "");
     try testTarEntry(&writer.writer, try std.fmt.allocPrint(a, "{s}/{s}", .{ root, binary }), '5', "");
     const json = try std.json.Stringify.valueAlloc(a, identity, .{});
-    try testTarEntry(&writer.writer, try std.fmt.allocPrint(a, "{s}/{s}/version.json", .{ root, resources }), '0', json);
+    if (metadata_prefix) {
+        try testTarEntryWithPrefix(&writer.writer, "version.json", try std.fmt.allocPrint(a, "{s}/{s}", .{ root, resources }), '0', json);
+    } else {
+        try testTarEntry(&writer.writer, try std.fmt.allocPrint(a, "{s}/{s}/version.json", .{ root, resources }), '0', json);
+    }
     try testTarEntry(&writer.writer, try std.fmt.allocPrint(a, "{s}/{s}/launcher{s}", .{ root, binary, if (builtin.os.tag == .windows) ".exe" else "" }), '0', "launcher fixture bytes");
     try writer.writer.splatByteAll(0, 1024);
     return writer.toOwnedSlice();
@@ -851,6 +864,13 @@ const TestServer = struct {
             try writer.interface.writeAll(response.body);
             try writer.interface.flush();
         }
+    }
+
+    fn serveAndClose(self: *TestServer) !void {
+        // An unexpected extra request must fail on the closed listener, rather
+        // than wait indefinitely after this fixture's response budget is used.
+        defer self.deinit();
+        try self.serve();
     }
 };
 
@@ -963,10 +983,13 @@ const TestFixture = struct {
         const prepared = try std.json.parseFromSlice(Prepared, a, json, .{});
         try std.testing.expectEqual(@as(u32, 2), prepared.value.schema_version);
         try std.testing.expectEqualStrings(self.stage_path, prepared.value.staging_path);
+        try std.testing.expectEqualStrings(self.request.hash, prepared.value.hash);
+        try std.testing.expectEqualStrings(self.request.version, prepared.value.version);
         const recipe_bytes = try readFile(a, io, extraction, try std.fmt.allocPrint(a, "{s}.recipe.json", .{self.request.hash}), archive.max_recipe_bytes);
         try std.testing.expectEqualStrings(&sha256(recipe_bytes), prepared.value.recipe_sha256);
         var record = try archive.parse(a, recipe_bytes);
         defer record.deinit();
+        try std.testing.expectEqualStrings(&sha256(self.new_tar), record.value.archive_sha256);
         var root = try Io.Dir.openDirAbsolute(io, try std.fs.path.join(a, &.{ self.stage_path, self.root_name }), .{});
         defer root.close(io);
         var output: Io.Writer.Allocating = .init(a);
@@ -978,6 +1001,37 @@ const TestFixture = struct {
         defer identity.deinit();
         try std.testing.expectEqualStrings("base123", identity.value.hash);
         try std.testing.expectError(error.FileNotFound, extraction.access(io, try std.fmt.allocPrint(a, "{s}.tar", .{self.request.hash}), .{}));
+    }
+
+    fn expectNoIntermediateArtifacts(self: *TestFixture) !void {
+        const a = self.arena.allocator();
+        const io = std.testing.io;
+        const app_name = std.fs.path.basename(self.request.app_bundle_path);
+        const temporary_prefix = try std.fmt.allocPrint(a, "{s}.prepare-", .{app_name});
+        const prepared_prefix = try std.fmt.allocPrint(a, "{s}.prepared-", .{app_name});
+        var parent = try Io.Dir.openDirAbsolute(io, std.fs.path.dirname(self.request.app_bundle_path).?, .{ .iterate = true });
+        defer parent.close(io);
+        var siblings = parent.iterate();
+        while (try siblings.next(io)) |entry| {
+            try std.testing.expect(!std.mem.startsWith(u8, entry.name, temporary_prefix));
+            if (std.mem.startsWith(u8, entry.name, prepared_prefix)) {
+                try std.testing.expectEqualStrings(std.fs.path.basename(self.stage_path), entry.name);
+            }
+        }
+        var extraction = try Io.Dir.openDirAbsolute(io, self.extraction_path, .{ .iterate = true });
+        defer extraction.close(io);
+        const baseline_recipe = try std.fmt.allocPrint(a, "{s}.recipe.json", .{self.request.base_hash});
+        const final_recipe = try std.fmt.allocPrint(a, "{s}.recipe.json", .{self.request.hash});
+        var artifacts = extraction.iterate();
+        var count: usize = 0;
+        while (try artifacts.next(io)) |entry| {
+            try std.testing.expectEqual(.file, entry.kind);
+            try std.testing.expect(std.mem.eql(u8, entry.name, prepared_name) or
+                std.mem.eql(u8, entry.name, baseline_recipe) or
+                std.mem.eql(u8, entry.name, final_recipe));
+            count += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 3), count);
     }
 };
 
@@ -1242,6 +1296,168 @@ test "native preparation follows patches through an intermediate staged app" {
     try std.testing.expectError(error.FileNotFound, Io.Dir.cwd().access(io, try std.fmt.allocPrint(arena, "{s}.prepare-{s}", .{ fixture.request.app_bundle_path, fixture.request.transaction_id }), .{}));
 }
 
+test "native preparation identifies version metadata split across USTAR name and prefix" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    for ([_]bool{ false, true }) |full_fallback| {
+        var server = try TestServer.init();
+        defer server.deinit();
+        const base = try server.baseUrl(a);
+        defer a.free(base);
+        var fixture = try TestFixture.init(base);
+        defer fixture.deinit();
+        const arena = fixture.arena.allocator();
+        fixture.new_tar = try testTarWithMetadataPrefix(arena, fixture.root_name, .{
+            .identifier = fixture.request.identifier,
+            .channel = fixture.request.channel,
+            .version = fixture.request.version,
+            .hash = fixture.request.hash,
+            .baseUrl = base,
+        }, true);
+        fixture.request.tar_size = fixture.new_tar.len;
+        fixture.request.tar_sha256 = try arena.dupe(u8, &sha256(fixture.new_tar));
+        try fixture.writeRequest();
+        const patch_path = try std.fmt.allocPrint(arena, "/stable-{s}-{s}-base123.patch", .{ nativePlatform(), nativeArch() });
+        server.responses = if (full_fallback) &.{
+            .{ .path = patch_path, .body = "missing", .code = 404 },
+            .{ .path = try std.fmt.allocPrint(arena, "/{s}", .{fixture.request.artifact_file}), .body = try testZstd(arena, fixture.new_tar) },
+        } else &.{
+            .{ .path = patch_path, .body = try testLiteralPatch(arena, fixture.new_tar) },
+        };
+        var serving = try io.concurrent(TestServer.serveAndClose, .{&server});
+        defer serving.cancel(io) catch {};
+        try run(a, io, &fixture.environment, fixture.request_path);
+        try serving.await(io);
+        try fixture.expectPrepared();
+        try fixture.expectNoIntermediateArtifacts();
+    }
+}
+
+test "native preparation follows four patch hops and publishes only the exact final archive" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var server = try TestServer.init();
+    defer server.deinit();
+    const base = try server.baseUrl(a);
+    defer a.free(base);
+    var fixture = try TestFixture.init(base);
+    defer fixture.deinit();
+    const arena = fixture.arena.allocator();
+    const hashes = [_][]const u8{ "base123", "middle1", "middle2", "middle3", "next123" };
+    var responses: [4]TestServer.Response = undefined;
+    for (&responses, 0..) |*response, index| {
+        const target = if (index == responses.len - 1) fixture.new_tar else try testTar(arena, fixture.root_name, .{
+            .identifier = fixture.request.identifier,
+            .channel = fixture.request.channel,
+            .version = try std.fmt.allocPrint(arena, "1.{d}.0", .{index + 1}),
+            .hash = hashes[index + 1],
+            .baseUrl = base,
+        });
+        response.* = .{
+            .path = try std.fmt.allocPrint(arena, "/stable-{s}-{s}-{s}.patch", .{ nativePlatform(), nativeArch(), hashes[index] }),
+            .body = try testLiteralPatch(arena, target),
+        };
+    }
+    server.responses = &responses;
+    var serving = try io.concurrent(TestServer.serveAndClose, .{&server});
+    defer serving.cancel(io) catch {};
+    try run(a, io, &fixture.environment, fixture.request_path);
+    try serving.await(io);
+    try fixture.expectPrepared();
+    try fixture.expectNoIntermediateArtifacts();
+}
+
+test "native preparation falls back to the final full archive when a second or later patch is missing" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    for ([_]usize{ 1, 3 }) |missing_index| {
+        var server = try TestServer.init();
+        defer server.deinit();
+        const base = try server.baseUrl(a);
+        defer a.free(base);
+        var fixture = try TestFixture.init(base);
+        defer fixture.deinit();
+        const arena = fixture.arena.allocator();
+        var responses: [5]TestServer.Response = undefined;
+        var hash: []const u8 = fixture.request.base_hash;
+        for (responses[0..missing_index], 0..) |*response, index| {
+            const next_hash = try std.fmt.allocPrint(arena, "middle{d}", .{index + 1});
+            const target = try testTar(arena, fixture.root_name, .{
+                .identifier = fixture.request.identifier,
+                .channel = fixture.request.channel,
+                .version = try std.fmt.allocPrint(arena, "1.{d}.0", .{index + 1}),
+                .hash = next_hash,
+                .baseUrl = base,
+            });
+            response.* = .{
+                .path = try std.fmt.allocPrint(arena, "/stable-{s}-{s}-{s}.patch", .{ nativePlatform(), nativeArch(), hash }),
+                .body = try testLiteralPatch(arena, target),
+            };
+            hash = next_hash;
+        }
+        responses[missing_index] = .{
+            .path = try std.fmt.allocPrint(arena, "/stable-{s}-{s}-{s}.patch", .{ nativePlatform(), nativeArch(), hash }),
+            .body = "missing",
+            .code = 404,
+        };
+        responses[missing_index + 1] = .{
+            .path = try std.fmt.allocPrint(arena, "/{s}", .{fixture.request.artifact_file}),
+            .body = try testZstd(arena, fixture.new_tar),
+        };
+        server.responses = responses[0 .. missing_index + 2];
+        var serving = try io.concurrent(TestServer.serveAndClose, .{&server});
+        defer serving.cancel(io) catch {};
+        try run(a, io, &fixture.environment, fixture.request_path);
+        try serving.await(io);
+        try fixture.expectPrepared();
+        try fixture.expectNoIntermediateArtifacts();
+    }
+}
+
+test "native preparation bounds self and two-hash patch cycles before full fallback" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    for ([_]bool{ true, false }) |self_cycle| {
+        var server = try TestServer.init();
+        defer server.deinit();
+        const base = try server.baseUrl(a);
+        defer a.free(base);
+        var fixture = try TestFixture.init(base);
+        defer fixture.deinit();
+        const arena = fixture.arena.allocator();
+        const first = if (self_cycle) fixture.old_tar else try testTar(arena, fixture.root_name, .{
+            .identifier = fixture.request.identifier,
+            .channel = fixture.request.channel,
+            .version = "1.5.0",
+            .hash = "middle123",
+            .baseUrl = base,
+        });
+        var responses: [3]TestServer.Response = undefined;
+        responses[0] = .{
+            .path = try std.fmt.allocPrint(arena, "/stable-{s}-{s}-base123.patch", .{ nativePlatform(), nativeArch() }),
+            .body = try testLiteralPatch(arena, first),
+        };
+        if (!self_cycle) responses[1] = .{
+            .path = try std.fmt.allocPrint(arena, "/stable-{s}-{s}-middle123.patch", .{ nativePlatform(), nativeArch() }),
+            .body = try testLiteralPatch(arena, fixture.old_tar),
+        };
+        const count: usize = if (self_cycle) 2 else 3;
+        responses[count - 1] = .{
+            .path = try std.fmt.allocPrint(arena, "/{s}", .{fixture.request.artifact_file}),
+            .body = try testZstd(arena, fixture.new_tar),
+        };
+        // The next request must be the full archive, never another patch for
+        // an already visited hash. The fixture closes after this exact budget.
+        server.responses = responses[0..count];
+        var serving = try io.concurrent(TestServer.serveAndClose, .{&server});
+        defer serving.cancel(io) catch {};
+        try run(a, io, &fixture.environment, fixture.request_path);
+        try serving.await(io);
+        try fixture.expectPrepared();
+        try fixture.expectNoIntermediateArtifacts();
+    }
+}
+
 test "flat-folder contract preserves two-step hash patch chains for self-hosted managed and custom-origin apps" {
     const a = std.testing.allocator;
     const io = std.testing.io;
@@ -1468,4 +1684,82 @@ test "interrupted stage and lock symlinks never redirect cleanup or lock acquisi
     if (run(a, io, &fixture.environment, fixture.request_path)) |_| return error.TestUnexpectedResult else |_| {}
     const bytes = try Io.Dir.cwd().readFileAlloc(io, marker, arena, .limited(1024));
     try std.testing.expectEqualStrings("preserve", bytes);
+}
+
+test "native preparation cleans its partial stage after ENOSPC and preserves unowned siblings" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var server = try TestServer.init();
+    defer server.deinit();
+    const base = try server.baseUrl(a);
+    defer a.free(base);
+    var fixture = try TestFixture.init(base);
+    defer fixture.deinit();
+    const arena = fixture.arena.allocator();
+    const temporary_path = try std.fmt.allocPrint(arena, "{s}.prepare-{s}", .{ fixture.request.app_bundle_path, fixture.request.transaction_id });
+    const unowned_names = [_][]const u8{ ".prepare-user-backup", ".prepared-kept123" };
+    for (unowned_names) |suffix| {
+        const path = try std.fmt.allocPrint(arena, "{s}{s}", .{ fixture.request.app_bundle_path, suffix });
+        try Io.Dir.cwd().createDirPath(io, path);
+        try Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(arena, &.{ path, "keep" }), .data = "unowned sibling" });
+    }
+
+    // Fail an actual staged launcher write after version.json has been
+    // extracted. All filesystem, network, locking and cleanup operations use
+    // the real testing Io; both delta and full extraction encounter ENOSPC.
+    const FullStage = struct {
+        fn operate(userdata: ?*anyopaque, operation: Io.Operation) Io.Cancelable!Io.Operation.Result {
+            const original: Io = .{ .userdata = userdata, .vtable = std.testing.io.vtable };
+            if (operation == .file_write_streaming) {
+                var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+                const length = operation.file_write_streaming.file.realPath(original, &path_buffer) catch
+                    return .{ .file_write_streaming = error.InputOutput };
+                const path = path_buffer[0..length];
+                const launcher = if (builtin.os.tag == .windows) "launcher.exe" else "launcher";
+                if (std.mem.indexOf(u8, path, ".prepare-0123456789abcdef0123456789abcdef") != null and
+                    std.mem.eql(u8, std.fs.path.basename(path), launcher))
+                    return .{ .file_write_streaming = error.NoSpaceLeft };
+            }
+            return original.operate(operation);
+        }
+    };
+    var full_stage_vtable = io.vtable.*;
+    full_stage_vtable.operate = FullStage.operate;
+    const full_stage_io: Io = .{ .userdata = io.userdata, .vtable = &full_stage_vtable };
+    const patch_path = try std.fmt.allocPrint(arena, "/stable-{s}-{s}-base123.patch", .{ nativePlatform(), nativeArch() });
+    const patch_bytes = try testLiteralPatch(arena, fixture.new_tar);
+    server.responses = &.{
+        .{ .path = patch_path, .body = patch_bytes },
+        .{ .path = try std.fmt.allocPrint(arena, "/{s}", .{fixture.request.artifact_file}), .body = try testZstd(arena, fixture.new_tar) },
+    };
+    var serving = try io.concurrent(TestServer.serve, .{&server});
+    defer serving.cancel(io) catch {};
+    try std.testing.expectError(error.NoSpaceLeft, run(a, full_stage_io, &fixture.environment, fixture.request_path));
+    try serving.await(io);
+    try std.testing.expectError(error.FileNotFound, Io.Dir.cwd().access(io, temporary_path, .{}));
+    try std.testing.expectError(error.FileNotFound, Io.Dir.cwd().access(io, fixture.stage_path, .{}));
+    var extraction = try Io.Dir.openDirAbsolute(io, fixture.extraction_path, .{ .iterate = true });
+    defer extraction.close(io);
+    try std.testing.expectError(error.FileNotFound, extraction.access(io, prepared_name, .{}));
+    try std.testing.expectError(error.FileNotFound, extraction.access(io, "next123.recipe.json", .{}));
+    var iterator = extraction.iterate();
+    while (try iterator.next(io)) |entry| {
+        try std.testing.expect(!std.mem.startsWith(u8, entry.name, ".patch-"));
+        try std.testing.expect(!std.mem.endsWith(u8, entry.name, ".partial"));
+    }
+    for (unowned_names) |suffix| {
+        const path = try std.fmt.allocPrint(arena, "{s}{s}", .{ fixture.request.app_bundle_path, suffix });
+        const marker = try std.fs.path.join(arena, &.{ path, "keep" });
+        const contents = try Io.Dir.cwd().readFileAlloc(io, marker, arena, .limited(1024));
+        try std.testing.expectEqualStrings("unowned sibling", contents);
+    }
+
+    // The failed transaction releases its lock and leaves a usable installed
+    // baseline: retrying with available space publishes the exact target tar.
+    server.responses = &.{.{ .path = patch_path, .body = patch_bytes }};
+    var retry_serving = try io.concurrent(TestServer.serve, .{&server});
+    defer retry_serving.cancel(io) catch {};
+    try run(a, io, &fixture.environment, fixture.request_path);
+    try retry_serving.await(io);
+    try fixture.expectPrepared();
 }

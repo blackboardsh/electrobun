@@ -114,19 +114,28 @@ jobs:
       - name: Install dependencies
         working-directory: package
         run: hutch run install
-      - name: Verify Windows task registration
+      - name: Build updater devkit
         working-directory: package
-        run: node scripts/run-bun-test.js src/sdks/main/core/WindowsUpdateTask.test.ts
+        run: hutch build:release
+      - name: Test shared updater and native SDKs
+        working-directory: package
+        run: hutch test:updater-unit
       - name: Enable Task Scheduler history
         shell: powershell
         run: |
           wevtutil.exe sl Microsoft-Windows-TaskScheduler/Operational /e:true
           if ($LASTEXITCODE -ne 0) { throw 'Could not enable Task Scheduler history' }
-      - name: Build and test updater lifecycle
+      - name: Test Bun updater lifecycle
         working-directory: package
         shell: pwsh
         run: |
-          hutch test:updater-lifecycle 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/updater-lifecycle.log"
+          node scripts/test-updater-lifecycle.mjs 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/updater-lifecycle.log"
+          exit $LASTEXITCODE
+      - name: Test Zig updater lifecycle
+        working-directory: package
+        shell: pwsh
+        run: |
+          node scripts/test-updater-lifecycle.mjs --backend=zig 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/updater-lifecycle-zig.log"
           exit $LASTEXITCODE
       - name: Collect Task Scheduler history
         if: always()
@@ -145,5 +154,6 @@ jobs:
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/updater-lifecycle.log
+            ${{ runner.temp }}/updater-lifecycle-zig.log
             ${{ runner.temp }}/updater-task-history.json
             ${{ runner.temp }}/updater-lifecycle-e2e-diagnostics-*/**

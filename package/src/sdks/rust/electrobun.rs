@@ -5,6 +5,7 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::Mutex;
 
 pub const INSTALL_ROOT_NAME_ENVIRONMENT_VARIABLE: &str = "ELECTROBUN_INSTALL_ROOT_NAME";
 
@@ -1063,6 +1064,707 @@ fn insights_json_value_end(source: &str, start: usize, depth: usize) -> Option<u
     }
 }
 
+/// Updater failures are reported explicitly, including cores predating this API.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdaterError {
+    Unavailable(String),
+    InvalidConfiguration(String),
+    InvalidResponse(String),
+    CoreFailure(String),
+    Rejected {
+        operation_id: Option<String>,
+        message: String,
+    },
+}
+
+impl std::fmt::Display for UpdaterError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable(message) => write!(formatter, "updater unavailable: {message}"),
+            Self::InvalidConfiguration(message) => {
+                write!(formatter, "invalid updater configuration: {message}")
+            }
+            Self::InvalidResponse(message) => {
+                write!(formatter, "invalid updater response: {message}")
+            }
+            Self::CoreFailure(message) => write!(formatter, "updater failed: {message}"),
+            Self::Rejected { message, .. } => {
+                write!(formatter, "updater request rejected: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for UpdaterError {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdaterManagedInfo {
+    pub app_id: String,
+    pub api_url: Option<String>,
+    pub base_url: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalUpdateInfo {
+    pub version: String,
+    pub hash: String,
+    pub base_url: String,
+    pub channel: String,
+    pub name: String,
+    pub display_name: Option<String>,
+    pub identifier: String,
+    pub managed: Option<UpdaterManagedInfo>,
+    pub update_authority: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateInfo {
+    pub version: String,
+    pub hash: String,
+    pub update_available: bool,
+    pub update_ready: bool,
+    pub error: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdaterOperationState {
+    Idle,
+    Queued,
+    Running,
+    AwaitingApproval,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdaterApproval {
+    pub id: String,
+    pub prepared_hash: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdaterOperation {
+    pub operation_id: String,
+    pub operation: String,
+    pub state: UpdaterOperationState,
+    pub error: Option<String>,
+    pub update_info: Option<UpdateInfo>,
+}
+
+/// A snapshot of core-owned update work. Approval alone does not mean that the
+/// application can quit: wait for `quit_ready` before normal event-loop teardown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdaterState {
+    pub schema_version: u32,
+    pub revision: u64,
+    pub operation_id: Option<String>,
+    pub operation: Option<String>,
+    pub operation_state: UpdaterOperationState,
+    pub local_info: LocalUpdateInfo,
+    pub update_info: UpdateInfo,
+    pub approval: Option<UpdaterApproval>,
+    pub quit_ready: bool,
+    pub channel_root: String,
+    /// Bounded terminal operation history retained by the core.
+    pub operations: Vec<UpdaterOperation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdaterRequestResult {
+    pub schema_version: u32,
+    pub accepted: bool,
+    pub operation_id: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UpdateStatusDetails {
+    pub from_hash: Option<String>,
+    pub to_hash: Option<String>,
+    pub current_hash: Option<String>,
+    pub latest_hash: Option<String>,
+    pub patch_number: Option<u64>,
+    pub total_patches_applied: Option<u64>,
+    pub progress: Option<f64>,
+    pub bytes_downloaded: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub used_patch_path: Option<bool>,
+    pub error_message: Option<String>,
+    pub url: Option<String>,
+    pub zstd_path: Option<String>,
+    pub exit_code: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpdaterEvent {
+    pub sequence: u64,
+    pub operation_id: Option<String>,
+    /// Uses the same status names as the JavaScript updater.
+    pub status: String,
+    pub message: String,
+    pub timestamp: i64,
+    pub details: Option<UpdateStatusDetails>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpdaterEvents {
+    pub schema_version: u32,
+    pub entries: Vec<UpdaterEvent>,
+    pub next_sequence: u64,
+    pub oldest_sequence: u64,
+    /// True when the caller's cursor predates the bounded event buffer.
+    pub overflow: bool,
+}
+
+// The SDK remains a standalone, dependency-free Rust source file. These typed
+// readers reuse the strict JSON tokenizer used for bundled service settings.
+struct UpdaterJson<'a>(Vec<(String, &'a str)>);
+
+impl<'a> UpdaterJson<'a> {
+    fn new(source: &'a str) -> Result<Self, UpdaterError> {
+        insights_json_object_fields(source)
+            .map(Self)
+            .ok_or_else(|| UpdaterError::InvalidResponse("expected a valid JSON object".into()))
+    }
+
+    fn get(&self, key: &str) -> Option<&'a str> {
+        self.0
+            .iter()
+            .find_map(|(name, value)| (name == key).then_some(*value))
+    }
+
+    fn required(&self, key: &str) -> Result<&'a str, UpdaterError> {
+        self.get(key).ok_or_else(|| Self::invalid(key))
+    }
+
+    fn invalid(key: &str) -> UpdaterError {
+        UpdaterError::InvalidResponse(format!("missing or invalid {key}"))
+    }
+
+    fn string(&self, key: &str) -> Result<String, UpdaterError> {
+        insights_decode_string(self.required(key)?).ok_or_else(|| Self::invalid(key))
+    }
+
+    fn optional_string(&self, key: &str) -> Result<Option<String>, UpdaterError> {
+        self.optional(key, |source| {
+            insights_decode_string(source).ok_or_else(|| Self::invalid(key))
+        })
+    }
+
+    fn nullable_string(&self, key: &str) -> Result<Option<String>, UpdaterError> {
+        self.required(key)?;
+        self.optional_string(key)
+    }
+
+    fn nullable<T>(
+        &self,
+        key: &str,
+        parse: impl FnOnce(&'a str) -> Result<T, UpdaterError>,
+    ) -> Result<Option<T>, UpdaterError> {
+        self.required(key)?;
+        self.optional(key, parse)
+    }
+
+    fn boolean(&self, key: &str) -> Result<bool, UpdaterError> {
+        match self.required(key)? {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(Self::invalid(key)),
+        }
+    }
+
+    fn number<T: std::str::FromStr>(&self, key: &str) -> Result<T, UpdaterError> {
+        self.required(key)?.parse().map_err(|_| Self::invalid(key))
+    }
+
+    fn optional_number<T: std::str::FromStr>(&self, key: &str) -> Result<Option<T>, UpdaterError> {
+        self.optional(key, |source| source.parse().map_err(|_| Self::invalid(key)))
+    }
+
+    fn optional<T>(
+        &self,
+        key: &str,
+        parse: impl FnOnce(&'a str) -> Result<T, UpdaterError>,
+    ) -> Result<Option<T>, UpdaterError> {
+        match self.get(key) {
+            None | Some("null") => Ok(None),
+            Some(source) => parse(source).map(Some),
+        }
+    }
+
+    fn schema(&self) -> Result<u32, UpdaterError> {
+        match self.number::<u32>("schemaVersion")? {
+            1 => Ok(1),
+            version => Err(UpdaterError::InvalidResponse(format!(
+                "unsupported schemaVersion {version}"
+            ))),
+        }
+    }
+
+    fn array<T>(
+        &self,
+        key: &str,
+        parse: impl Fn(&str) -> Result<T, UpdaterError>,
+    ) -> Result<Vec<T>, UpdaterError> {
+        let source = self.required(key)?;
+        if !source.starts_with('[') {
+            return Err(Self::invalid(key));
+        }
+        let mut values = Vec::new();
+        let mut offset = 1;
+        loop {
+            offset = insights_skip_space(source, offset);
+            if source.as_bytes().get(offset) == Some(&b']') {
+                return Ok(values);
+            }
+            let end =
+                insights_json_value_end(source, offset, 0).ok_or_else(|| Self::invalid(key))?;
+            values.push(parse(&source[offset..end])?);
+            offset = insights_skip_space(source, end);
+            if source.as_bytes().get(offset) == Some(&b',') {
+                offset += 1;
+            }
+        }
+    }
+}
+
+impl LocalUpdateInfo {
+    fn from_json(source: &str) -> Result<Self, UpdaterError> {
+        let json = UpdaterJson::new(source)?;
+        Ok(Self {
+            version: json.string("version")?,
+            hash: json.string("hash")?,
+            base_url: json.string("baseUrl")?,
+            channel: json.string("channel")?,
+            name: json.string("name")?,
+            display_name: json.optional_string("displayName")?,
+            identifier: json.string("identifier")?,
+            managed: json.optional("managed", |source| {
+                let managed = UpdaterJson::new(source)?;
+                Ok(UpdaterManagedInfo {
+                    app_id: managed.string("appId")?,
+                    api_url: managed.optional_string("apiUrl")?,
+                    base_url: managed.optional_string("baseUrl")?,
+                })
+            })?,
+            update_authority: json.optional_string("updateAuthority")?,
+        })
+    }
+}
+
+impl UpdateInfo {
+    fn from_json(source: &str) -> Result<Self, UpdaterError> {
+        let json = UpdaterJson::new(source)?;
+        Ok(Self {
+            version: json.string("version")?,
+            hash: json.string("hash")?,
+            update_available: json.boolean("updateAvailable")?,
+            update_ready: json.boolean("updateReady")?,
+            error: json.string("error")?,
+        })
+    }
+}
+
+impl UpdaterOperationState {
+    fn parse(state: &str) -> Result<Self, UpdaterError> {
+        match state {
+            "idle" => Ok(Self::Idle),
+            "queued" => Ok(Self::Queued),
+            "running" => Ok(Self::Running),
+            "awaitingApproval" => Ok(Self::AwaitingApproval),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err(UpdaterError::InvalidResponse(format!(
+                "unknown operation state {state}"
+            ))),
+        }
+    }
+}
+
+impl UpdaterState {
+    fn from_json(source: &str) -> Result<Self, UpdaterError> {
+        let json = UpdaterJson::new(source)?;
+        Ok(Self {
+            schema_version: json.schema()?,
+            revision: json.number("revision")?,
+            operation_id: json.nullable_string("operationId")?,
+            operation: json.nullable_string("operation")?,
+            operation_state: UpdaterOperationState::parse(&json.string("operationState")?)?,
+            local_info: LocalUpdateInfo::from_json(json.required("localInfo")?)?,
+            update_info: UpdateInfo::from_json(json.required("updateInfo")?)?,
+            approval: json.nullable("approval", |source| {
+                let approval = UpdaterJson::new(source)?;
+                Ok(UpdaterApproval {
+                    id: approval.string("id")?,
+                    prepared_hash: approval.string("preparedHash")?,
+                })
+            })?,
+            quit_ready: json.boolean("quitReady")?,
+            channel_root: json.string("channelRoot")?,
+            operations: json.array("operations", |source| {
+                let operation = UpdaterJson::new(source)?;
+                Ok(UpdaterOperation {
+                    operation_id: operation.string("operationId")?,
+                    operation: operation.string("operation")?,
+                    state: UpdaterOperationState::parse(&operation.string("state")?)?,
+                    error: operation.nullable_string("error")?,
+                    update_info: operation.nullable("updateInfo", UpdateInfo::from_json)?,
+                })
+            })?,
+        })
+    }
+}
+
+impl UpdaterRequestResult {
+    fn from_json(source: &str) -> Result<Self, UpdaterError> {
+        let json = UpdaterJson::new(source)?;
+        let result = Self {
+            schema_version: json.schema()?,
+            accepted: json.boolean("accepted")?,
+            operation_id: json.nullable_string("operationId")?,
+            error: json.nullable_string("error")?,
+        };
+        if !result.accepted {
+            return Err(UpdaterError::Rejected {
+                operation_id: result.operation_id,
+                message: result
+                    .error
+                    .unwrap_or_else(|| "core rejected the request".into()),
+            });
+        }
+        if result.operation_id.as_deref().is_none_or(str::is_empty) || result.error.is_some() {
+            return Err(UpdaterError::InvalidResponse(
+                "accepted request has no operation ID or contains an error".into(),
+            ));
+        }
+        Ok(result)
+    }
+}
+
+impl UpdateStatusDetails {
+    fn from_json(source: &str) -> Result<Self, UpdaterError> {
+        let json = UpdaterJson::new(source)?;
+        let progress: Option<f64> = json.optional_number("progress")?;
+        if progress.is_some_and(|value| !value.is_finite()) {
+            return Err(UpdaterJson::invalid("progress"));
+        }
+        Ok(Self {
+            from_hash: json.optional_string("fromHash")?,
+            to_hash: json.optional_string("toHash")?,
+            current_hash: json.optional_string("currentHash")?,
+            latest_hash: json.optional_string("latestHash")?,
+            patch_number: json.optional_number("patchNumber")?,
+            total_patches_applied: json.optional_number("totalPatchesApplied")?,
+            progress,
+            bytes_downloaded: json.optional_number("bytesDownloaded")?,
+            total_bytes: json.optional_number("totalBytes")?,
+            used_patch_path: json.optional("usedPatchPath", |source| match source {
+                "true" => Ok(true),
+                "false" => Ok(false),
+                _ => Err(UpdaterJson::invalid("usedPatchPath")),
+            })?,
+            error_message: json.optional_string("errorMessage")?,
+            url: json.optional_string("url")?,
+            zstd_path: json.optional_string("zstdPath")?,
+            exit_code: json.optional_number("exitCode")?,
+        })
+    }
+}
+
+impl UpdaterEvents {
+    fn from_json(source: &str) -> Result<Self, UpdaterError> {
+        let json = UpdaterJson::new(source)?;
+        Ok(Self {
+            schema_version: json.schema()?,
+            next_sequence: json.number("nextSequence")?,
+            oldest_sequence: json.number("oldestSequence")?,
+            overflow: json.boolean("overflow")?,
+            entries: json.array("entries", |source| {
+                let event = UpdaterJson::new(source)?;
+                Ok(UpdaterEvent {
+                    sequence: event.number("sequence")?,
+                    operation_id: event.optional_string("operationId")?,
+                    status: event.string("status")?,
+                    message: event.string("message")?,
+                    timestamp: event.number("timestamp")?,
+                    details: event.optional("details", UpdateStatusDetails::from_json)?,
+                })
+            })?,
+        })
+    }
+}
+
+enum UpdaterRequest<'a> {
+    Check,
+    Download,
+    RequestApply,
+    ApproveApply {
+        operation_id: &'a str,
+        approval_id: &'a str,
+        approved: bool,
+    },
+    Reconcile,
+    Cancel {
+        operation_id: &'a str,
+    },
+}
+
+impl UpdaterRequest<'_> {
+    fn to_json(&self) -> String {
+        match self {
+            Self::ApproveApply { operation_id, approval_id, approved } => format!(
+                "{{\"schemaVersion\":1,\"action\":\"approveApply\",\"operationId\":{},\"approvalId\":{},\"approved\":{approved}}}",
+                json_string_literal(operation_id), json_string_literal(approval_id),
+            ),
+            Self::Cancel { operation_id } => format!(
+                "{{\"schemaVersion\":1,\"action\":\"cancel\",\"operationId\":{}}}", json_string_literal(operation_id),
+            ),
+            action => {
+                let name = match action {
+                    Self::Check => "check",
+                    Self::Download => "download",
+                    Self::RequestApply => "requestApply",
+                    Self::Reconcile => "reconcile",
+                    _ => unreachable!(),
+                };
+                format!("{{\"schemaVersion\":1,\"action\":\"{name}\"}}")
+            }
+        }
+    }
+}
+
+type UpdaterConfigureFn = unsafe extern "C" fn(*const c_char) -> bool;
+type UpdaterRequestFn = unsafe extern "C" fn(*const c_char) -> *mut c_char;
+type UpdaterGetStateFn = unsafe extern "C" fn() -> *mut c_char;
+type UpdaterGetEventsFn = unsafe extern "C" fn(u64, u32) -> *mut c_char;
+type UpdaterShutdownFn = unsafe extern "C" fn();
+
+#[derive(Default)]
+struct UpdaterSymbols {
+    configure: Option<UpdaterConfigureFn>,
+    request: Option<UpdaterRequestFn>,
+    get_state: Option<UpdaterGetStateFn>,
+    get_events: Option<UpdaterGetEventsFn>,
+    shutdown: Option<UpdaterShutdownFn>,
+}
+
+impl UpdaterSymbols {
+    fn load(lib: &dynlib::DynamicLibrary) -> Self {
+        Self {
+            configure: lib.symbol("updaterConfigure").ok(),
+            request: lib.symbol("updaterRequest").ok(),
+            get_state: lib.symbol("updaterGetState").ok(),
+            get_events: lib.symbol("updaterGetEvents").ok(),
+            shutdown: lib.symbol("updaterShutdown").ok(),
+        }
+    }
+
+    fn available(&self) -> Result<(), UpdaterError> {
+        for (present, name) in [
+            (self.configure.is_some(), "updaterConfigure"),
+            (self.request.is_some(), "updaterRequest"),
+            (self.get_state.is_some(), "updaterGetState"),
+            (self.get_events.is_some(), "updaterGetEvents"),
+            (self.shutdown.is_some(), "updaterShutdown"),
+        ] {
+            if !present {
+                return Err(UpdaterError::Unavailable(format!(
+                    "loaded core is missing {name}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+struct UpdaterLifecycle {
+    bundle_paths: BundlePaths,
+    configured: bool,
+}
+
+struct UpdaterBinding {
+    symbols: UpdaterSymbols,
+    // Serializes lazy configuration, API calls and shutdown. The core owns the
+    // asynchronous worker; this mutex never waits for operation completion.
+    lifecycle: Mutex<UpdaterLifecycle>,
+}
+
+impl UpdaterBinding {
+    fn new(symbols: UpdaterSymbols, paths: &BundlePaths) -> Self {
+        Self {
+            symbols,
+            lifecycle: Mutex::new(UpdaterLifecycle {
+                bundle_paths: BundlePaths {
+                    exe_dir: paths.exe_dir.clone(),
+                    resources_dir: paths.resources_dir.clone(),
+                },
+                configured: false,
+            }),
+        }
+    }
+
+    fn configuration_json(paths: &BundlePaths) -> Result<CString, UpdaterError> {
+        let exe_dir = paths
+            .exe_dir
+            .to_str()
+            .ok_or_else(|| UpdaterError::InvalidConfiguration("exeDir is not UTF-8".into()))?;
+        let resources_dir = paths.resources_dir.to_str().ok_or_else(|| {
+            UpdaterError::InvalidConfiguration("resourcesDir is not UTF-8".into())
+        })?;
+        let json = format!(
+            "{{\"schemaVersion\":1,\"exeDir\":{},\"resourcesDir\":{}}}",
+            json_string_literal(exe_dir),
+            json_string_literal(resources_dir)
+        );
+        CString::new(json).map_err(|error| UpdaterError::InvalidConfiguration(error.to_string()))
+    }
+
+    fn configure_locked(
+        &self,
+        lifecycle: &mut UpdaterLifecycle,
+        paths: &BundlePaths,
+        last_error: LastErrorFn,
+    ) -> Result<(), UpdaterError> {
+        self.symbols.available()?;
+        let json = Self::configuration_json(paths)?;
+        if !unsafe { (self.symbols.configure.unwrap())(json.as_ptr()) } {
+            return Err(Self::core_error(last_error, "updater configuration failed"));
+        }
+        lifecycle.bundle_paths = BundlePaths {
+            exe_dir: paths.exe_dir.clone(),
+            resources_dir: paths.resources_dir.clone(),
+        };
+        lifecycle.configured = true;
+        Ok(())
+    }
+
+    fn configure(&self, paths: &BundlePaths, last_error: LastErrorFn) -> Result<(), UpdaterError> {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.configure_locked(&mut lifecycle, paths, last_error)
+    }
+
+    fn ensure_configured(
+        &self,
+        lifecycle: &mut UpdaterLifecycle,
+        last_error: LastErrorFn,
+    ) -> Result<(), UpdaterError> {
+        self.symbols.available()?;
+        if !lifecycle.configured {
+            let paths = BundlePaths {
+                exe_dir: lifecycle.bundle_paths.exe_dir.clone(),
+                resources_dir: lifecycle.bundle_paths.resources_dir.clone(),
+            };
+            self.configure_locked(lifecycle, &paths, last_error)?;
+        }
+        Ok(())
+    }
+
+    fn core_error(last_error: LastErrorFn, fallback: &str) -> UpdaterError {
+        let message = c_string_to_string(unsafe { last_error() });
+        UpdaterError::CoreFailure(if message.is_empty() {
+            fallback.into()
+        } else {
+            message
+        })
+    }
+
+    fn take_string(
+        value: *mut c_char,
+        free: FreeCoreStringFn,
+        last_error: LastErrorFn,
+    ) -> Result<String, UpdaterError> {
+        if value.is_null() {
+            return Err(Self::core_error(
+                last_error,
+                "core returned a null updater response",
+            ));
+        }
+        let result = unsafe { CStr::from_ptr(value) }
+            .to_str()
+            .map(str::to_owned)
+            .map_err(|_| UpdaterError::InvalidResponse("core returned non-UTF-8 JSON".into()));
+        // Return ownership even when validation or decoding fails.
+        unsafe { free(value) };
+        result
+    }
+
+    fn request(
+        &self,
+        request: UpdaterRequest<'_>,
+        free: FreeCoreStringFn,
+        last_error: LastErrorFn,
+    ) -> Result<UpdaterRequestResult, UpdaterError> {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.ensure_configured(&mut lifecycle, last_error)?;
+        let json = CString::new(request.to_json())
+            .map_err(|error| UpdaterError::InvalidConfiguration(error.to_string()))?;
+        let response = unsafe { (self.symbols.request.unwrap())(json.as_ptr()) };
+        UpdaterRequestResult::from_json(&Self::take_string(response, free, last_error)?)
+    }
+
+    fn state(
+        &self,
+        free: FreeCoreStringFn,
+        last_error: LastErrorFn,
+    ) -> Result<UpdaterState, UpdaterError> {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.ensure_configured(&mut lifecycle, last_error)?;
+        let response = unsafe { (self.symbols.get_state.unwrap())() };
+        UpdaterState::from_json(&Self::take_string(response, free, last_error)?)
+    }
+
+    fn events(
+        &self,
+        after: u64,
+        limit: u32,
+        free: FreeCoreStringFn,
+        last_error: LastErrorFn,
+    ) -> Result<UpdaterEvents, UpdaterError> {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.ensure_configured(&mut lifecycle, last_error)?;
+        let response = unsafe { (self.symbols.get_events.unwrap())(after, limit) };
+        UpdaterEvents::from_json(&Self::take_string(response, free, last_error)?)
+    }
+
+    fn shutdown(&self) -> Result<(), UpdaterError> {
+        self.symbols.available()?;
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        unsafe { (self.symbols.shutdown.unwrap())() };
+        lifecycle.configured = false;
+        Ok(())
+    }
+
+    fn shutdown_if_configured(&self) {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if lifecycle.configured {
+            if let Some(shutdown) = self.symbols.shutdown {
+                unsafe { shutdown() };
+            }
+            lifecycle.configured = false;
+        }
+    }
+}
+
 type InsightsConfigureFn = unsafe extern "C" fn(*const c_char) -> bool;
 type InsightsTrackFn = unsafe extern "C" fn(*const c_char, *const c_char) -> bool;
 type InsightsIdentifyFn = unsafe extern "C" fn(*const c_char);
@@ -1452,6 +2154,7 @@ pub struct Core {
     installation: InstallationSymbols,
     insights: InsightsSymbols,
     insights_configured: AtomicBool,
+    updater: UpdaterBinding,
 }
 
 unsafe impl Send for Core {}
@@ -1459,7 +2162,10 @@ unsafe impl Sync for Core {}
 
 impl Core {
     pub fn load() -> Result<Self, String> {
-        let bundle_paths = resolve_bundle_paths()?;
+        Self::load_bundle(resolve_bundle_paths()?)
+    }
+
+    fn load_bundle(bundle_paths: BundlePaths) -> Result<Self, String> {
         let lib_path = bundle_paths.exe_dir.join(core_library_name());
         let lib = dynlib::DynamicLibrary::open(&lib_path)?;
 
@@ -1605,12 +2311,16 @@ impl Core {
 
         let installation = InstallationSymbols::load(&lib);
         let insights = InsightsSymbols::load(&lib);
+        // Loading the SDK does not configure or request an update. The core
+        // resolves bundle metadata only when the updater is first used.
+        let updater = UpdaterBinding::new(UpdaterSymbols::load(&lib), &bundle_paths);
         let core = Self {
             _lib: lib,
             symbols,
             installation,
             insights,
             insights_configured: AtomicBool::new(false),
+            updater,
         };
         if let Some(config) = installation_config_from_bundle(&bundle_paths) {
             // Identity is local and independent of the Insights background worker.
@@ -1621,6 +2331,93 @@ impl Core {
             }
         }
         Ok(core)
+    }
+
+    /// Configures the updater from bundle directories. The core reads all
+    /// metadata and owns installation identity. This does not check the network.
+    /// Other updater methods lazily configure the current bundle if needed.
+    /// The updater is process-wide; use one application Core handle.
+    pub fn updater_configure(&self, bundle_paths: &BundlePaths) -> Result<(), UpdaterError> {
+        self.updater
+            .configure(bundle_paths, self.symbols.last_error)
+    }
+
+    pub fn updater_local_info(&self) -> Result<LocalUpdateInfo, UpdaterError> {
+        Ok(self.updater_state()?.local_info)
+    }
+
+    /// Queues an asynchronous check. Poll state or events for completion.
+    pub fn updater_check(&self) -> Result<UpdaterRequestResult, UpdaterError> {
+        self.updater_request(UpdaterRequest::Check)
+    }
+
+    /// Queues preparation of the update selected by the core.
+    pub fn updater_download(&self) -> Result<UpdaterRequestResult, UpdaterError> {
+        self.updater_request(UpdaterRequest::Download)
+    }
+
+    /// Requests an approval token for a prepared update. This never quits.
+    /// Run the app's normal quit policy before approving, then wait for
+    /// `updater_state()?.quit_ready` before stopping the event loop.
+    pub fn updater_request_apply(&self) -> Result<UpdaterRequestResult, UpdaterError> {
+        self.updater_request(UpdaterRequest::RequestApply)
+    }
+
+    /// Approves or vetoes the exact operation and approval token returned by
+    /// the core. Approval is asynchronous and does not itself mean quit-ready.
+    pub fn updater_approve_apply(
+        &self,
+        operation_id: &str,
+        approval_id: &str,
+        approved: bool,
+    ) -> Result<UpdaterRequestResult, UpdaterError> {
+        self.updater_request(UpdaterRequest::ApproveApply {
+            operation_id,
+            approval_id,
+            approved,
+        })
+    }
+
+    /// Reconciles the previous apply result through the core.
+    pub fn updater_reconcile(&self) -> Result<UpdaterRequestResult, UpdaterError> {
+        self.updater_request(UpdaterRequest::Reconcile)
+    }
+
+    pub fn updater_cancel(&self, operation_id: &str) -> Result<UpdaterRequestResult, UpdaterError> {
+        self.updater_request(UpdaterRequest::Cancel { operation_id })
+    }
+
+    pub fn updater_state(&self) -> Result<UpdaterState, UpdaterError> {
+        self.updater
+            .state(self.symbols.free_core_string, self.symbols.last_error)
+    }
+
+    /// Reads the bounded event stream. Pass `next_sequence` unchanged as the
+    /// next `after` cursor. Start at zero; inspect `overflow` for missed events.
+    pub fn updater_events(&self, after: u64, limit: u32) -> Result<UpdaterEvents, UpdaterError> {
+        self.updater.events(
+            after,
+            limit,
+            self.symbols.free_core_string,
+            self.symbols.last_error,
+        )
+    }
+
+    /// Stops and joins core updater work. Also called before Core unloads.
+    /// Calling another updater method afterwards configures the worker again.
+    pub fn updater_shutdown(&self) -> Result<(), UpdaterError> {
+        self.updater.shutdown()
+    }
+
+    fn updater_request(
+        &self,
+        request: UpdaterRequest<'_>,
+    ) -> Result<UpdaterRequestResult, UpdaterError> {
+        self.updater.request(
+            request,
+            self.symbols.free_core_string,
+            self.symbols.last_error,
+        )
     }
 
     /// Configures only the persisted installation identity, without telemetry.
@@ -2920,6 +3717,8 @@ impl Core {
 
 impl Drop for Core {
     fn drop(&mut self) {
+        // The core joins its updater worker before the library can unload.
+        self.updater.shutdown_if_configured();
         self.insights_shutdown();
     }
 }
@@ -3672,5 +4471,562 @@ mod screen_capture_tests {
         let error = screen_capture_layout(Rect::new(0.0, 0.0, u32::MAX as f64, u32::MAX as f64))
             .unwrap_err();
         assert!(error.contains("overflowed u64"));
+    }
+}
+
+#[cfg(test)]
+mod updater_tests {
+    use super::*;
+
+    const LOCAL: &str = r#"{"version":"1.0","hash":"old","baseUrl":"https://example.invalid","channel":"stable","name":"Demo","displayName":"Demo 雪","identifier":"dev.demo","managed":{"appId":"app_1","apiUrl":"https://managed.invalid"},"updateAuthority":"direct"}"#;
+    const UPDATE: &str =
+        r#"{"version":"2.0","hash":"new","updateAvailable":true,"updateReady":true,"error":""}"#;
+    const ACCEPTED: &str =
+        r#"{"schemaVersion":1,"accepted":true,"operationId":"operation-1","error":null}"#;
+
+    fn state_json(quit_ready: bool) -> String {
+        format!(
+            r#"{{"schemaVersion":1,"revision":18446744073709551615,"operationId":"operation-1","operation":"requestApply","operationState":"awaitingApproval","localInfo":{LOCAL},"updateInfo":{UPDATE},"approval":{{"id":"approval-1","preparedHash":"new"}},"quitReady":{quit_ready},"channelRoot":"/profile/update","operations":[{{"operationId":"prior-check","operation":"check","state":"completed","error":null,"updateInfo":{UPDATE}}}]}}"#
+        )
+    }
+
+    fn events_json() -> &'static str {
+        r#"{"schemaVersion":1,"entries":[{"sequence":18446744073709551615,"operationId":"operation-1","status":"download-progress","message":"Downloading 雪","timestamp":-123,"details":{"fromHash":"old","toHash":"new","currentHash":"old","latestHash":"new","patchNumber":2,"totalPatchesApplied":1,"progress":12.5,"bytesDownloaded":18446744073709551615,"totalBytes":18446744073709551615,"usedPatchPath":true,"errorMessage":"","url":"https://example.invalid/update","zstdPath":"/app/bin/zstd","exitCode":null}}],"nextSequence":18446744073709551615,"oldestSequence":4,"overflow":true}"#
+    }
+
+    #[derive(Default)]
+    struct FakeCore {
+        configured: Vec<String>,
+        requests: Vec<String>,
+        event_cursors: Vec<(u64, u32)>,
+        calls: Vec<&'static str>,
+        freed: usize,
+        configuration_fails: bool,
+        response: Option<Vec<u8>>,
+        null_response: bool,
+    }
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    static FAKE: Mutex<Option<FakeCore>> = Mutex::new(None);
+
+    fn reset_fake() {
+        *FAKE.lock().unwrap() = Some(FakeCore::default());
+    }
+
+    fn fake_response(default: &str) -> *mut c_char {
+        let fake = FAKE.lock().unwrap();
+        let fake = fake.as_ref().unwrap();
+        if fake.null_response {
+            return ptr::null_mut();
+        }
+        let response = fake.response.as_deref().unwrap_or(default.as_bytes());
+        CString::new(response).unwrap().into_raw()
+    }
+
+    unsafe extern "C" fn configure(value: *const c_char) -> bool {
+        let mut fake = FAKE.lock().unwrap();
+        let fake = fake.as_mut().unwrap();
+        fake.calls.push("configure");
+        fake.configured.push(c_string_to_string(value));
+        !fake.configuration_fails
+    }
+
+    unsafe extern "C" fn request(value: *const c_char) -> *mut c_char {
+        {
+            let mut fake = FAKE.lock().unwrap();
+            let fake = fake.as_mut().unwrap();
+            fake.calls.push("request");
+            fake.requests.push(c_string_to_string(value));
+        }
+        fake_response(ACCEPTED)
+    }
+
+    unsafe extern "C" fn get_state() -> *mut c_char {
+        FAKE.lock().unwrap().as_mut().unwrap().calls.push("state");
+        fake_response(&state_json(false))
+    }
+
+    unsafe extern "C" fn get_events(after: u64, limit: u32) -> *mut c_char {
+        {
+            let mut fake = FAKE.lock().unwrap();
+            let fake = fake.as_mut().unwrap();
+            fake.calls.push("events");
+            fake.event_cursors.push((after, limit));
+        }
+        fake_response(events_json())
+    }
+
+    unsafe extern "C" fn shutdown() {
+        FAKE.lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .calls
+            .push("shutdown");
+    }
+
+    unsafe extern "C" fn free(value: *mut c_char) {
+        drop(CString::from_raw(value));
+        let mut fake = FAKE.lock().unwrap();
+        let fake = fake.as_mut().unwrap();
+        fake.calls.push("free");
+        fake.freed += 1;
+    }
+
+    unsafe extern "C" fn last_error() -> *const c_char {
+        b"native updater error\0".as_ptr().cast()
+    }
+
+    fn symbols() -> UpdaterSymbols {
+        UpdaterSymbols {
+            configure: Some(configure),
+            request: Some(request),
+            get_state: Some(get_state),
+            get_events: Some(get_events),
+            shutdown: Some(shutdown),
+        }
+    }
+
+    fn bundle() -> BundlePaths {
+        BundlePaths {
+            exe_dir: "/app/quote\" and 雪/bin".into(),
+            resources_dir: "/app/quote\" and 雪/Resources".into(),
+        }
+    }
+
+    #[test]
+    fn binding_is_lazy_and_only_passes_bundle_paths_to_core() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_fake();
+        let api = UpdaterBinding::new(symbols(), &bundle());
+        api.shutdown_if_configured();
+        assert!(FAKE.lock().unwrap().as_ref().unwrap().calls.is_empty());
+        let state = api.state(free, last_error).unwrap();
+        assert!(!state.quit_ready);
+        assert_eq!(state.approval.unwrap().id, "approval-1");
+        let events = api.events(u64::MAX - 1, 37, free, last_error).unwrap();
+        assert_eq!(events.next_sequence, u64::MAX);
+        let fake = FAKE.lock().unwrap();
+        let fake = fake.as_ref().unwrap();
+        assert_eq!(fake.configured.len(), 1);
+        let configuration = UpdaterJson::new(&fake.configured[0]).unwrap();
+        assert_eq!(configuration.0.len(), 3);
+        assert_eq!(configuration.schema().unwrap(), 1);
+        assert_eq!(
+            configuration.string("exeDir").unwrap(),
+            bundle().exe_dir.to_str().unwrap()
+        );
+        assert_eq!(
+            configuration.string("resourcesDir").unwrap(),
+            bundle().resources_dir.to_str().unwrap()
+        );
+        assert!(fake.requests.is_empty());
+        assert_eq!(fake.event_cursors, vec![(u64::MAX - 1, 37)]);
+        assert_eq!(fake.freed, 2);
+    }
+
+    #[test]
+    fn state_and_events_preserve_schema_types_and_approval_does_not_mean_quit_ready() {
+        let state = UpdaterState::from_json(&state_json(false)).unwrap();
+        assert_eq!(state.revision, u64::MAX);
+        assert_eq!(
+            state.operation_state,
+            UpdaterOperationState::AwaitingApproval
+        );
+        assert!(state.update_info.update_ready);
+        assert!(state.approval.is_some());
+        assert!(!state.quit_ready);
+        assert!(
+            UpdaterState::from_json(&state_json(true))
+                .unwrap()
+                .quit_ready
+        );
+        assert_eq!(state.local_info.display_name.as_deref(), Some("Demo 雪"));
+        assert_eq!(state.local_info.managed.unwrap().app_id, "app_1");
+        assert_eq!(state.operations[0].operation_id, "prior-check");
+        assert_eq!(
+            state.operations[0].update_info.as_ref().unwrap().hash,
+            "new"
+        );
+        let events = UpdaterEvents::from_json(events_json()).unwrap();
+        assert!(events.overflow);
+        assert_eq!(events.entries[0].timestamp, -123);
+        let details = events.entries[0].details.as_ref().unwrap();
+        assert_eq!(details.progress, Some(12.5));
+        assert_eq!(details.bytes_downloaded, Some(u64::MAX));
+        assert_eq!(details.exit_code, None);
+        assert_eq!(details.used_patch_path, Some(true));
+    }
+
+    #[test]
+    fn events_accept_operation_ids_omitted_by_the_core_serializer() {
+        for operation_field in ["", "\"operationId\":null,"] {
+            let source = format!(
+                r#"{{"schemaVersion":1,"entries":[{{"sequence":1,{operation_field}"status":"idle","message":"Updater configured","timestamp":123}}],"nextSequence":1,"oldestSequence":1,"overflow":false}}"#
+            );
+            let events = UpdaterEvents::from_json(&source).unwrap();
+            assert_eq!(events.entries[0].operation_id, None);
+            assert_eq!(events.entries[0].details, None);
+            assert_eq!(events.entries[0].status, "idle");
+        }
+    }
+
+    #[test]
+    fn requests_preserve_tokens_and_veto_without_quit_side_effects() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_fake();
+        let api = UpdaterBinding::new(symbols(), &bundle());
+        for request in [
+            UpdaterRequest::Check,
+            UpdaterRequest::Download,
+            UpdaterRequest::RequestApply,
+            UpdaterRequest::Reconcile,
+        ] {
+            assert!(api.request(request, free, last_error).unwrap().accepted);
+        }
+        api.request(
+            UpdaterRequest::ApproveApply {
+                operation_id: "operation\"雪",
+                approval_id: "token\\\n",
+                approved: false,
+            },
+            free,
+            last_error,
+        )
+        .unwrap();
+        api.request(
+            UpdaterRequest::Cancel {
+                operation_id: "operation\"雪",
+            },
+            free,
+            last_error,
+        )
+        .unwrap();
+        let fake = FAKE.lock().unwrap();
+        let fake = fake.as_ref().unwrap();
+        let actions: Vec<String> = fake
+            .requests
+            .iter()
+            .map(|request| UpdaterJson::new(request).unwrap().string("action").unwrap())
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                "check",
+                "download",
+                "requestApply",
+                "reconcile",
+                "approveApply",
+                "cancel"
+            ]
+        );
+        let approval = UpdaterJson::new(&fake.requests[4]).unwrap();
+        assert_eq!(approval.schema().unwrap(), 1);
+        assert_eq!(approval.string("operationId").unwrap(), "operation\"雪");
+        assert_eq!(approval.string("approvalId").unwrap(), "token\\\n");
+        assert!(!approval.boolean("approved").unwrap());
+        let cancel = UpdaterJson::new(&fake.requests[5]).unwrap();
+        assert_eq!(cancel.string("operationId").unwrap(), "operation\"雪");
+        assert_eq!(fake.freed, 6);
+        assert!(!fake.calls.contains(&"shutdown"));
+    }
+
+    #[test]
+    fn every_owned_response_is_freed_on_rejection_invalid_json_and_invalid_utf8() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_fake();
+        let api = UpdaterBinding::new(symbols(), &bundle());
+        let cases = [
+            br#"{"schemaVersion":1,"accepted":false,"operationId":"busy-operation","error":"updater busy"}"#.to_vec(),
+            b"{invalid".to_vec(),
+            vec![0xff],
+        ];
+        for response in cases {
+            FAKE.lock().unwrap().as_mut().unwrap().response = Some(response);
+            assert!(api
+                .request(UpdaterRequest::Check, free, last_error)
+                .is_err());
+        }
+        assert_eq!(FAKE.lock().unwrap().as_ref().unwrap().freed, 3);
+        FAKE.lock().unwrap().as_mut().unwrap().null_response = true;
+        assert!(
+            matches!(api.state(free, last_error), Err(UpdaterError::CoreFailure(message)) if message == "native updater error")
+        );
+        assert_eq!(FAKE.lock().unwrap().as_ref().unwrap().freed, 3);
+    }
+
+    #[test]
+    fn missing_symbols_and_configuration_failures_do_not_start_operations() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_fake();
+        let missing = UpdaterBinding::new(UpdaterSymbols::default(), &bundle());
+        assert!(matches!(
+            missing.state(free, last_error),
+            Err(UpdaterError::Unavailable(_))
+        ));
+        assert!(matches!(
+            missing.shutdown(),
+            Err(UpdaterError::Unavailable(_))
+        ));
+        let mut incomplete_symbols = symbols();
+        incomplete_symbols.shutdown = None;
+        let incomplete = UpdaterBinding::new(incomplete_symbols, &bundle());
+        assert!(
+            matches!(incomplete.request(UpdaterRequest::Check, free, last_error), Err(UpdaterError::Unavailable(message)) if message.contains("updaterShutdown"))
+        );
+        assert!(FAKE.lock().unwrap().as_ref().unwrap().calls.is_empty());
+        FAKE.lock().unwrap().as_mut().unwrap().configuration_fails = true;
+        let api = UpdaterBinding::new(symbols(), &bundle());
+        assert!(
+            matches!(api.request(UpdaterRequest::Check, free, last_error), Err(UpdaterError::CoreFailure(message)) if message == "native updater error")
+        );
+        let fake = FAKE.lock().unwrap();
+        let fake = fake.as_ref().unwrap();
+        assert_eq!(fake.calls, vec!["configure"]);
+        assert!(!api.lifecycle.lock().unwrap().configured);
+    }
+
+    #[test]
+    fn shutdown_joins_core_and_next_use_reconfigures_without_implicit_requests() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_fake();
+        let api = UpdaterBinding::new(symbols(), &bundle());
+        api.state(free, last_error).unwrap();
+        api.shutdown().unwrap();
+        assert!(!api.lifecycle.lock().unwrap().configured);
+        api.state(free, last_error).unwrap();
+        api.shutdown().unwrap();
+        let fake = FAKE.lock().unwrap();
+        let fake = fake.as_ref().unwrap();
+        assert_eq!(
+            fake.calls,
+            vec![
+                "configure",
+                "state",
+                "free",
+                "shutdown",
+                "configure",
+                "state",
+                "free",
+                "shutdown"
+            ]
+        );
+        assert!(fake.requests.is_empty());
+    }
+
+    #[test]
+    fn core_drop_shuts_down_before_the_native_library_unloads() {
+        use std::process::Command;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        struct FixtureDir(PathBuf);
+        impl Drop for FixtureDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = FixtureDir(std::env::temp_dir().join(format!(
+            "electrobun-rust-updater-{}-{unique}",
+            std::process::id()
+        )));
+        fs::create_dir_all(directory.0.join("Resources")).unwrap();
+        let log = directory.0.join("calls.log");
+        let c_file = directory.0.join("core_fixture.c");
+        let library = directory.0.join(core_library_name());
+        let mut source = format!(
+            r#"
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#define EB_EXPORT __declspec(dllexport)
+#define fixture_strdup _strdup
+static void record(const char *value) {{ FILE *f = _wfopen(L{log_path}, L"ab"); if (f) {{ fputs(value, f); fclose(f); }} }}
+#else
+#define EB_EXPORT __attribute__((visibility("default")))
+#define fixture_strdup strdup
+static void record(const char *value) {{ FILE *f = fopen({log_path}, "ab"); if (f) {{ fputs(value, f); fclose(f); }} }}
+#endif
+EB_EXPORT const char *electrobun_core_last_error(void) {{ return ""; }}
+EB_EXPORT void setExitOnLastWindowClosed(bool enabled) {{ (void)enabled; }}
+EB_EXPORT void setQuitRequestedHandler(void (*handler)(void)) {{ (void)handler; }}
+EB_EXPORT void stopEventLoop(void) {{ record("quit\n"); }}
+EB_EXPORT void forceExit(int code) {{ (void)code; record("force-exit\n"); }}
+EB_EXPORT void freeCoreString(char *value) {{ record("free\n"); free(value); }}
+EB_EXPORT bool updaterConfigure(const char *json) {{ (void)json; record("configure\n"); return true; }}
+EB_EXPORT char *updaterRequest(const char *json) {{ (void)json; record("request\n"); return fixture_strdup({accepted}); }}
+EB_EXPORT char *updaterGetState(void) {{ record("state\n"); return fixture_strdup({state}); }}
+EB_EXPORT char *updaterGetEvents(uint64_t after, uint32_t limit) {{ (void)after; (void)limit; return fixture_strdup({events}); }}
+EB_EXPORT void updaterShutdown(void) {{ record("shutdown\n"); }}
+#ifdef _WIN32
+BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {{
+    (void)instance; (void)reserved;
+    if (reason == DLL_PROCESS_DETACH) record("unload\n");
+    return TRUE;
+}}
+#else
+__attribute__((destructor)) static void fixture_unload(void) {{ record("unload\n"); }}
+#endif
+"#,
+            log_path = json_string_literal(log.to_str().unwrap()),
+            accepted = json_string_literal(ACCEPTED),
+            state = json_string_literal(&state_json(false)),
+            events = json_string_literal(events_json())
+        );
+        // The fixture supplies inert exports for the rest of the required GUI
+        // ABI; updater and lifetime entry points above have their exact types.
+        let sdk_source = include_str!("electrobun.rs");
+        let table = sdk_source
+            .split("let symbols = Symbols {")
+            .nth(1)
+            .unwrap()
+            .split("\n        };")
+            .next()
+            .unwrap();
+        let implemented = [
+            "electrobun_core_last_error",
+            "setExitOnLastWindowClosed",
+            "setQuitRequestedHandler",
+            "stopEventLoop",
+            "forceExit",
+            "freeCoreString",
+        ];
+        for symbol in table
+            .split(".symbol(\"")
+            .skip(1)
+            .map(|part| part.split('"').next().unwrap())
+        {
+            if !implemented.contains(&symbol) {
+                source.push_str(&format!("EB_EXPORT void {symbol}(void) {{}}\n"));
+            }
+        }
+        fs::write(&c_file, source).unwrap();
+        // Pass the executable path directly so spaces work on every platform.
+        // Darwin uses the system linker: the vendored Zig linker does not run
+        // this fixture's C destructor at dlclose. Linux/Windows CI can use Zig.
+        let zig = std::env::var_os("ELECTROBUN_TEST_ZIG")
+            .filter(|_| !cfg!(target_os = "macos"));
+        let mut compiler = if let Some(zig) = zig {
+            let mut command = Command::new(zig);
+            // Keep the fixture's lifetime independent of sanitizer runtimes.
+            command.args(["cc", "-fno-sanitize=all"]);
+            if cfg!(windows) {
+                command.args([
+                    "-target",
+                    if cfg!(target_arch = "aarch64") {
+                        "aarch64-windows-gnu"
+                    } else {
+                        "x86_64-windows-gnu"
+                    },
+                ]);
+            }
+            command
+        } else {
+            Command::new("cc")
+        };
+        compiler.arg(if cfg!(target_os = "macos") {
+            "-dynamiclib"
+        } else {
+            "-shared"
+        });
+        if cfg!(unix) {
+            compiler.arg("-fPIC");
+        }
+        let compiled = compiler
+            .arg("-o")
+            .arg(&library)
+            .arg(&c_file)
+            .output()
+            .expect("cannot execute fixture C compiler; set ELECTROBUN_TEST_ZIG to a Zig executable");
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        let core = Core::load_bundle(BundlePaths {
+            exe_dir: directory.0.clone(),
+            resources_dir: directory.0.join("Resources"),
+        })
+        .unwrap();
+        assert!(
+            !log.exists(),
+            "loading the SDK called an updater entry point"
+        );
+        let request = core.updater_request_apply().unwrap();
+        assert!(request.accepted);
+        let state = core.updater_state().unwrap();
+        assert!(state.approval.is_some());
+        assert!(!state.quit_ready);
+        core.updater_approve_apply("operation-1", "approval-1", false)
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(&log).unwrap(),
+            "configure\nrequest\nfree\nstate\nfree\nrequest\nfree\n"
+        );
+        drop(core);
+        assert_eq!(
+            fs::read_to_string(&log).unwrap(),
+            "configure\nrequest\nfree\nstate\nfree\nrequest\nfree\nshutdown\nunload\n"
+        );
+    }
+
+    #[test]
+    fn rejects_missing_fields_wrong_types_duplicate_keys_and_unsupported_schemas() {
+        for source in [
+            "{}",
+            "null",
+            "[]",
+            "{",
+            r#"{"schemaVersion":2,"accepted":true,"operationId":"id","error":null}"#,
+            r#"{"schemaVersion":1,"accepted":"true","operationId":"id","error":null}"#,
+            r#"{"schemaVersion":1,"accepted":true,"operationId":null,"error":null}"#,
+            r#"{"schemaVersion":1,"accepted":true,"operationId":"id"}"#,
+            r#"{"schemaVersion":1,"accepted":true,"operationId":"id","error":"failure"}"#,
+            r#"{"schemaVersion":1,"schemaVersion":1,"accepted":true,"operationId":"id","error":null}"#,
+        ] {
+            assert!(
+                matches!(
+                    UpdaterRequestResult::from_json(source),
+                    Err(UpdaterError::InvalidResponse(_))
+                ),
+                "{source}"
+            );
+        }
+        for source in [
+            state_json(false).replace("\"quitReady\":false", "\"quitReady\":\"false\""),
+            state_json(false).replace(
+                "\"operationState\":\"awaitingApproval\"",
+                "\"operationState\":\"quitNow\"",
+            ),
+            state_json(false).replace("\"revision\":18446744073709551615", "\"revision\":-1"),
+            state_json(false).replace("\"operations\":[", "\"operations\":{\"items\":["),
+        ] {
+            assert!(matches!(
+                UpdaterState::from_json(&source),
+                Err(UpdaterError::InvalidResponse(_))
+            ));
+        }
+        let rejection = UpdaterRequestResult::from_json(
+            r#"{"schemaVersion":1,"accepted":false,"operationId":"id","error":"stale approval"}"#,
+        );
+        assert_eq!(
+            rejection.unwrap_err(),
+            UpdaterError::Rejected {
+                operation_id: Some("id".into()),
+                message: "stale approval".into()
+            }
+        );
+        let overflow = events_json().replace("\"progress\":12.5", "\"progress\":1e999");
+        assert!(matches!(
+            UpdaterEvents::from_json(&overflow),
+            Err(UpdaterError::InvalidResponse(_))
+        ));
     }
 }

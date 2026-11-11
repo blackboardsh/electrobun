@@ -104,10 +104,12 @@ hash-based behavior when a version number is reused.
 
 Publishing changes which uploaded release the update URL serves. It does not
 rename or copy the artifact files. Publishing only macOS leaves Windows and
-Linux on their existing releases. Bun/Cottontail apps can check for updates
-through the [Updater API](/electrobun/apis/updater/); native main processes use
-their own updater integration, as they do for a static host. Enabling hosting
-does not schedule update checks inside the app.
+Linux on their existing releases. All main-process runtimes check and install
+through the same core-owned [Updater API](/electrobun/apis/updater/).
+[Zig, Rust, Go, and Odin](/electrobun/apis/updater-native/) use typed queued
+operations and explicitly approve application shutdown before apply handoff.
+The core supplies metadata, shared installation identity, paths, and helper
+integration. Enabling hosting does not schedule update checks inside the app.
 
 ## Publish to prerelease installs first
 

@@ -113,7 +113,8 @@ async function main() {
             ? ["build-exe", `-femit-bin=${executable}`, "--cache-dir", join(directory, "cache"), ...moduleOptions,
               "--dep", "core_synchronization", `-Mroot=${join(packageRoot, "scripts", "core-synchronization-stress.zig")}`,
               ...moduleOptions, `-Mcore_synchronization=${implementation}`]
-            : ["test", join(packageRoot, "src", "core", "main.zig"), "-lc", "--test-no-exec", `-femit-bin=${executable}`,
+            : ["test", join(packageRoot, "src", "core", "main.zig"), "-cflags", "-std=c11", "--",
+              join(packageRoot, "src", "core", "updater_spawn.c"), "-lc", "--test-no-exec", `-femit-bin=${executable}`,
               "--cache-dir", join(directory, "cache"), ...moduleOptions];
           console.log(`Building Core synchronization: ${label}`);
           const build = await runSynchronizationProcess(zig, args, directory, options.compileTimeoutMs);

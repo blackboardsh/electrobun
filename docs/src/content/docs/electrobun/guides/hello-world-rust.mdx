@@ -288,8 +288,13 @@ source files change. Press Ctrl+C to stop it.
   webviews from a spawned thread after a short delay (~150 ms) so the loop
   is running first, and call `stop_event_loop` from the window close
   callback or the process keeps running.
-- **Errors are `Result<_, String>`.** Every core call returns a `Result`;
-  the error strings come from the core's `electrobun_core_last_error`.
+- **Fallible calls return `Result`.** Most core calls use `Result<_, String>`
+  with error text from the core's `electrobun_core_last_error`.
+  Updater calls use the typed `UpdaterError` enum.
+- **Updates run in the shared core.** `updater_check`, `updater_download`, and
+  `updater_request_apply` queue work; `updater_state` and `updater_events`
+  return owned typed values. Follow the [native updater flow](/electrobun/apis/updater-native/)
+  to approve or veto apply and wait for `quit_ready` before normal teardown.
 - **Template.** `hutch electrobun init rust-app --template=rust-flock-wgpu`
   scaffolds a full example with RPC messaging and WGPU rendering.
 

@@ -911,10 +911,144 @@ fn insightsConfigurationJson(
     }, .{});
 }
 
+/// The native updater reads all app identity, release policy, installation ID,
+/// and writable roots from the bundle. Configuration performs no update request.
+pub const UpdaterConfig = struct {
+    exeDir: []const u8,
+    resourcesDir: []const u8,
+};
+
+pub const UpdaterOperationState = enum {
+    idle,
+    queued,
+    running,
+    awaitingApproval,
+    completed,
+    failed,
+    cancelled,
+};
+
+pub const UpdaterManagedInfo = struct {
+    appId: []const u8,
+    apiUrl: ?[]const u8 = null,
+    baseUrl: ?[]const u8 = null,
+};
+
+pub const UpdaterLocalInfo = struct {
+    version: []const u8,
+    hash: []const u8,
+    baseUrl: []const u8,
+    channel: []const u8,
+    name: []const u8,
+    displayName: ?[]const u8 = null,
+    identifier: []const u8,
+    managed: ?UpdaterManagedInfo = null,
+    updateAuthority: ?[]const u8 = null,
+};
+
+pub const UpdaterUpdateInfo = struct {
+    version: []const u8,
+    hash: []const u8,
+    updateAvailable: bool,
+    updateReady: bool,
+    @"error": []const u8,
+};
+
+/// Acceptance means queued/recorded, not that the requested operation succeeded.
+/// Inspect accepted/error, retain operationId, then poll state or events.
+pub const UpdaterRequestResult = struct {
+    schemaVersion: u32,
+    accepted: bool,
+    operationId: ?[]const u8,
+    @"error": ?[]const u8,
+};
+
+pub const UpdaterApproval = struct {
+    id: []const u8,
+    preparedHash: []const u8,
+};
+
+pub const UpdaterOperation = struct {
+    operationId: []const u8,
+    /// Kept as a string so newer core operation names remain inspectable.
+    operation: []const u8,
+    state: UpdaterOperationState,
+    @"error": ?[]const u8,
+    updateInfo: ?UpdaterUpdateInfo,
+};
+
+pub const UpdaterState = struct {
+    schemaVersion: u32,
+    revision: u64,
+    operationId: ?[]const u8,
+    operation: ?[]const u8,
+    operationState: UpdaterOperationState,
+    localInfo: UpdaterLocalInfo,
+    updateInfo: UpdaterUpdateInfo,
+    approval: ?UpdaterApproval,
+    /// True only after helper handoff. The SDK never quits the app for you.
+    quitReady: bool,
+    channelRoot: []const u8,
+    operations: []const UpdaterOperation,
+};
+
+pub const UpdaterEventDetails = struct {
+    fromHash: ?[]const u8 = null,
+    toHash: ?[]const u8 = null,
+    currentHash: ?[]const u8 = null,
+    latestHash: ?[]const u8 = null,
+    patchNumber: ?u64 = null,
+    totalPatchesApplied: ?u64 = null,
+    progress: ?f64 = null,
+    bytesDownloaded: ?u64 = null,
+    totalBytes: ?u64 = null,
+    usedPatchPath: ?bool = null,
+    errorMessage: ?[]const u8 = null,
+    url: ?[]const u8 = null,
+    zstdPath: ?[]const u8 = null,
+    exitCode: ?i64 = null,
+};
+
+pub const UpdaterEvent = struct {
+    sequence: u64,
+    operationId: ?[]const u8 = null,
+    /// Status strings intentionally tolerate additions in newer core releases.
+    status: []const u8,
+    message: []const u8,
+    timestamp: i64,
+    details: ?UpdaterEventDetails = null,
+};
+
+pub const UpdaterEvents = struct {
+    schemaVersion: u32,
+    entries: []const UpdaterEvent,
+    /// Pass this cursor as after_sequence in the next poll.
+    nextSequence: u64,
+    oldestSequence: u64,
+    /// Older entries were evicted. Read state to recover operation outcomes.
+    overflow: bool,
+};
+
+fn parseUpdaterJson(comptime T: type, allocator: std.mem.Allocator, json: []const u8) !std.json.Parsed(T) {
+    // Input is a temporary core-owned/copy buffer; every returned string must
+    // outlive it, including nested operation, approval, and event fields.
+    const parsed = try std.json.parseFromSlice(T, allocator, json, .{
+        .allocate = .alloc_always,
+        .ignore_unknown_fields = true,
+    });
+    errdefer parsed.deinit();
+    if (parsed.value.schemaVersion != 1) return error.UnsupportedUpdaterSchema;
+    return parsed;
+}
+
 pub const Core = struct {
     allocator: std.mem.Allocator,
     lib: DynamicLibrary,
     symbols: Symbols,
+    // The updater is process-global. Only a handle that configured it owns
+    // automatic teardown; a handle whose configuration never succeeded must
+    // not stop another one. Normal apps use one Core handle per process.
+    updater_configured: bool = false,
 
     const LastErrorFn = *const fn () callconv(.c) [*:0]const u8;
     const RunMainThreadFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, c_int) callconv(.c) c_int;
@@ -980,6 +1114,11 @@ pub const Core = struct {
     const InsightsVoidFn = *const fn () callconv(.c) void;
     const InsightsSetEnabledFn = *const fn (bool) callconv(.c) void;
     const InsightsGetInstallationIdFn = *const fn () callconv(.c) ?[*:0]u8;
+    const UpdaterConfigureFn = *const fn ([*:0]const u8) callconv(.c) bool;
+    const UpdaterRequestFn = *const fn ([*:0]const u8) callconv(.c) ?[*:0]u8;
+    const UpdaterGetStateFn = *const fn () callconv(.c) ?[*:0]u8;
+    const UpdaterGetEventsFn = *const fn (u64, u32) callconv(.c) ?[*:0]u8;
+    const UpdaterShutdownFn = *const fn () callconv(.c) void;
     const WebviewOpenDevToolsFn = *const fn (u32) callconv(.c) void;
     const WebviewCloseDevToolsFn = *const fn (u32) callconv(.c) void;
     const WebviewToggleDevToolsFn = *const fn (u32) callconv(.c) void;
@@ -1112,6 +1251,11 @@ pub const Core = struct {
         insights_get_installation_id: ?InsightsGetInstallationIdFn = null,
         insights_flush: ?InsightsVoidFn = null,
         insights_shutdown: ?InsightsVoidFn = null,
+        updater_configure: ?UpdaterConfigureFn = null,
+        updater_request: ?UpdaterRequestFn = null,
+        updater_get_state: ?UpdaterGetStateFn = null,
+        updater_get_events: ?UpdaterGetEventsFn = null,
+        updater_shutdown: ?UpdaterShutdownFn = null,
         webview_open_devtools: WebviewOpenDevToolsFn,
         webview_close_devtools: WebviewCloseDevToolsFn,
         webview_toggle_devtools: WebviewToggleDevToolsFn,
@@ -1263,6 +1407,11 @@ pub const Core = struct {
                 .insights_get_installation_id = lib.lookup(InsightsGetInstallationIdFn, "insightsGetInstallationId"),
                 .insights_flush = lib.lookup(InsightsVoidFn, "insightsFlush"),
                 .insights_shutdown = lib.lookup(InsightsVoidFn, "insightsShutdown"),
+                .updater_configure = lib.lookup(UpdaterConfigureFn, "updaterConfigure"),
+                .updater_request = lib.lookup(UpdaterRequestFn, "updaterRequest"),
+                .updater_get_state = lib.lookup(UpdaterGetStateFn, "updaterGetState"),
+                .updater_get_events = lib.lookup(UpdaterGetEventsFn, "updaterGetEvents"),
+                .updater_shutdown = lib.lookup(UpdaterShutdownFn, "updaterShutdown"),
                 .webview_open_devtools = lib.lookup(WebviewOpenDevToolsFn, "webviewOpenDevTools") orelse return error.MissingCoreSymbol,
                 .webview_close_devtools = lib.lookup(WebviewCloseDevToolsFn, "webviewCloseDevTools") orelse return error.MissingCoreSymbol,
                 .webview_toggle_devtools = lib.lookup(WebviewToggleDevToolsFn, "webviewToggleDevTools") orelse return error.MissingCoreSymbol,
@@ -1344,11 +1493,15 @@ pub const Core = struct {
         // configured separately and remains off unless explicitly enabled.
         // Neither service configuration changes whether the app can start.
         core.configureCloudServicesFromBundle(&bundle_paths) catch {};
+        // Local metadata only: startup never checks, downloads, or applies.
+        // Updater failures do not prevent the application's normal startup.
+        core.updaterConfigure(.{ .exeDir = bundle_paths.exe_dir, .resourcesDir = bundle_paths.resources_dir }) catch {};
 
         return core;
     }
 
     pub fn close(self: *Core) void {
+        self.shutdownConfiguredUpdater();
         self.insightsShutdown();
         // Drop the core's pointer to our trampoline before unloading the
         // library so a late quit request can't jump into freed code.
@@ -2047,6 +2200,132 @@ pub const Core = struct {
     /// Stops the worker and persists pending events before native-library unload.
     pub fn insightsShutdown(self: *Core) void {
         if (self.symbols.insights_shutdown) |shutdown| shutdown();
+    }
+
+    /// Whether the complete native updater ABI is present. Older cores remain
+    /// usable; updater calls return UpdaterUnavailable instead of falling back.
+    pub fn updaterAvailable(self: *const Core) bool {
+        return self.symbols.updater_configure != null and
+            self.symbols.updater_request != null and
+            self.symbols.updater_get_state != null and
+            self.symbols.updater_get_events != null and
+            self.symbols.updater_shutdown != null;
+    }
+
+    pub fn updaterConfigure(self: *Core, config: UpdaterConfig) !void {
+        if (!self.updaterAvailable()) return error.UpdaterUnavailable;
+        if (std.mem.indexOfScalar(u8, config.exeDir, 0) != null or
+            std.mem.indexOfScalar(u8, config.resourcesDir, 0) != null) return error.InvalidUpdaterConfiguration;
+        const json = try std.json.Stringify.valueAlloc(self.allocator, .{
+            .schemaVersion = @as(u32, 1),
+            .exeDir = config.exeDir,
+            .resourcesDir = config.resourcesDir,
+        }, .{});
+        defer self.allocator.free(json);
+        const json_z = try self.dupeZ(json);
+        defer self.allocator.free(json_z);
+        if (!self.symbols.updater_configure.?(json_z.ptr)) return error.InvalidUpdaterConfiguration;
+        self.updater_configured = true;
+    }
+
+    /// Raw JSON results are copies owned by core.allocator. Typed methods below
+    /// return std.json.Parsed(T); call deinit() after consuming each result.
+    pub fn updaterRequestJson(self: *Core, request_json: []const u8) ![]u8 {
+        if (!self.updaterAvailable()) return error.UpdaterUnavailable;
+        if (std.mem.indexOfScalar(u8, request_json, 0) != null) return error.InvalidUpdaterRequest;
+        const request_z = try self.dupeZ(request_json);
+        defer self.allocator.free(request_z);
+        return self.copyUpdaterJson(self.symbols.updater_request.?(request_z.ptr));
+    }
+
+    pub fn updaterGetStateJson(self: *Core) ![]u8 {
+        if (!self.updaterAvailable()) return error.UpdaterUnavailable;
+        return self.copyUpdaterJson(self.symbols.updater_get_state.?());
+    }
+
+    pub fn updaterGetEventsJson(self: *Core, after_sequence: u64, limit: u32) ![]u8 {
+        if (!self.updaterAvailable()) return error.UpdaterUnavailable;
+        return self.copyUpdaterJson(self.symbols.updater_get_events.?(after_sequence, limit));
+    }
+
+    fn copyUpdaterJson(self: *Core, response: ?[*:0]u8) ![]u8 {
+        const json = response orelse return error.UpdaterResponseUnavailable;
+        defer self.freeCoreString(json);
+        return self.allocator.dupe(u8, std.mem.span(json));
+    }
+
+    fn updaterRequest(self: *Core, request: anytype) !std.json.Parsed(UpdaterRequestResult) {
+        const json = try std.json.Stringify.valueAlloc(self.allocator, request, .{});
+        defer self.allocator.free(json);
+        const response = try self.updaterRequestJson(json);
+        defer self.allocator.free(response);
+        return parseUpdaterJson(UpdaterRequestResult, self.allocator, response);
+    }
+
+    /// Queue a network check. This call does not wait for the request to finish.
+    pub fn updaterCheck(self: *Core) !std.json.Parsed(UpdaterRequestResult) {
+        return self.updaterRequest(.{ .schemaVersion = @as(u32, 1), .action = "check" });
+    }
+
+    /// Queue download/preparation in the core worker; safe to call from UI code.
+    pub fn updaterDownload(self: *Core) !std.json.Parsed(UpdaterRequestResult) {
+        return self.updaterRequest(.{ .schemaVersion = @as(u32, 1), .action = "download" });
+    }
+
+    /// Request apply preparation. Poll for awaitingApproval, save/validate app
+    /// state, then explicitly approve or veto the returned operation/approval.
+    /// This does not create an update helper or invoke a quit handler.
+    pub fn updaterRequestApply(self: *Core) !std.json.Parsed(UpdaterRequestResult) {
+        return self.updaterRequest(.{ .schemaVersion = @as(u32, 1), .action = "requestApply" });
+    }
+
+    /// Approval acceptance is not permission to exit. Wait for the matching
+    /// state's quitReady flag, then initiate the app's ordinary quit workflow.
+    /// Passing approved=false vetoes this apply without starting a helper.
+    pub fn updaterApproveApply(self: *Core, operation_id: []const u8, approval_id: []const u8, approved: bool) !std.json.Parsed(UpdaterRequestResult) {
+        return self.updaterRequest(.{
+            .schemaVersion = @as(u32, 1),
+            .action = "approveApply",
+            .operationId = operation_id,
+            .approvalId = approval_id,
+            .approved = approved,
+        });
+    }
+
+    pub fn updaterReconcile(self: *Core) !std.json.Parsed(UpdaterRequestResult) {
+        return self.updaterRequest(.{ .schemaVersion = @as(u32, 1), .action = "reconcile" });
+    }
+
+    pub fn updaterCancel(self: *Core, operation_id: []const u8) !std.json.Parsed(UpdaterRequestResult) {
+        return self.updaterRequest(.{ .schemaVersion = @as(u32, 1), .action = "cancel", .operationId = operation_id });
+    }
+
+    /// Snapshot includes local bundle metadata, update readiness, approval, and
+    /// recent operation outcomes. Polling never invokes runtime callbacks.
+    pub fn updaterGetState(self: *Core) !std.json.Parsed(UpdaterState) {
+        const json = try self.updaterGetStateJson();
+        defer self.allocator.free(json);
+        return parseUpdaterJson(UpdaterState, self.allocator, json);
+    }
+
+    /// Poll on the application's own thread. An empty entries slice is normal.
+    /// On overflow, read updaterGetState() to recover recent operation results.
+    pub fn updaterGetEvents(self: *Core, after_sequence: u64, limit: u32) !std.json.Parsed(UpdaterEvents) {
+        const json = try self.updaterGetEventsJson(after_sequence, limit);
+        defer self.allocator.free(json);
+        return parseUpdaterJson(UpdaterEvents, self.allocator, json);
+    }
+
+    /// Stops and joins native updater work before library unload. A helper that
+    /// already completed handoff remains responsible for the approved update.
+    /// Explicit shutdown is always available, including on an unused handle.
+    pub fn updaterShutdown(self: *Core) void {
+        if (self.symbols.updater_shutdown) |shutdown| shutdown();
+        self.updater_configured = false;
+    }
+
+    fn shutdownConfiguredUpdater(self: *Core) void {
+        if (self.updater_configured) self.updaterShutdown();
     }
 
     pub fn sendInternalMessageToWebview(self: *Core, webview_id: u32, message: anytype) !void {
@@ -2985,4 +3264,273 @@ test "Insights bindings preserve native arguments and string ownership" {
     defer std.testing.allocator.free(id);
     try std.testing.expectEqualStrings("installation", id);
     try std.testing.expectEqual(@as(usize, 1), Native.free_count);
+}
+
+const UpdaterBindingTestNative = struct {
+    var response: [16384:0]u8 = undefined;
+    var request: [2048]u8 = undefined;
+    var request_len: usize = 0;
+    var native_calls: usize = 0;
+    var free_count: usize = 0;
+    var shutdown_count: usize = 0;
+    var quit_count: usize = 0;
+    var configured: bool = true;
+    var return_null: bool = false;
+    var after: u64 = 0;
+    var limit: u32 = 0;
+
+    const accepted = "{\"schemaVersion\":1,\"accepted\":true,\"operationId\":\"0123456789abcdef0123456789abcdef\",\"error\":null}";
+    const state =
+        \\{"schemaVersion":1,"revision":7,"operationId":"0123456789abcdef0123456789abcdef","operation":"requestApply","operationState":"awaitingApproval",
+        \\ "localInfo":{"version":"1.0.0","hash":"old","baseUrl":"https://updates.example","channel":"stable","name":"Example","identifier":"dev.example"},
+        \\ "updateInfo":{"version":"1.0.1","hash":"new","updateAvailable":true,"updateReady":true,"error":""},
+        \\ "approval":{"id":"fedcba9876543210fedcba9876543210","preparedHash":"new"},"quitReady":false,"channelRoot":"/profile/stable",
+        \\ "operations":[{"operationId":"previous","operation":"download","state":"completed","error":null,"updateInfo":null}],"futureField":true}
+    ;
+
+    fn reset() Core {
+        native_calls = 0;
+        free_count = 0;
+        shutdown_count = 0;
+        quit_count = 0;
+        request_len = 0;
+        configured = true;
+        return_null = false;
+        after = 0;
+        limit = 0;
+        setResponse(accepted);
+        var core: Core = undefined;
+        core.allocator = std.testing.allocator;
+        core.updater_configured = false;
+        core.symbols.updater_configure = configure;
+        core.symbols.updater_request = send;
+        core.symbols.updater_get_state = getState;
+        core.symbols.updater_get_events = getEvents;
+        core.symbols.updater_shutdown = shutdown;
+        core.symbols.free_core_string = free;
+        core.symbols.stop_event_loop = noteQuit;
+        core.symbols.quit_gracefully = quitGracefully;
+        return core;
+    }
+
+    fn setResponse(json: []const u8) void {
+        @memcpy(response[0..json.len], json);
+        response[json.len] = 0;
+    }
+
+    fn capture(json: [*:0]const u8) void {
+        const value = std.mem.span(json);
+        request_len = value.len;
+        @memcpy(request[0..request_len], value);
+        native_calls += 1;
+    }
+
+    fn configure(json: [*:0]const u8) callconv(.c) bool {
+        capture(json);
+        return configured;
+    }
+
+    fn send(json: [*:0]const u8) callconv(.c) ?[*:0]u8 {
+        capture(json);
+        return if (return_null) null else &response;
+    }
+
+    fn getState() callconv(.c) ?[*:0]u8 {
+        native_calls += 1;
+        return if (return_null) null else &response;
+    }
+
+    fn getEvents(after_sequence: u64, requested_limit: u32) callconv(.c) ?[*:0]u8 {
+        after = after_sequence;
+        limit = requested_limit;
+        return getState();
+    }
+
+    fn free(value: ?[*:0]u8) callconv(.c) void {
+        if (value == &response) {
+            free_count += 1;
+            // Returned Zig strings must survive native memory being reclaimed.
+            @memset(response[0..response.len], '!');
+        }
+    }
+
+    fn shutdown() callconv(.c) void {
+        shutdown_count += 1;
+    }
+
+    fn noteQuit() callconv(.c) void {
+        quit_count += 1;
+    }
+
+    fn quitGracefully(_: c_int, _: c_int) callconv(.c) void {
+        noteQuit();
+    }
+};
+
+test "updater requires the complete ABI and never silently falls back" {
+    const Native = UpdaterBindingTestNative;
+    var core = Native.reset();
+    try std.testing.expect(core.updaterAvailable());
+    inline for (.{ "updater_configure", "updater_request", "updater_get_state", "updater_get_events", "updater_shutdown" }) |field| {
+        core = Native.reset();
+        @field(core.symbols, field) = null;
+        try std.testing.expect(!core.updaterAvailable());
+        try std.testing.expectError(error.UpdaterUnavailable, core.updaterConfigure(.{ .exeDir = "/app", .resourcesDir = "/app/resources" }));
+        try std.testing.expectError(error.UpdaterUnavailable, core.updaterCheck());
+        try std.testing.expectError(error.UpdaterUnavailable, core.updaterGetState());
+        try std.testing.expectError(error.UpdaterUnavailable, core.updaterGetEvents(0, 64));
+        try std.testing.expectEqual(@as(usize, 0), Native.native_calls);
+    }
+    core.symbols.updater_shutdown = null;
+    core.updaterShutdown();
+    try std.testing.expectEqual(@as(usize, 0), Native.shutdown_count);
+}
+
+test "updater configuration sends only bundle paths and does no work or quit" {
+    const Native = UpdaterBindingTestNative;
+    var core = Native.reset();
+    try core.updaterConfigure(.{ .exeDir = "/app/bin", .resourcesDir = "/app/resources" });
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, Native.request[0..Native.request_len], .{});
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 3), parsed.value.object.count());
+    try std.testing.expectEqual(@as(i64, 1), parsed.value.object.get("schemaVersion").?.integer);
+    try std.testing.expectEqualStrings("/app/bin", parsed.value.object.get("exeDir").?.string);
+    try std.testing.expectEqualStrings("/app/resources", parsed.value.object.get("resourcesDir").?.string);
+    try std.testing.expectEqual(@as(usize, 1), Native.native_calls);
+    try std.testing.expectEqual(@as(usize, 0), Native.quit_count);
+    Native.configured = false;
+    try std.testing.expectError(error.InvalidUpdaterConfiguration, core.updaterConfigure(.{ .exeDir = "/app", .resourcesDir = "/app/resources" }));
+    const calls = Native.native_calls;
+    try std.testing.expectError(error.InvalidUpdaterConfiguration, core.updaterConfigure(.{ .exeDir = "/app\x00ignored", .resourcesDir = "/app/resources" }));
+    try std.testing.expectError(error.InvalidUpdaterRequest, core.updaterRequestJson("{}\x00ignored"));
+    try std.testing.expectEqual(calls, Native.native_calls);
+}
+
+test "updater automatic teardown belongs only to a successfully configured handle" {
+    const Native = UpdaterBindingTestNative;
+    var owner = Native.reset();
+    try owner.updaterConfigure(.{ .exeDir = "/app/bin", .resourcesDir = "/app/resources" });
+    try std.testing.expect(owner.updater_configured);
+    var unused = Native.reset();
+    unused.shutdownConfiguredUpdater();
+    try std.testing.expectEqual(@as(usize, 0), Native.shutdown_count);
+    Native.configured = false;
+    try std.testing.expectError(error.InvalidUpdaterConfiguration, unused.updaterConfigure(.{ .exeDir = "/wrong", .resourcesDir = "/wrong" }));
+    unused.shutdownConfiguredUpdater();
+    try std.testing.expectEqual(@as(usize, 0), Native.shutdown_count);
+    // A rejected reconfiguration does not discard ownership of the existing
+    // successful configuration on the app's owning handle.
+    try std.testing.expectError(error.InvalidUpdaterConfiguration, owner.updaterConfigure(.{ .exeDir = "/wrong", .resourcesDir = "/wrong" }));
+    owner.shutdownConfiguredUpdater();
+    try std.testing.expectEqual(@as(usize, 1), Native.shutdown_count);
+    try std.testing.expect(!owner.updater_configured);
+    owner.shutdownConfiguredUpdater();
+    try std.testing.expectEqual(@as(usize, 1), Native.shutdown_count);
+    unused.updaterShutdown();
+    try std.testing.expectEqual(@as(usize, 2), Native.shutdown_count);
+}
+
+test "updater queue methods preserve actions, identity, veto, and owned results" {
+    const Native = UpdaterBindingTestNative;
+    var core = Native.reset();
+    inline for (.{ .{ "updaterCheck", "check" }, .{ "updaterDownload", "download" }, .{ "updaterRequestApply", "requestApply" }, .{ "updaterReconcile", "reconcile" } }) |pair| {
+        Native.setResponse(Native.accepted);
+        const result = try @field(Core, pair[0])(&core);
+        defer result.deinit();
+        try std.testing.expect(result.value.accepted);
+        try std.testing.expectEqualStrings("0123456789abcdef0123456789abcdef", result.value.operationId.?);
+        const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, Native.request[0..Native.request_len], .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings(pair[1], parsed.value.object.get("action").?.string);
+        try std.testing.expectEqual(@as(i64, 1), parsed.value.object.get("schemaVersion").?.integer);
+    }
+    for ([_]bool{ false, true }) |approved| {
+        Native.setResponse(Native.accepted);
+        const result = try core.updaterApproveApply("operation-123", "approval-456", approved);
+        defer result.deinit();
+        const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, Native.request[0..Native.request_len], .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings("approveApply", parsed.value.object.get("action").?.string);
+        try std.testing.expectEqualStrings("operation-123", parsed.value.object.get("operationId").?.string);
+        try std.testing.expectEqualStrings("approval-456", parsed.value.object.get("approvalId").?.string);
+        try std.testing.expectEqual(approved, parsed.value.object.get("approved").?.bool);
+    }
+    Native.setResponse("{\"schemaVersion\":1,\"accepted\":false,\"operationId\":null,\"error\":\"OperationNotFound\"}");
+    const cancelled = try core.updaterCancel("stale-operation");
+    defer cancelled.deinit();
+    try std.testing.expect(!cancelled.value.accepted);
+    try std.testing.expectEqualStrings("OperationNotFound", cancelled.value.@"error".?);
+    try std.testing.expect(std.mem.indexOf(u8, Native.request[0..Native.request_len], "stale-operation") != null);
+    try std.testing.expectEqual(@as(usize, 7), Native.free_count);
+    try std.testing.expectEqual(@as(usize, 0), Native.quit_count);
+}
+
+test "updater snapshots and progress retain strings and never trigger quit" {
+    const Native = UpdaterBindingTestNative;
+    var core = Native.reset();
+    Native.setResponse(Native.state);
+    const state = try core.updaterGetState();
+    defer state.deinit();
+    try std.testing.expectEqual(UpdaterOperationState.awaitingApproval, state.value.operationState);
+    try std.testing.expectEqualStrings("fedcba9876543210fedcba9876543210", state.value.approval.?.id);
+    try std.testing.expectEqualStrings("stable", state.value.localInfo.channel);
+    try std.testing.expectEqual(UpdaterOperationState.completed, state.value.operations[0].state);
+    const ready_json = try std.mem.replaceOwned(u8, std.testing.allocator, Native.state, "\"quitReady\":false", "\"quitReady\":true");
+    defer std.testing.allocator.free(ready_json);
+    Native.setResponse(ready_json);
+    const ready = try core.updaterGetState();
+    defer ready.deinit();
+    try std.testing.expect(ready.value.quitReady);
+    Native.setResponse("{\"schemaVersion\":1,\"entries\":[{\"sequence\":9007199254740993,\"operationId\":\"op\",\"status\":\"download-progress\",\"message\":\"Receiving bytes\",\"timestamp\":17,\"details\":{\"progress\":37.5,\"bytesDownloaded\":375,\"totalBytes\":1000}},{\"sequence\":9007199254740994,\"operationId\":null,\"status\":\"future-status\",\"message\":\"New status\",\"timestamp\":18}],\"nextSequence\":9007199254740994,\"oldestSequence\":3,\"overflow\":true}");
+    const events = try core.updaterGetEvents(9007199254740992, 12);
+    defer events.deinit();
+    try std.testing.expectEqual(@as(u64, 9007199254740992), Native.after);
+    try std.testing.expectEqual(@as(u32, 12), Native.limit);
+    try std.testing.expectEqual(@as(u64, 9007199254740994), events.value.nextSequence);
+    try std.testing.expect(events.value.overflow);
+    try std.testing.expectEqual(@as(f64, 37.5), events.value.entries[0].details.?.progress.?);
+    try std.testing.expectEqualStrings("Receiving bytes", events.value.entries[0].message);
+    try std.testing.expectEqualStrings("future-status", events.value.entries[1].status);
+    Native.setResponse("{\"schemaVersion\":1,\"entries\":[{\"sequence\":7,\"status\":\"idle\",\"message\":\"Ready\",\"timestamp\":19}],\"nextSequence\":7,\"oldestSequence\":1,\"overflow\":false}");
+    const global = try core.updaterGetEvents(6, 64);
+    defer global.deinit();
+    try std.testing.expect(global.value.entries[0].operationId == null);
+    Native.setResponse("{\"schemaVersion\":1,\"entries\":[],\"nextSequence\":7,\"oldestSequence\":1,\"overflow\":false}");
+    const empty = try core.updaterGetEvents(7, 64);
+    defer empty.deinit();
+    try std.testing.expectEqual(@as(usize, 0), empty.value.entries.len);
+    try std.testing.expectEqual(@as(usize, 0), Native.quit_count);
+    core.updaterShutdown();
+    try std.testing.expectEqual(@as(usize, 1), Native.shutdown_count);
+}
+
+test "updater native strings are freed on copy failure, parse failure, and unsupported schema" {
+    const Native = UpdaterBindingTestNative;
+    var core = Native.reset();
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    core.allocator = failing.allocator();
+    try std.testing.expectError(error.OutOfMemory, core.updaterGetStateJson());
+    try std.testing.expectEqual(@as(usize, 1), Native.free_count);
+    core = Native.reset();
+    Native.setResponse(Native.state);
+    failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 1 });
+    core.allocator = failing.allocator();
+    try std.testing.expectError(error.OutOfMemory, core.updaterGetState());
+    try std.testing.expectEqual(@as(usize, 1), Native.free_count);
+    try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+    core = Native.reset();
+    Native.setResponse("{\"schemaVersion\":2,\"entries\":[],\"nextSequence\":0,\"oldestSequence\":0,\"overflow\":false}");
+    try std.testing.expectError(error.UnsupportedUpdaterSchema, core.updaterGetEvents(0, 1));
+    try std.testing.expectEqual(@as(usize, 1), Native.free_count);
+    Native.setResponse("{\"schemaVersion\":1}");
+    try std.testing.expectError(error.MissingField, core.updaterGetState());
+    try std.testing.expectEqual(@as(usize, 2), Native.free_count);
+    const partial_approval = try std.mem.replaceOwned(u8, std.testing.allocator, Native.state, ",\"preparedHash\":\"new\"", "");
+    defer std.testing.allocator.free(partial_approval);
+    Native.setResponse(partial_approval);
+    try std.testing.expectError(error.MissingField, core.updaterGetState());
+    try std.testing.expectEqual(@as(usize, 3), Native.free_count);
+    Native.return_null = true;
+    try std.testing.expectError(error.UpdaterResponseUnavailable, core.updaterGetState());
+    try std.testing.expectEqual(@as(usize, 3), Native.free_count);
 }

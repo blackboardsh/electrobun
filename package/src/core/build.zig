@@ -26,6 +26,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    lib.root_module.addCSourceFile(.{ .file = b.path("updater_spawn.c"), .flags = &.{"-std=c11"} });
+
     b.installArtifact(lib);
 
     const unit_tests = b.addTest(.{
@@ -36,6 +38,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    unit_tests.root_module.addCSourceFile(.{ .file = b.path("updater_spawn.c"), .flags = &.{"-std=c11"} });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run Electrobun core tests");
@@ -54,4 +57,17 @@ pub fn build(b: *std.Build) void {
     const run_managed_services_tests = b.addRunArtifact(managed_services_tests);
     const managed_services_step = b.step("test-managed-services", "Run native Insights and installation identity tests");
     managed_services_step.dependOn(&run_managed_services_tests.step);
+
+    const updater_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("updater.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    updater_tests.root_module.addCSourceFile(.{ .file = b.path("updater_spawn.c"), .flags = &.{"-std=c11"} });
+    const run_updater_tests = b.addRunArtifact(updater_tests);
+    const updater_step = b.step("test-updater", "Run native updater controller, transport, handoff, and result tests");
+    updater_step.dependOn(&run_updater_tests.step);
 }

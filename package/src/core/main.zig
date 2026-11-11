@@ -3,6 +3,8 @@ const builtin = @import("builtin");
 const synchronization = @import("synchronization.zig");
 const insights = @import("insights.zig");
 const installation_identity = @import("installation_identity.zig");
+const updater = @import("updater.zig");
+const updater_protocol = @import("updater_protocol.zig");
 
 const allocator = std.heap.c_allocator;
 const install_root_name_environment_variable = "ELECTROBUN_INSTALL_ROOT_NAME";
@@ -783,6 +785,189 @@ export fn freeCoreString(value: ?[*:0]u8) void {
         const slice = std.mem.sliceTo(ptr_value, 0);
         allocator.free(@constCast(slice));
     }
+}
+
+// Every SDK uses the same worker and protocol. The dedicated Io pool is joined
+// before unloading Core; no runtime callbacks run on its worker threads.
+var updater_mutex: synchronization.Mutex = .init;
+var updater_engine: ?*updater.Engine = null;
+var updater_io: ?*std.Io.Threaded = null;
+
+fn configureUpdaterInstallation(config: *updater_protocol.Config) bool {
+    if (config.local.managed == null) return true;
+    // Hosting identifiers can be URL components with spaces; the canonical
+    // identity is scoped to local storage, independent of any cloud app name.
+    if (!configureInstallation(.{ .storagePath = config.storage_path })) return false;
+    installation_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer installation_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    config.installation_id = installation_id;
+    return config.installation_id != null;
+}
+
+export fn updaterConfigure(json: [*:0]const u8) bool {
+    clearLastError();
+    updater_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer updater_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (std.mem.span(json).len > 16 * 1024) {
+        setLastError("Updater configuration is too large", .{});
+        return false;
+    }
+    var config = updater_protocol.loadConfig(allocator, coreIo(), std.mem.span(json)) catch |err| {
+        setLastError("Invalid updater configuration: {s}", .{@errorName(err)});
+        return false;
+    };
+    if (updater_engine) |engine| {
+        defer config.deinit();
+        const matches = std.mem.eql(u8, engine.config.exe_dir, config.exe_dir) and
+            std.mem.eql(u8, engine.config.resources_dir, config.resources_dir) and
+            std.mem.eql(u8, engine.config.channel_root, config.channel_root) and
+            std.mem.eql(u8, engine.config.local.identifier, config.local.identifier) and
+            std.mem.eql(u8, engine.config.local.channel, config.local.channel) and
+            std.mem.eql(u8, engine.config.local.hash, config.local.hash);
+        if (!matches) setLastError("Updater is already configured for another installation", .{});
+        return matches;
+    }
+    if (config.local.managed != null) {
+        // No cloud app ID is needed to load the canonical local identity. This
+        // also handles standalone Updater imports before Insights SDK setup.
+        if (!configureUpdaterInstallation(&config)) {
+            config.deinit();
+            setLastError("Failed to configure shared updater installation identity", .{});
+            return false;
+        }
+    }
+    const threaded = allocator.create(std.Io.Threaded) catch {
+        config.deinit();
+        setLastError("Failed to allocate updater worker", .{});
+        return false;
+    };
+    threaded.* = std.Io.Threaded.init(allocator, .{});
+    const engine = allocator.create(updater.Engine) catch {
+        config.deinit();
+        threaded.deinit();
+        allocator.destroy(threaded);
+        return false;
+    };
+    engine.* = updater.Engine.init(allocator, threaded.io(), config) catch |err| {
+        config.deinit();
+        allocator.destroy(engine);
+        threaded.deinit();
+        allocator.destroy(threaded);
+        setLastError("Failed to initialize updater: {s}", .{@errorName(err)});
+        return false;
+    };
+    engine.start() catch |err| {
+        engine.deinit();
+        allocator.destroy(engine);
+        threaded.deinit();
+        allocator.destroy(threaded);
+        setLastError("Failed to start updater: {s}", .{@errorName(err)});
+        return false;
+    };
+    updater_io = threaded;
+    updater_engine = engine;
+    return true;
+}
+
+fn ownedUpdaterString(json: []u8) ?[*:0]u8 {
+    defer allocator.free(json);
+    return (allocator.dupeSentinel(u8, json, 0) catch {
+        setLastError("Failed to allocate updater response", .{});
+        return null;
+    }).ptr;
+}
+
+export fn updaterRequest(json: [*:0]const u8) ?[*:0]u8 {
+    clearLastError();
+    updater_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer updater_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const engine = updater_engine orelse {
+        setLastError("Updater is not configured", .{});
+        return null;
+    };
+    const response = engine.requestJson(std.mem.span(json)) catch |err| {
+        setLastError("Failed to request updater operation: {s}", .{@errorName(err)});
+        return null;
+    };
+    return ownedUpdaterString(response);
+}
+
+export fn updaterGetState() ?[*:0]u8 {
+    clearLastError();
+    updater_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer updater_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const engine = updater_engine orelse {
+        setLastError("Updater is not configured", .{});
+        return null;
+    };
+    return ownedUpdaterString(engine.stateJson() catch |err| {
+        setLastError("Failed to read updater state: {s}", .{@errorName(err)});
+        return null;
+    });
+}
+
+export fn updaterGetEvents(after_sequence: u64, limit: u32) ?[*:0]u8 {
+    clearLastError();
+    updater_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer updater_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const engine = updater_engine orelse {
+        setLastError("Updater is not configured", .{});
+        return null;
+    };
+    return ownedUpdaterString(engine.eventsJson(after_sequence, limit) catch |err| {
+        setLastError("Failed to read updater events: {s}", .{@errorName(err)});
+        return null;
+    });
+}
+
+export fn updaterShutdown() void {
+    updater_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer updater_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (updater_engine) |engine| {
+        engine.deinit();
+        allocator.destroy(engine);
+        updater_engine = null;
+    }
+    if (updater_io) |threaded| {
+        threaded.deinit();
+        allocator.destroy(threaded);
+        updater_io = null;
+    }
+}
+
+test "managed updater initializes canonical installation identity before Insights or SDK bootstrap" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(path);
+    installation_id = null;
+    installation_scope = null;
+    defer {
+        installation_id = null;
+        installation_scope = null;
+    }
+    var config: updater_protocol.Config = .{
+        .arena = std.heap.ArenaAllocator.init(std.testing.allocator),
+        .local = .{ .identifier = "dev.electrobun.managed-updater", .version = "1", .hash = "old", .channel = "canary", .name = "ManagedApp", .baseUrl = "" },
+        .exe_dir = path,
+        .resources_dir = path,
+        .channel_root = path,
+        .app_bundle_path = path,
+        .storage_path = path,
+        .base_url = "https://api.electrobun.dev",
+    };
+    defer config.deinit();
+    try std.testing.expect(configureUpdaterInstallation(&config));
+    try std.testing.expect(installation_id == null);
+    config.local.managed = .{ .appId = "Managed App + Beta" };
+    try std.testing.expect(configureUpdaterInstallation(&config));
+    try std.testing.expect(installation_identity.validId(&config.installation_id.?));
+    try std.testing.expect(insights_reporter == null);
+    const same = try installation_identity.loadOrCreate(std.testing.allocator, std.testing.io, .{ .storagePath = path });
+    try std.testing.expectEqualStrings(&same, &config.installation_id.?);
+    const exposed = getInstallationId().?;
+    defer freeCoreString(exposed);
+    try std.testing.expectEqualStrings(&same, std.mem.span(exposed));
 }
 
 // The app installation exists independently of collection. Managed updates can
@@ -2849,6 +3034,7 @@ export fn electrobun_core_run_main_thread(
         name,
         if (install_root_name) |value| value.ptr else channel,
     );
+    updaterShutdown();
     insightsShutdown();
     native_wrapper_state.force_exit(mainThreadExitCode(exit_code));
     return 0;
@@ -4569,6 +4755,7 @@ export fn setExitOnLastWindowClosed(enabled: bool) void {
 }
 
 export fn quitGracefully(code: c_int, timeout_ms: c_int) void {
+    updaterShutdown();
     insightsShutdown();
     clearLastError();
     pending_graceful_exit_code.store(code, .release);
@@ -4609,6 +4796,7 @@ export fn waitForShutdownComplete(timeout_ms: c_int) void {
 }
 
 export fn forceExit(code: c_int) void {
+    updaterShutdown();
     insightsShutdown();
     clearLastError();
     if (!ensureNativeWrapperLoaded()) {

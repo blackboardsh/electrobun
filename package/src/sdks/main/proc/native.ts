@@ -77,6 +77,7 @@ import { parseWebviewEventBridgeMessage } from "./eventBridge";
 import { ffiCStringToString } from "./ffiCString";
 import { rasterizeNativeText } from "./nativeTextBitmap";
 import { initializeInsights } from "../core/Insights";
+import { shutdownUpdater } from "./updaterNative";
 
 function getElectrobunLibraryPathCandidates(fileName: string) {
 	const candidates = new Set<string>();
@@ -2279,6 +2280,7 @@ const _ffiImpl = {
 			core_.symbols.setExitOnLastWindowClosed(params.enabled);
 		},
 		quitGracefully: (params: { code: number; timeoutMs: number }) => {
+			shutdownUpdater();
 			core_.symbols.quitGracefully(params.code, params.timeoutMs);
 		},
 
@@ -2654,6 +2656,7 @@ export const WGPUBridge = {
 // Worker management. Move to a different file
 process.on("uncaughtException", (err) => {
 	console.error("Uncaught exception in worker:", err);
+	shutdownUpdater();
 	if (native) {
 		native_.symbols.stopEventLoop();
 		native_.symbols.waitForShutdownComplete(5000);
