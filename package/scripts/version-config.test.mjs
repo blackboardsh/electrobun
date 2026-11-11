@@ -204,7 +204,7 @@ test("Cargo identity updates fail closed on malformed package tables", () => {
 	);
 });
 
-test("Rust release bump plan is limited to the SDK and its two lockfiles", () => {
+test("Rust release bumps include the SDK's locked test build and consumer lockfiles", () => {
 	const updates = createRustSdkVersionUpdates(
 		repositoryRoot,
 		"2.0.1-beta.0",
@@ -215,6 +215,7 @@ test("Rust release bump plan is limited to the SDK and its two lockfiles", () =>
 		),
 		[
 			"package/src/sdks/rust/Cargo.toml",
+			"package/src/sdks/rust/Cargo.lock",
 			"kitchen/Cargo.lock",
 			"templates/rust-flock-wgpu/Cargo.lock",
 		],
@@ -424,7 +425,7 @@ test("push:beta dry semantics produce 2.0.1-beta.0 from 2.0.0", () => {
 			version,
 		);
 		assertTemplateSourcesUnpinned(join(repositoryRoot, "templates"));
-		assert.equal(createRustSdkVersionUpdates(repositoryRoot, version).length, 3);
+		assert.equal(createRustSdkVersionUpdates(repositoryRoot, version).length, 4);
 	} finally {
 		rmSync(temporaryRoot, { recursive: true, force: true });
 	}

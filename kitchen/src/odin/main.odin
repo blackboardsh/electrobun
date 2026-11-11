@@ -13,6 +13,7 @@ import "core:fmt"
 import "core:math"
 import "core:os"
 import "core:path/filepath"
+import "core:reflect"
 import "core:strings"
 import "core:sync"
 import "core:thread"
@@ -922,29 +923,8 @@ appState :: proc() -> ^AppState {
 }
 
 errName :: proc(err: electrobun.Error) -> string {
-	switch err {
-	case .None:
-		return "None"
-	case .MissingCoreSymbol:
-		return "MissingCoreSymbol"
-	case .LibraryLoadFailed:
-		return "LibraryLoadFailed"
-	case .ElectrobunCoreFailure:
-		return "ElectrobunCoreFailure"
-	case .InvalidScreenCaptureRegion:
-		return "InvalidScreenCaptureRegion"
-	case .AllocationFailed:
-		return "AllocationFailed"
-	case .InvalidExePath:
-		return "InvalidExePath"
-	case .InvalidRectJson:
-		return "InvalidRectJson"
-	case .InvalidJson:
-		return "InvalidJson"
-	case .FileReadFailed:
-		return "FileReadFailed"
-	case .EnvVarNotFound:
-		return "EnvVarNotFound"
+	if name, known := reflect.enum_name_from_value(err); known {
+		return name
 	}
 	return "UnknownError"
 }

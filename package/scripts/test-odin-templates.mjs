@@ -19,7 +19,7 @@ const templatesRoot = join(repositoryRoot, "templates");
 // The vendored Odin toolchain has no Windows ARM64 target, matching the
 // supported Kitchen matrix and package dependency installation.
 if (process.platform === "win32" && process.arch === "arm64") {
-	console.log("Odin template tests skipped: Windows ARM64 is unsupported.");
+	console.log("Odin Kitchen check and template tests skipped: Windows ARM64 is unsupported.");
 	process.exit(0);
 }
 const odinBinary = join(
@@ -94,6 +94,24 @@ if (tests.length === 0) {
 const sdkCollection = resolveSdkCollection();
 const executionRoot = mkdtempSync(join(tmpdir(), "electrobun-odin-run-"));
 try {
+	console.log("Checking Kitchen against the Odin SDK...");
+	const kitchenCheck = spawnSync(
+		odinBinary,
+		[
+			"check",
+			join(repositoryRoot, "kitchen", "src", "odin"),
+			"-no-entry-point",
+			`-collection:electrobun_sdk=${sdkCollection.path}`,
+		],
+		{ cwd: executionRoot, stdio: "inherit" },
+	);
+	if (kitchenCheck.error) throw kitchenCheck.error;
+	if (kitchenCheck.status !== 0) {
+		throw new Error(
+			`Kitchen Odin check failed with exit code ${kitchenCheck.status ?? "unknown"}`,
+		);
+	}
+
 	for (const test of tests) {
 		console.log(`Testing ${test.name}...`);
 		const result = spawnSync(
@@ -119,4 +137,4 @@ try {
 	removeTemporaryDirectory(executionRoot);
 }
 
-console.log(`Odin template tests passed (${tests.length} packages).`);
+console.log(`Odin Kitchen check and template tests passed (${tests.length} template packages).`);

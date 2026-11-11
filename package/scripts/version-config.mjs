@@ -184,6 +184,10 @@ export function createRustSdkVersionUpdates(repositoryRoot, version) {
 			update: updateElectrobunCargoManifestVersion,
 		},
 		{
+			path: join(repositoryRoot, "package", "src", "sdks", "rust", "Cargo.lock"),
+			update: updateElectrobunCargoLockVersion,
+		},
+		{
 			path: join(repositoryRoot, "kitchen", "Cargo.lock"),
 			update: updateElectrobunCargoLockVersion,
 		},
