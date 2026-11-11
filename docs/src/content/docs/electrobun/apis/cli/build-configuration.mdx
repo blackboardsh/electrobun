@@ -3,8 +3,9 @@ title: "Build Configuration"
 description: "Reference for electrobun.config.ts and Hutch's build lifecycle."
 ---
 
-`electrobun.config.ts` is a TypeScript module in the project root. Hutch loads
-its default export with Cottontail and merges it with Electrobun's defaults.
+`electrobun.config.ts` is a TypeScript module in the project root. With Hutch
+0.30.0-canary.4 or later, Hutch evaluates its default export with Bun by default
+and merges it with Electrobun's defaults.
 Use `satisfies ElectrobunConfig` so unsupported fields and values fail during
 development. Electrobun release overrides, tasks, and package-manager selection
 belong in `hutch.config.ts`; the release and external package-manager fields are
@@ -16,8 +17,10 @@ bundler options. Cottontail is experimental and requires an explicit
 `mainProcess: "cottontail"` selection with a `build.cottontail.entrypoint`.
 Cottontail-only capability and bytecode options do not apply to Bun. See the
 [migration guide](/electrobun/guides/migrating-to-v2/) for existing configurations.
-Hutch scripts and tests also default to Bun; internal build helpers still use
-Cottontail.
+The same Bun default applies to `hutch.config.ts`, scripts, tests, hooks, and
+build helpers. Set `HUTCH_RUNTIME=cottontail` to opt into experimental Cottontail
+for those operations. A `cottontail=...` version pragma alone does not select
+that runtime, and Hutch's runtime selection does not change `build.mainProcess`.
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";

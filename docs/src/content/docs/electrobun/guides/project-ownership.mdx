@@ -14,7 +14,8 @@ describes the application and build that Hutch produces.
 | Concern | Owner |
 | --- | --- |
 | Electrobun release | Exact `hutch.config.ts` → `electrobun.version` in published templates; optional in hand-written projects, which may use an npm or channel default |
-| Build-time Hutch and Cottontail versions | Optional first-line `// @hutch` pragma; otherwise the invoking launcher's pair |
+| Hutch and optional Cottontail version pins | Optional first-line `// @hutch` pragma; a Cottontail pin does not select the runtime |
+| Configuration, script, hook, and build-helper runtime | Bun by default in Hutch 0.30.0-canary.4 or later; `HUTCH_RUNTIME=cottontail` explicitly selects Cottontail |
 | Project tasks | `hutch.config.ts` → `scripts` |
 | JavaScript package-manager policy | Hutch built-in resolver by default; optional external `hutch.config.ts` → `packageManager` |
 | Native toolchain resolution and shared installations | Hutch |
@@ -161,8 +162,10 @@ tree. `node_modules` remains outside the SDK path.
 
 ## Default path and compatibility edge
 
-Bun is the default JavaScript main process and Hutch script runner. Cottontail
-remains an experimental, explicit option. Hutch's internal configuration and
-bundling helpers still use its paired Cottontail. Package-manager selection is
-independent of both runtime choices. Node-compatible packages, npm, and Vite
+Bun is the default JavaScript main process. Hutch 0.30.0-canary.4 or later also
+defaults configuration, scripts, hooks, and build helpers to Bun. Cottontail
+remains an experimental, explicit option: `HUTCH_RUNTIME=cottontail` selects it
+for Hutch, while `build.mainProcess: "cottontail"` selects it for the application.
+A version pin alone does neither. Package-manager selection is independent of
+both runtime choices. Node-compatible packages, npm, and Vite
 are supported, but none becomes the owner or source of Electrobun's SDK.

@@ -28,8 +28,8 @@ npm run dev                   # your existing `electrobun ...` scripts still wor
    command first reads `hutch-artifacts.json` from that version's GitHub Release,
    then downloads the host's paired Hutch archive and checks the bytes against
    the index entry's immutable release URL, declared size, and SHA-256 digest.
-   Hutch supplies its tested build-time Cottontail and the paired
-   Electrobun version, so updating the dependency moves the set tracked by your
+   Hutch resolves the selected build runtime and paired Electrobun version,
+   so updating the dependency moves the set tracked by your
    lockfile.
 
 2. **Run your scripts.** `electrobun dev`, `electrobun build`, and friends
@@ -163,10 +163,11 @@ An older config that omits `mainProcess` and supplies only a `cottontail` or
 source directory and runtime-neutral `electrobun/main` imports can stay as they
 are. Existing explicitly selected runtimes remain explicit.
 
-The paired Hutch also defaults scripts, tests, shell tasks, and build hooks to
-Bun. App runtime selection does not change that runner. Use
-`HUTCH_RUNTIME=cottontail` for scripts that intentionally require Cottontail;
-putting `cottontail=...` in the version pragma does not select it.
+Hutch 0.30.0-canary.4 or later defaults configuration, scripts, tests, shell
+tasks, build hooks, and build helpers to Bun. App runtime selection does not
+change that choice. Use `HUTCH_RUNTIME=cottontail` for workflows that explicitly
+require Cottontail; putting `cottontail=...` in the version pragma does not
+select it.
 
 The updated Zig SDK requires Zig `0.17.0`. Update an older explicit
 `build.zig.version` pin along with the devkit.

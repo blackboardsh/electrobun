@@ -22,9 +22,11 @@ Bun is also a first-class package-manager choice for a Cottontail project: set
 external dependency tool. Separately, Cottontail implements Bun-compatible
 application APIs including the `Bun.$` shell interface.
 
-Hutch uses Cottontail in two separate roles. The build-time Cottontail that
-loads internal build config and bundles code is paired with the Hutch release, unless a project
-pragma overrides it. For a Cottontail main process, the selected Electrobun
+Cottontail can be selected independently for build-time work and the app.
+Hutch 0.30.0-canary.4 or later defaults configuration, scripts, hooks, and build
+helpers to Bun. Set `HUTCH_RUNTIME=cottontail` to use its tested Cottontail
+version for those operations, with an optional project version pin. For a
+Cottontail main process, the selected Electrobun
 devkit separately pins the exact runtime placed in the application bundle; it
 does not inherit Hutch's build-time pair. End users install neither one. A Bun
 main process bundles the devkit-pinned Bun runtime instead.
@@ -157,17 +159,18 @@ Bun main-process option — Hutch remains the build tool in that configuration.
 
 ## Pin Cottontail
 
-Most projects don't need a build-time pin: without one, Hutch uses the
-Cottontail version that release was built and tested with, and `hutch upgrade`
-advances the pair. Pin only when the build pipeline needs a different exact
-version:
+When Cottontail is explicitly selected, Hutch uses the version that release
+was built and tested with unless a project pins another one. `hutch upgrade`
+advances the tested pair. Pin when that workflow needs a different exact version:
 
 ```ts
 // @hutch cottontail=0.7.3
 ```
 
-Inspect the active version with `hutch cottontail version`.
+Inspect the selected Cottontail version with `hutch cottontail version`.
 
-This pragma controls build-time execution only. The Cottontail shipped for
+This pragma only selects the build-time Cottontail version; it does not opt in.
+Set `HUTCH_RUNTIME=cottontail` to select it for Hutch's configuration, scripts,
+hooks, and helpers. The Cottontail shipped for
 `build.mainProcess: "cottontail"` remains the exact version declared by the
 selected Electrobun devkit.
