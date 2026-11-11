@@ -924,7 +924,9 @@ test "reconciliation maps real success and failure files into public state and s
             .version = fixture.engine.config.local.version,
             .hash = target_hash,
         };
-        const path = try std.fmt.allocPrint(a, "{s}/.electrobun-update-{s}.result.json", .{ fixture.engine.config.channel_root, id });
+        const filename = try std.fmt.allocPrint(a, ".electrobun-update-{s}.result.json", .{id});
+        defer a.free(filename);
+        const path = try std.fs.path.join(a, &.{ fixture.engine.config.channel_root, filename });
         defer a.free(path);
         try protocol.atomicWriteJson(a, std.testing.io, fixture.engine.config.channel_root, path, result, 0o600);
         try fixture.engine.start();
