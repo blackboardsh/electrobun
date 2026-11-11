@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -9,6 +10,17 @@ import {
 	updaterLifecycleFixturePath,
 	writeUpdaterLifecycleControl,
 } from "./updater-lifecycle-fixture.mjs";
+
+test("native fixture event logging appends records with the platform's real file APIs", () => {
+	const packageRoot = fileURLToPath(new URL("../", import.meta.url));
+	const vendoredZig = join(packageRoot, "vendors", "zig", process.platform === "win32" ? "zig.exe" : "zig");
+	const zig = process.env.ZIG_BINARY || (existsSync(vendoredZig) ? vendoredZig : "zig");
+	const result = spawnSync(zig, ["test", "test-apps/updater-lifecycle-native/src/zig/fixture_io.zig", "-lc"], {
+		cwd: packageRoot, encoding: "utf8", timeout: 300_000, windowsHide: true,
+	});
+	assert.ifError(result.error);
+	assert.equal(result.status, 0, `Native fixture event logging failed: ${result.stdout}${result.stderr}`);
+});
 
 test("existing invocations select Bun and preserve arguments for the focus parser", () => {
 	for (const args of [[], ["--focus=full"], ["--help"], ["--unknown"]]) {

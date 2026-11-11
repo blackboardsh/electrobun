@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const eb = @import("electrobun");
+const fixture_io = @import("fixture_io.zig");
 const a = std.heap.c_allocator;
 const Io = std.Io;
 
@@ -113,9 +114,7 @@ const Fixture = struct {
         defer a.free(bytes);
         const line = try std.fmt.allocPrint(a, "{s}\n", .{bytes});
         defer a.free(line);
-        const file = try Io.Dir.cwd().createFile(io(), self.control.eventLogPath, .{ .truncate = false, .lock = .exclusive });
-        defer file.close(io());
-        try file.writePositionalAll(io(), line, (try file.stat(io())).size);
+        try fixture_io.appendLine(io(), Io.Dir.cwd(), self.control.eventLogPath, line);
     }
     fn drain(self: *Fixture) !void {
         while (true) {
