@@ -409,6 +409,13 @@ function runHutchForVariant(
 		});
 		child.on("close", (code, signal) => {
 			if (settled) return;
+			// Closing the launcher and its pipes does not prove its descendants
+			// exited. A GUI child can ignore TERM and close/inherit no pipes. Once
+			// the timed-out leader is gone, finish terminating its owned group
+			// before cancelling the escalation timer and forgetting the group.
+			if (timedOut && isolatedProcessGroup) {
+				forceStopChildProcessTree(child, true, "SIGKILL");
+			}
 			settled = true;
 			clearTimers();
 			activeChildren.delete(child);

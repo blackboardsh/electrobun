@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
 	createKitchenMatrix,
 	KITCHEN_MAIN_PROCESSES,
@@ -31,6 +32,47 @@ import {
 	runDiagnosticCommand,
 	selectMacosHangProcesses,
 } from "./kitchen-hang-diagnostics";
+
+function signalOwnedProcess(pid: number, signal: NodeJS.Signals | 0): boolean {
+	if (!Number.isInteger(pid) || pid <= 1) throw new Error(`Invalid fixture PID: ${pid}`);
+	try {
+		process.kill(pid, signal);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+		throw error;
+	}
+}
+
+function readOwnedProcessState(pid: number): string | null {
+	if (!signalOwnedProcess(pid, 0)) return null;
+	const result = spawnSync("/bin/ps", ["-p", String(pid), "-o", "stat="], {
+		encoding: "utf8", timeout: 1000, maxBuffer: 4096,
+	});
+	if (result.error) throw result.error;
+	const state = result.stdout.trim();
+	if (result.status === 0 && /^[A-Za-z][A-Za-z+<>-]*$/.test(state)) return state;
+	// It can exit between the signal probe and ps. Do not mistake an arbitrary
+	// ps failure or EPERM for proof that the descendant is gone.
+	if (!signalOwnedProcess(pid, 0)) return null;
+	throw new Error(`Cannot inspect fixture PID ${pid}: ps status=${result.status}, stdout=${JSON.stringify(result.stdout)}, stderr=${JSON.stringify(result.stderr)}`);
+}
+
+async function waitForNoLiveProcess(pid: number): Promise<string | null> {
+	const deadline = Date.now() + 1000;
+	for (;;) {
+		const state = readOwnedProcessState(pid);
+		// An orphan's kernel entry may await PID 1's reap. Only a verified zombie
+		// state, never mere signal-0 success, proves it cannot execute more work.
+		if (state === null || state.startsWith("Z")) return state;
+		if (Date.now() >= deadline) throw new Error(`Fixture descendant ${pid} is still live after group termination: ${state}`);
+		await new Promise(resolve => setTimeout(resolve, 20));
+	}
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
 
 describe("Kitchen hang diagnostics", () => {
 	const listing = [
@@ -291,7 +333,9 @@ describe("kitchen matrix", () => {
 			const fakeHutch = join(fixtureRoot, "hutch");
 			writeFileSync(
 				fakeHutch,
-				`#!/bin/sh\nsleep 1000 &\necho $! > "${grandchildPidFile}"\nwait\n`,
+				// Reap our child after the group signal instead of racing PID 1's
+				// orphan reaping. The trap does not kill it: group termination must.
+				`#!/bin/sh\ntrap 'wait; exit' TERM\nsleep 1000 &\necho $! > ${shellQuote(grandchildPidFile)}\nwait\n`,
 			);
 			chmodSync(fakeHutch, 0o755);
 			const previousHutch = process.env["HUTCH_BINARY"];
@@ -307,7 +351,61 @@ describe("kitchen matrix", () => {
 			} finally {
 				if (previousHutch === undefined) delete process.env["HUTCH_BINARY"];
 				else process.env["HUTCH_BINARY"] = previousHutch;
-				rmSync(fixtureRoot, { recursive: true, force: true });
+				try {
+					if (existsSync(grandchildPidFile)) {
+						const pid = Number(readFileSync(grandchildPidFile, "utf8"));
+						signalOwnedProcess(pid, "SIGKILL");
+						await waitForNoLiveProcess(pid);
+					}
+				} finally {
+					rmSync(fixtureRoot, { recursive: true, force: true });
+				}
+			}
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"kills a TERM-resistant descendant after its launcher closes all pipes",
+		async () => {
+			const fixtureRoot = mkdtempSync(join(tmpdir(), "electrobun-kitchen-orphan-"));
+			const grandchildPidFile = join(fixtureRoot, "grandchild.pid");
+			const heartbeatFile = join(fixtureRoot, "heartbeat");
+			const descendant = join(fixtureRoot, "descendant.mjs");
+			const fakeHutch = join(fixtureRoot, "hutch");
+			writeFileSync(descendant, [
+				"import { appendFileSync, writeFileSync } from 'node:fs';",
+				"process.on('SIGTERM', () => {});",
+				`writeFileSync(${JSON.stringify(grandchildPidFile)}, String(process.pid));`,
+				`writeFileSync(${JSON.stringify(heartbeatFile)}, 'started\\n');`,
+				`setInterval(() => appendFileSync(${JSON.stringify(heartbeatFile)}, 'beat\\n'), 25);`,
+			].join("\n"));
+			writeFileSync(fakeHutch, `#!/bin/sh\n${shellQuote(process.execPath)} ${shellQuote(descendant)} </dev/null >/dev/null 2>&1 &\nwait\n`, { mode: 0o755 });
+			const previousHutch = process.env["HUTCH_BINARY"];
+			process.env["HUTCH_BINARY"] = fakeHutch;
+			try {
+				await expect(
+					runKitchenMatrix(["--launch-only", "--with=zig:cef", "--timeout=1"]),
+				).rejects.toThrow("zig-cef: Hutch run timed out after 1s");
+				// The PID is written after installing the TERM handler. A slow or
+				// failed fixture startup must fail, not silently pass this check.
+				const pid = Number(readFileSync(grandchildPidFile, "utf8"));
+				await waitForNoLiveProcess(pid);
+				const stoppedHeartbeat = readFileSync(heartbeatFile, "utf8");
+				expect(stoppedHeartbeat).toContain("beat\n");
+				await new Promise(resolve => setTimeout(resolve, 100));
+				expect(readFileSync(heartbeatFile, "utf8")).toBe(stoppedHeartbeat);
+			} finally {
+				if (previousHutch === undefined) delete process.env["HUTCH_BINARY"];
+				else process.env["HUTCH_BINARY"] = previousHutch;
+				try {
+					if (existsSync(grandchildPidFile)) {
+						const pid = Number(readFileSync(grandchildPidFile, "utf8"));
+						signalOwnedProcess(pid, "SIGKILL");
+						await waitForNoLiveProcess(pid);
+					}
+				} finally {
+					rmSync(fixtureRoot, { recursive: true, force: true });
+				}
 			}
 		},
 	);
