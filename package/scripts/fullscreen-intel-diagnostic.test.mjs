@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -171,6 +172,7 @@ test("diagnostic defaults retain the exact beta16 artifacts without rebuilding t
 		rebuild_native: "false",
 		rebuild_debug_core: "false",
 		use_vm_temp_dir: "false",
+		clear_vm_user_caches: "false",
 		full_suite: "true",
 	})) {
 		const block = workflowBlock(new RegExp(`^\\s*${input}:\\s*$`));
@@ -190,7 +192,7 @@ test("VM temporary directories are opt-in and configured before installing tools
 });
 
 test("Debug Core is explicit, uses pinned Zig and skips unrelated stock controls", () => {
-	assert.match(workflowBlock(/^\s*stock-cocoa:\s*$/), /^\s*if:\s*\$\{\{ !inputs\.rebuild_debug_core \}\}\s*$/m);
+	assert.match(workflowBlock(/^\s*stock-cocoa:\s*$/), /^\s*if:\s*\$\{\{ !inputs\.rebuild_debug_core && !inputs\.clear_vm_user_caches \}\}\s*$/m);
 	const zig = workflowBlock(/^\s*- uses: mlugg\/setup-zig@v2\s*$/);
 	assert.match(zig, /^\s*if:\s*inputs\.rebuild_debug_core\s*$/m);
 	assert.match(zig, /^\s*version:\s*0\.17\.0\s*$/m);
@@ -199,6 +201,39 @@ test("Debug Core is explicit, uses pinned Zig and skips unrelated stock controls
 	assert.match(prepare, /REBUILD_NATIVE:\s*\$\{\{ inputs\.rebuild_native \}\}/);
 	assert.ok(workflow.includes("contents/package/src?ref=$ARTIFACT_SHA"));
 	assert.ok(workflow.includes("artifact-core-tree-sha.txt"));
+});
+
+test("cache control is isolated, guarded and retains before/after deletion evidence", () => {
+	const block = workflowBlock(/^\s*- name: Clear full VM user caches with retained evidence\s*$/);
+	assert.match(block, /^\s*if:\s*inputs\.clear_vm_user_caches\s*$/m);
+	for (const guard of ['$GITHUB_ACTIONS" != true', '$CI" != true', '$RUNNER_OS" != macOS', '$RUNNER_ENVIRONMENT" != github-hosted', '$HOME" != /Users/runner']) {
+		assert.ok(block.includes(guard), `missing hosted runner guard: ${guard}`);
+	}
+	assert.ok(block.includes('for directory in "$HOME/Library/Caches" "$HOME/Library/Logs"; do'));
+	assert.equal((block.match(/rm -rf/g) ?? []).length, 1);
+	assert.ok(block.includes('if rm -rf "$directory"; then deletion_status=0; else deletion_status=$?; fi'));
+	assert.ok(block.includes('deletion_exit_status=$deletion_status'));
+	assert.equal((block.match(/stat -f /g) ?? []).length, 2);
+	assert.equal((block.match(/du -sk /g) ?? []).length, 2);
+	assert.equal((block.match(/exists=true/g) ?? []).length, 2);
+	assert.ok(block.includes('$FULLSCREEN_DIAGNOSTICS/user-cache-cleanup.log'));
+	assert.doesNotMatch(block, /sudo|TMPDIR=|TMP=|TEMP=/);
+	const concurrency = workflowBlock(/^concurrency:\s*$/);
+	assert.ok(concurrency.includes('temp-${{ inputs.use_vm_temp_dir }}-cache-${{ inputs.clear_vm_user_caches }}'));
+	assert.match(concurrency, /^\s*cancel-in-progress:\s*false\s*$/m);
+});
+
+test("cache cleanup refuses local execution before running any cache commands", { skip: process.platform === "win32" }, () => {
+	const block = workflowBlock(/^\s*- name: Clear full VM user caches with retained evidence\s*$/);
+	const script = block.split("run: |\n")[1].replace(/^          /gm, "");
+	// Keep the real HOME unchanged and force a rejected context. The guard runs
+	// before the command block or its log redirection, so nothing is touched.
+	const result = spawnSync("/bin/bash", ["-e", "-o", "pipefail", "-c", script], {
+		env: { ...process.env, GITHUB_ACTIONS: "false" }, encoding: "utf8", timeout: 2000,
+	});
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.match(result.stderr, /Refusing cache cleanup outside the hosted macOS GitHub Actions runner/);
 });
 
 test("workflow selects both artifact architectures and retains owned-app samples on failure", () => {

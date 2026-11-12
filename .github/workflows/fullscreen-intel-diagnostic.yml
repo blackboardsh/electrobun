@@ -32,6 +32,10 @@ on:
         description: Use the full VM suite's temporary directory for tools and app processes
         type: boolean
         default: false
+      clear_vm_user_caches:
+        description: Clear only the hosted macOS user's caches and logs, matching the full VM suite
+        type: boolean
+        default: false
       full_suite:
         description: Run the full Bun native and CEF Kitchen suites, retaining the prelude and owned-app samples
         type: boolean
@@ -42,12 +46,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: fullscreen-intel-diagnostic-${{ github.ref }}
+  group: fullscreen-intel-diagnostic-${{ github.ref }}-temp-${{ inputs.use_vm_temp_dir }}-cache-${{ inputs.clear_vm_user_caches }}
   cancel-in-progress: false
 
 jobs:
   stock-cocoa:
-    if: ${{ !inputs.rebuild_debug_core }}
+    if: ${{ !inputs.rebuild_debug_core && !inputs.clear_vm_user_caches }}
     name: Stock Cocoa (${{ matrix.runner }})
     strategy:
       fail-fast: false
@@ -152,6 +156,30 @@ jobs:
       - uses: ./.github/actions/install-hutch
         with:
           channel: canary
+      - name: Clear full VM user caches with retained evidence
+        if: inputs.clear_vm_user_caches
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          if [[ "$GITHUB_ACTIONS" != true || "$CI" != true || "$RUNNER_OS" != macOS || "$RUNNER_ENVIRONMENT" != github-hosted || "$HOME" != /Users/runner ]]; then
+            echo "Refusing cache cleanup outside the hosted macOS GitHub Actions runner" >&2
+            exit 1
+          fi
+          {
+            for directory in "$HOME/Library/Caches" "$HOME/Library/Logs"; do
+              echo "path=$directory"
+              echo "before:"
+              if [[ -e "$directory" || -L "$directory" ]]; then echo 'exists=true'; else echo 'exists=false'; fi
+              stat -f 'permissions=%Sp uid=%u gid=%g' "$directory" || true
+              du -sk "$directory" || true
+              if rm -rf "$directory"; then deletion_status=0; else deletion_status=$?; fi
+              echo "deletion_exit_status=$deletion_status"
+              echo "after:"
+              if [[ -e "$directory" || -L "$directory" ]]; then echo 'exists=true'; else echo 'exists=false'; fi
+              stat -f 'permissions=%Sp uid=%u gid=%g' "$directory" || true
+              du -sk "$directory" || true
+            done
+          } 2>&1 | tee "$FULLSCREEN_DIAGNOSTICS/user-cache-cleanup.log"
       - uses: mlugg/setup-zig@v2
         if: inputs.rebuild_debug_core
         with:
