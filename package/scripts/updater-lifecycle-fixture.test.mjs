@@ -22,6 +22,9 @@ async function waitForCommandOutput(record, timeout = 10_000) {
 test("delegated command output remains visible after its parent exits without waiting for inherited pipes", { timeout: 30_000 }, async (t) => {
 	const root = mkdtempSync(join(tmpdir(), "updater-lifecycle-delegation-"));
 	const gate = join(root, "manager-can-finish");
+	const ready = join(root, "manager-ready");
+	const descendantPath = join(root, "manager.cjs");
+	const parentPath = join(root, "launcher.cjs");
 	let record;
 	// Release and drain the descendant before removing its gate, including when
 	// a failed assertion or command timeout interrupts the normal test path.
@@ -30,24 +33,38 @@ test("delegated command output remains visible after its parent exits without wa
 		try { if (record) await waitForCommandOutput(record, 15_000); }
 		finally { rmSync(root, { recursive: true, force: true }); }
 	});
-	const descendant = `
+	writeFileSync(descendantPath, `
 		const fs = require('node:fs');
+		const [gate, ready] = process.argv.slice(2);
+		fs.writeFileSync(ready, String(process.pid));
 		const poll = setInterval(() => {
-			if (!fs.existsSync(${JSON.stringify(gate)})) return;
+			if (!fs.existsSync(gate)) return;
 			clearInterval(poll);
 			process.stderr.write('delayed manager failure\\n', () => process.exit(0));
 		}, 10);
 		setTimeout(() => process.exit(2), 15000).unref();
-	`;
-	const parent = `
-		require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], {
-			stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true,
-		}).unref();
-		process.exit(0);
-	`;
+	`);
+	// libuv puts non-detached Windows children in a kill-on-parent-exit job.
+	// The real native launcher creates no such job: detach only this synthetic
+	// Node manager so it models native delegation while retaining the same pipes.
+	writeFileSync(parentPath, `
+		const fs = require('node:fs');
+		const [descendant, gate, ready] = process.argv.slice(2);
+		const manager = require('node:child_process').spawn(process.execPath, [descendant, gate, ready], {
+			stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true, detached: true,
+		});
+		manager.on('error', error => { console.error(error); process.exit(1); });
+		manager.unref();
+		const poll = setInterval(() => {
+			if (!fs.existsSync(ready)) return;
+			clearInterval(poll);
+			process.exit(0);
+		}, 10);
+		setTimeout(() => { console.error('manager did not become ready'); process.exit(3); }, 8000).unref();
+	`);
 	let echoed = "";
 	try {
-		record = await runLifecycleCommand(process.execPath, ["-e", parent], {
+		record = await runLifecycleCommand(process.execPath, [parentPath, descendantPath, gate, ready], {
 			cwd: root, env: process.env, label: "delegating launcher", timeout: 10_000,
 			echo: true, output: { stdout: { write() {} }, stderr: { write(chunk) { echoed += chunk.toString(); } } },
 		});
@@ -56,7 +73,8 @@ test("delegated command output remains visible after its parent exits without wa
 		throw error;
 	}
 	assert.equal(record.exitCode, 0);
-	assert.equal(record.outputClosed, false, "launcher exit must not wait for its delegated manager's pipes");
+	assert.equal(existsSync(ready), true, `manager never became ready: ${record.stderr}`);
+	assert.equal(record.outputClosed, false, `launcher exit must not wait for its delegated manager's pipes: ${record.stderr}`);
 	assert.equal(record.stderr, "");
 	writeFileSync(gate, "finish");
 	await waitForCommandOutput(record);
