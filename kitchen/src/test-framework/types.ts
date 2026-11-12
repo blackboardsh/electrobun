@@ -19,6 +19,8 @@ export interface TestDefinition {
   instructions?: string[];
   requires?: TestRequirements;
   interactive: boolean;
+  /** Run before category groups in the complete automated suite only. */
+  automatedFirst?: boolean;
   timeout?: number;
   run: (context: TestContext) => Promise<void>;
 }
@@ -225,6 +227,7 @@ export function defineTest(config: {
   instructions?: string[];
   requires?: TestRequirements;
   interactive?: boolean;
+  automatedFirst?: boolean;
   timeout?: number;
   run: (context: TestContext) => Promise<void>;
 }): TestDefinition {
@@ -236,6 +239,7 @@ export function defineTest(config: {
     instructions: config.instructions,
     requires: config.requires,
     interactive: config.interactive ?? false,
+    automatedFirst: config.automatedFirst ?? false,
     timeout: config.timeout ?? 10000,
     run: config.run,
   };
@@ -251,6 +255,7 @@ export function defineTestSuite(config: TestSuiteDefinition): TestDefinition[] {
     instructions: test.instructions,
     requires: test.requires,
     interactive: test.interactive,
+    automatedFirst: test.automatedFirst ?? false,
     timeout: test.timeout ?? 10000,
     run: test.run,
   }));

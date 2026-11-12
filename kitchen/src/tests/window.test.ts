@@ -405,6 +405,8 @@ export const windowTests = [
     name: "Window fullscreen toggle",
     category: "BrowserWindow",
     description: "Test window fullscreen mode",
+    // Exercise the fullscreen pair before other tests create and resize windows.
+    automatedFirst: true,
     timeout: 15000,
     async run({ createWindow, log }) {
       let phase = startWindowPhase("fullscreen.createWindow");
@@ -451,6 +453,7 @@ export const windowTests = [
     name: "Window fullscreen toggle with hidden titlebar",
     category: "BrowserWindow",
     description: "Test macOS fullscreen mode when titleBarStyle is hidden",
+    automatedFirst: true,
     timeout: 15000,
     async run({ createWindow, log }) {
       if (process.platform !== "darwin") {

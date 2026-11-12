@@ -108,6 +108,33 @@ describe("test deadlines", () => {
 });
 
 describe("executor timeout isolation", () => {
+	test("runs the declared early fixtures first only in the complete automated suite", async () => {
+		const executor = new TestExecutor();
+		const ran: string[] = [];
+		const fixture = (name: string, category: string, automatedFirst = false) => ({
+			...definition(name, async () => { ran.push(name); }), category, automatedFirst,
+		});
+		const registered = [
+			fixture("view", "BrowserView"), fixture("rpc", "RPC"), fixture("window", "BrowserWindow"),
+			fixture("fullscreen", "BrowserWindow", true), fixture("hidden fullscreen", "BrowserWindow", true),
+			{ ...fixture("manual", "BrowserWindow", true), interactive: true },
+			fixture("second view", "BrowserView"),
+		];
+		executor.registerTests(registered);
+		expect(executor.getTests()).toEqual(registered);
+		expect(executor.getTestsByCategory().get("BrowserWindow")?.map((test) => test.name)).toEqual([
+			"window", "fullscreen", "hidden fullscreen", "manual",
+		]);
+		await executor.runTest(registered[2]!);
+		expect(ran).toEqual(["window"]);
+		ran.length = 0;
+		const results = await executor.runAllAutomated();
+		expect(ran).toEqual(["fullscreen", "hidden fullscreen", "view", "second view", "rpc", "window"]);
+		expect(results.map((result) => result.name)).toEqual(ran);
+		expect(results.every((result) => result.status === "passed")).toBe(true);
+		expect(executor.getTests()).toEqual(registered);
+	});
+
 	test("stops the next test when native work rejects after the deadline before the timer runs", async () => {
 		const clock = spyOn(performance, "now").mockReturnValue(100);
 		const executor = new TestExecutor();

@@ -12,6 +12,7 @@ import { ExclusiveRunCoordinator } from "./exclusive-run";
 import { getTestSkipReason } from "./requirements";
 import { TestDeadlineError, withTestDeadline } from "./test-deadline";
 import { finishWindowPhase, startWindowPhase } from "./window-diagnostics";
+import { groupAutomatedTestsForRun } from "../test-runner/test-order";
 
 type TestEventHandler = (event: TestEvent) => void;
 
@@ -298,16 +299,8 @@ export class TestExecutor {
 
     const results: TestResult[] = [];
 
-    // Group by category
-    const byCategory = new Map<string, TestDefinition[]>();
-    for (const test of automated) {
-      const existing = byCategory.get(test.category) || [];
-      existing.push(test);
-      byCategory.set(test.category, existing);
-    }
-
-    // Run tests by category
-    categories: for (const [category, tests] of byCategory) {
+    // Run the declared early fixtures, then preserve the remaining categories.
+    categories: for (const { category, tests } of groupAutomatedTestsForRun(automated)) {
       console.log(`\n\x1b[36m[${category}]\x1b[0m`);
 
       // Run tests in this category sequentially to avoid resource exhaustion
