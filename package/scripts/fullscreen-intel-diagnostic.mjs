@@ -3,12 +3,12 @@
 // and exercise the same packaged Kitchen tests used by the full VM suite.
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CEF_VERSION, CHROMIUM_VERSION } from "../src/shared/cef-version.ts";
-import { ownedBuildDependencyArtifact } from "../src/shared/build-dependencies.ts";
-import { MACOS_DEPLOYMENT_TARGET, macosNativeArchitecture } from "./macos-release.js";
+import { ownedBuildDependencyArtifact, ZIG_VERSION } from "../src/shared/build-dependencies.ts";
+import { MACOS_DEPLOYMENT_TARGET, macosNativeArchitecture, macosZigTarget } from "./macos-release.js";
 import { validateNativeDevkitManifest } from "./validate-native-devkit.mjs";
 import { selectHutchBinary } from "./hutch-launcher.mjs";
 
@@ -44,6 +44,49 @@ export function fullSuiteLaunch(variant, { repository, dist, env }) {
 		timeoutMs: 1_230_000,
 		observeTransitions: false,
 	};
+}
+
+export function debugCoreBuildPlan({ arch, packageRoot, zigVersion, artifactSourceTree, checkoutSourceTree }) {
+	fullscreenDiagnosticTarget(arch);
+	if (zigVersion !== ZIG_VERSION) throw new Error(`Debug Core requires Zig ${ZIG_VERSION}, got ${zigVersion}`);
+	if (!/^[a-f0-9]{40}$/.test(artifactSourceTree) || artifactSourceTree !== checkoutSourceTree) {
+		throw new Error("Debug Core source tree differs from the immutable artifact source");
+	}
+	return {
+		command: "zig",
+		args: ["build", `-Dtarget=${macosZigTarget(arch)}`, "-Doptimize=Debug"],
+		cwd: join(packageRoot, "src", "core"),
+		output: join(packageRoot, "src", "core", "zig-out", "lib", "libElectrobunCore.dylib"),
+	};
+}
+
+export function devkitFileHashes(root, prefix = "") {
+	const hashes = {};
+	for (const entry of readdirSync(join(root, prefix), { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+		const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+		const path = join(root, relative);
+		if (entry.isDirectory()) Object.assign(hashes, devkitFileHashes(root, relative));
+		else if (entry.isSymbolicLink()) hashes[relative] = createHash("sha256").update(`symlink:${readlinkSync(path)}`).digest("hex");
+		else if (entry.isFile()) hashes[relative] = sha256(path);
+		else throw new Error(`Unexpected devkit file type: ${relative}`);
+	}
+	return hashes;
+}
+
+export function assertOnlyCoreChanged(before, after) {
+	const core = "libElectrobunCore.dylib";
+	if (!before[core] || !after[core] || before[core] === after[core]) throw new Error("Debug Core replacement must change the Core library");
+	for (const path of new Set([...Object.keys(before), ...Object.keys(after)])) {
+		if (path !== core && before[path] !== after[path]) throw new Error(`Debug Core rebuild changed another devkit file: ${path}`);
+	}
+}
+
+export function assertPackagedRuntimeHashes(expected, actual) {
+	for (const component of ["core", "wrapper"]) {
+		if (!/^[a-f0-9]{64}$/.test(expected[component]) || actual[component] !== expected[component]) {
+			throw new Error(`Packaged Kitchen ${component} differs from the prepared devkit; refusing to launch`);
+		}
+	}
 }
 
 function command(binary, args, options = {}) {
@@ -302,6 +345,42 @@ async function collectDesktopLogs() {
 	writeFileSync(join(diagnostics, "desktop-unified-command.json"), JSON.stringify(result, null, 2));
 }
 
+function rebuildDebugCore(provenance, version) {
+	const artifactSourceTree = readFileSync(join(diagnostics, "artifact-core-tree-sha.txt"), "utf8").trim();
+	const checkoutSourceTree = command("git", ["rev-parse", "HEAD:package/src/core"], { cwd: repository, encoding: "utf8", stdio: "pipe" }).stdout.trim();
+	command("git", ["diff", "--exit-code", "HEAD", "--", "package/src/core"], { cwd: repository });
+	const zigVersion = command("zig", ["version"], { encoding: "utf8", stdio: "pipe" }).stdout.trim();
+	const plan = debugCoreBuildPlan({ arch: target.arch, packageRoot, zigVersion, artifactSourceTree, checkoutSourceTree });
+	const before = devkitFileHashes(dist);
+	writeFileSync(join(diagnostics, "debug-core-devkit-before-sha256.json"), JSON.stringify(before, null, 2));
+	const core = join(dist, "libElectrobunCore.dylib");
+	copyFileSync(core, join(diagnostics, "original-libElectrobunCore.dylib"));
+	provenance.debugCore = {
+		compilerVersion: zigVersion,
+		compilerEnvironmentZon: command("zig", ["env"], { encoding: "utf8", stdio: "pipe" }).stdout,
+		artifactSourceTree, checkoutSourceTree, plan,
+		originalSha256: before["libElectrobunCore.dylib"],
+	};
+	writeFileSync(join(diagnostics, "wrapper-provenance.json"), JSON.stringify(provenance, null, 2));
+	command(plan.command, plan.args, { cwd: plan.cwd });
+	copyFileSync(plan.output, core);
+	// Kitchen's dev packaging does not sign libraries; verify the final bytes
+	// before recording the replacement hash or building either app variant.
+	command(process.execPath, ["scripts/verify-macho-code-signing.js", core]);
+	command("codesign", ["--force", "--sign", "-", core]);
+	command("codesign", ["--verify", "--strict", core]);
+	command(process.execPath, ["scripts/verify-macho-deployment-target.js", `--arch=${target.arch}`, core]);
+	command(process.execPath, ["scripts/verify-macho-code-signing.js", core]);
+	validateNativeDevkitManifest({ coreRoot: dist, expectedVersion: version, expectedTarget: { os: "macos", arch: target.arch } });
+	const after = devkitFileHashes(dist);
+	writeFileSync(join(diagnostics, "debug-core-devkit-after-sha256.json"), JSON.stringify(after, null, 2));
+	assertOnlyCoreChanged(before, after);
+	provenance.devkitCoreSha256 = after["libElectrobunCore.dylib"];
+	provenance.debugCore.replacementSha256 = provenance.devkitCoreSha256;
+	provenance.debugCore.onlyCoreChanged = true;
+	writeFileSync(join(diagnostics, "wrapper-provenance.json"), JSON.stringify(provenance, null, 2));
+}
+
 function prepare() {
 	mkdirSync(dist, { recursive: true });
 	const artifactHashes = {};
@@ -314,8 +393,12 @@ function prepare() {
 	const version = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).version;
 	validateNativeDevkitManifest({ coreRoot: dist, expectedVersion: version, expectedTarget: { os: "macos", arch: target.arch } });
 	command(process.execPath, ["scripts/verify-macho-deployment-target.js", `--arch=${target.arch}`, dist]);
+	const nativeWrapperRebuilt = process.env.REBUILD_NATIVE !== "false";
+	const debugCoreRebuilt = process.env.REBUILD_DEBUG_CORE === "true";
 	const provenance = {
-		mode: process.env.REBUILD_NATIVE === "false" ? "original-artifact" : "rebuilt-native-wrapper",
+		mode: debugCoreRebuilt ? (nativeWrapperRebuilt ? "rebuilt-native-wrapper-and-debug-core" : "rebuilt-debug-core") : (nativeWrapperRebuilt ? "rebuilt-native-wrapper" : "original-artifact"),
+		nativeWrapperRebuilt,
+		debugCoreRebuilt,
 		architecture: target.arch,
 		artifactRun: JSON.parse(readFileSync(join(diagnostics, "artifact-run.json"), "utf8")).id,
 		artifactSourceRevision: JSON.parse(readFileSync(join(diagnostics, "artifact-run.json"), "utf8")).head_sha,
@@ -324,9 +407,12 @@ function prepare() {
 		nativeSourceSha256: sha256(join(packageRoot, "src/native/macos/nativeWrapper.mm")),
 		originalWrapperSha256: sha256(join(dist, "libNativeWrapper.dylib")),
 		devkitWrapperSha256: sha256(join(dist, "libNativeWrapper.dylib")),
+		originalCoreSha256: sha256(join(dist, "libElectrobunCore.dylib")),
+		devkitCoreSha256: sha256(join(dist, "libElectrobunCore.dylib")),
 	};
 	writeFileSync(join(diagnostics, "wrapper-provenance.json"), JSON.stringify(provenance, null, 2));
-	if (process.env.REBUILD_NATIVE === "false") return;
+	if (debugCoreRebuilt) rebuildDebugCore(provenance, version);
+	if (!nativeWrapperRebuilt) return;
 
 	// Use the exact SDK versions used by build.ts. Rebuilding only this dylib
 	// avoids rebuilding Zig/core, launchers, and unrelated language toolchains.
@@ -376,13 +462,20 @@ function bundledWrapperEvidence(variant) {
 	const apps = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.endsWith(".app"));
 	if (apps.length !== 1) throw new Error(`Expected one packaged app for ${variant}; found ${apps.length}`);
 	const wrapper = join(root, apps[0].name, "Contents", "MacOS", "libNativeWrapper.dylib");
+	const core = join(root, apps[0].name, "Contents", "MacOS", "libElectrobunCore.dylib");
 	const actualSha256 = sha256(wrapper);
-	return { variant, wrapper, actualSha256, expectedSha256: provenance.devkitWrapperSha256, matchesDevkit: actualSha256 === provenance.devkitWrapperSha256 };
+	const coreSha256 = sha256(core);
+	assertPackagedRuntimeHashes(
+		{ core: provenance.devkitCoreSha256, wrapper: provenance.devkitWrapperSha256 },
+		{ core: coreSha256, wrapper: actualSha256 },
+	);
+	return { variant, wrapper, actualSha256, expectedSha256: provenance.devkitWrapperSha256, matchesDevkit: true,
+		core: { path: core, actualSha256: coreSha256, expectedSha256: provenance.devkitCoreSha256, matchesDevkit: true } };
 }
 
 async function runTests() {
 	const provenance = JSON.parse(readFileSync(join(diagnostics, "wrapper-provenance.json"), "utf8"));
-	const traceRequired = provenance.mode === "rebuilt-native-wrapper";
+	const traceRequired = provenance.nativeWrapperRebuilt;
 	const bundledWrappers = ["bun:native", "bun:cef"].map(bundledWrapperEvidence);
 	writeFileSync(join(diagnostics, "bundled-wrapper-sha256.json"), JSON.stringify(bundledWrappers, null, 2));
 	if (bundledWrappers.some((wrapper) => !wrapper.matchesDevkit)) throw new Error("Packaged Kitchen wrapper differs from the prepared devkit; refusing to launch");

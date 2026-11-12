@@ -1,8 +1,87 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { fullscreenDiagnosticTarget, fullSuiteLaunch } from "./fullscreen-intel-diagnostic.mjs";
+import {
+	assertOnlyCoreChanged, assertPackagedRuntimeHashes, debugCoreBuildPlan, devkitFileHashes,
+	fullscreenDiagnosticTarget, fullSuiteLaunch,
+} from "./fullscreen-intel-diagnostic.mjs";
+
+const coreTree = "a".repeat(40);
+const debugPlanOptions = { packageRoot: resolve("fixture package"), zigVersion: "0.17.0", artifactSourceTree: coreTree, checkoutSourceTree: coreTree };
+
+for (const [arch, zigArch] of [["arm64", "aarch64"], ["x64", "x86_64"]]) {
+	test(`Debug Core plan builds only ${arch} Core with the VM's Debug mode and macOS baseline`, () => {
+		const plan = debugCoreBuildPlan({ ...debugPlanOptions, arch });
+		assert.deepEqual(plan, {
+			command: "zig",
+			args: ["build", `-Dtarget=${zigArch}-macos.14.0`, "-Doptimize=Debug"],
+			cwd: join(debugPlanOptions.packageRoot, "src", "core"),
+			output: join(debugPlanOptions.packageRoot, "src", "core", "zig-out", "lib", "libElectrobunCore.dylib"),
+		});
+	});
+}
+
+test("Debug Core refuses a different compiler, architecture or source tree", () => {
+	for (const override of [
+		{ zigVersion: "0.16.0" }, { arch: "aarch64" },
+		{ artifactSourceTree: "b".repeat(40) }, { checkoutSourceTree: "b".repeat(40) },
+		{ artifactSourceTree: "", checkoutSourceTree: "" },
+	]) {
+		assert.throws(() => debugCoreBuildPlan({ ...debugPlanOptions, arch: "arm64", ...override }));
+	}
+});
+
+test("Core replacement preserves every other devkit file, including the manifest", () => {
+	const root = mkdtempSync(join(tmpdir(), "electrobun-debug-core-test-"));
+	try {
+		mkdirSync(join(root, "cef"));
+		for (const path of ["libElectrobunCore.dylib", "libElectrobunUI.dylib", "libNativeWrapper.dylib", "native-devkit.json", "cef/framework"]) {
+			writeFileSync(join(root, path), `original:${path}`);
+		}
+		const before = devkitFileHashes(root);
+		assert.throws(() => assertOnlyCoreChanged(before, devkitFileHashes(root)), /must change the Core/);
+		writeFileSync(join(root, "libElectrobunCore.dylib"), "debug core");
+		const after = devkitFileHashes(root);
+		assert.doesNotThrow(() => assertOnlyCoreChanged(before, after));
+		for (const path of ["libElectrobunUI.dylib", "libNativeWrapper.dylib", "native-devkit.json", "cef/framework"]) {
+			assert.throws(() => assertOnlyCoreChanged(before, { ...after, [path]: "changed" }), /changed another devkit file/);
+		}
+		assert.throws(() => assertOnlyCoreChanged(before, { ...after, "unexpected.dylib": "added" }), /changed another devkit file/);
+		const removed = { ...after };
+		delete removed["libNativeWrapper.dylib"];
+		assert.throws(() => assertOnlyCoreChanged(before, removed), /changed another devkit file/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("Core replacement also preserves POSIX framework symlink targets", { skip: process.platform === "win32" }, () => {
+	const root = mkdtempSync(join(tmpdir(), "electrobun-debug-core-symlink-test-"));
+	try {
+		writeFileSync(join(root, "libElectrobunCore.dylib"), "release core");
+		symlinkSync("framework", join(root, "Current"));
+		const before = devkitFileHashes(root);
+		writeFileSync(join(root, "libElectrobunCore.dylib"), "debug core");
+		assert.doesNotThrow(() => assertOnlyCoreChanged(before, devkitFileHashes(root)));
+		unlinkSync(join(root, "Current"));
+		symlinkSync("other-framework", join(root, "Current"));
+		assert.throws(() => assertOnlyCoreChanged(before, devkitFileHashes(root)), /Current/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("packaged Core and wrapper must both match the prepared devkit before launch", () => {
+	const expected = { core: "a".repeat(64), wrapper: "b".repeat(64) };
+	assert.doesNotThrow(() => assertPackagedRuntimeHashes(expected, { ...expected }));
+	for (const component of ["core", "wrapper"]) {
+		assert.throws(() => assertPackagedRuntimeHashes(expected, { ...expected, [component]: "c".repeat(64) }), new RegExp(component));
+		assert.throws(() => assertPackagedRuntimeHashes({ ...expected, [component]: undefined }, expected), new RegExp(component));
+		assert.throws(() => assertPackagedRuntimeHashes({ ...expected, [component]: "" }, { ...expected, [component]: "" }), new RegExp(component));
+	}
+});
 
 for (const expected of [
 	{ arch: "x64", machine: "x86_64", artifactSuffix: "darwin-x64", bundleDirectory: "dev-macos-x64", cefPlatform: "macosx64" },
@@ -79,12 +158,25 @@ test("diagnostic defaults retain the exact beta16 artifacts without rebuilding t
 		artifact_run_id: "43200214270",
 		artifact_sha: "146da4c44a13ac1ae761696e1a578bb98d7a0aea",
 		rebuild_native: "false",
+		rebuild_debug_core: "false",
 		full_suite: "true",
 	})) {
 		const block = workflowBlock(new RegExp(`^\\s*${input}:\\s*$`));
 		const value = block.match(/^\s*default:\s*([^\r\n]+)$/m)?.[1].trim().replace(/^(['"])(.*)\1$/, "$2");
 		assert.equal(value, expected, `unexpected default for ${input}`);
 	}
+});
+
+test("Debug Core is explicit, uses pinned Zig and skips unrelated stock controls", () => {
+	assert.match(workflowBlock(/^\s*stock-cocoa:\s*$/), /^\s*if:\s*\$\{\{ !inputs\.rebuild_debug_core \}\}\s*$/m);
+	const zig = workflowBlock(/^\s*- uses: mlugg\/setup-zig@v2\s*$/);
+	assert.match(zig, /^\s*if:\s*inputs\.rebuild_debug_core\s*$/m);
+	assert.match(zig, /^\s*version:\s*0\.17\.0\s*$/m);
+	const prepare = workflowBlock(/^\s*- name: Stage immutable devkit and apply selected diagnostic rebuilds\s*$/);
+	assert.match(prepare, /REBUILD_DEBUG_CORE:\s*\$\{\{ inputs\.rebuild_debug_core \}\}/);
+	assert.match(prepare, /REBUILD_NATIVE:\s*\$\{\{ inputs\.rebuild_native \}\}/);
+	assert.ok(workflow.includes("contents/package/src?ref=$ARTIFACT_SHA"));
+	assert.ok(workflow.includes("artifact-core-tree-sha.txt"));
 });
 
 test("workflow selects both artifact architectures and retains owned-app samples on failure", () => {

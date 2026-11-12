@@ -24,6 +24,10 @@ on:
         description: Rebuild the native window wrapper from this checkout
         type: boolean
         default: false
+      rebuild_debug_core:
+        description: Replace only Core with a Debug build of the artifact's exact source
+        type: boolean
+        default: false
       full_suite:
         description: Run the full Bun native and CEF Kitchen suites, retaining the prelude and owned-app samples
         type: boolean
@@ -39,6 +43,7 @@ concurrency:
 
 jobs:
   stock-cocoa:
+    if: ${{ !inputs.rebuild_debug_core }}
     name: Stock Cocoa (${{ matrix.runner }})
     strategy:
       fail-fast: false
@@ -104,6 +109,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
           ARTIFACT_SHA: ${{ inputs.artifact_sha }}
+          REBUILD_DEBUG_CORE: ${{ inputs.rebuild_debug_core }}
           EXPECTED_MACHINE: ${{ endsWith(inputs.integration_runner, '-intel') && 'x86_64' || 'arm64' }}
         run: |
           test "$(uname -m)" = "$EXPECTED_MACHINE"
@@ -117,6 +123,9 @@ jobs:
             gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/$source?ref=$ARTIFACT_SHA" > "$RUNNER_TEMP/artifact-source"
             cmp "$source" "$RUNNER_TEMP/artifact-source"
           done
+          if [[ "$REBUILD_DEBUG_CORE" == true ]]; then
+            gh api "repos/$GITHUB_REPOSITORY/contents/package/src?ref=$ARTIFACT_SHA" --jq '.[] | select(.name == "core" and .type == "dir") | .sha' > "$FULLSCREEN_DIAGNOSTICS/artifact-core-tree-sha.txt"
+          fi
       - uses: actions/download-artifact@v7
         with:
           github-token: ${{ github.token }}
@@ -132,13 +141,18 @@ jobs:
       - uses: ./.github/actions/install-hutch
         with:
           channel: canary
+      - uses: mlugg/setup-zig@v2
+        if: inputs.rebuild_debug_core
+        with:
+          version: 0.17.0
       - name: Check diagnostic plans
         run: node --test package/scripts/fullscreen-intel-diagnostic.test.mjs
-      - name: Stage immutable devkit and optionally rebuild native window wrapper
+      - name: Stage immutable devkit and apply selected diagnostic rebuilds
         timeout-minutes: 15
         shell: bash
         env:
           REBUILD_NATIVE: ${{ inputs.rebuild_native }}
+          REBUILD_DEBUG_CORE: ${{ inputs.rebuild_debug_core }}
         run: node package/scripts/fullscreen-intel-diagnostic.mjs prepare 2>&1 | tee "$FULLSCREEN_DIAGNOSTICS/prepare.log"
       - name: Install Kitchen dependencies
         working-directory: kitchen
