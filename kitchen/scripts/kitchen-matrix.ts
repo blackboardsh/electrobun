@@ -10,12 +10,14 @@ import {
 	rmSync,
 	statSync,
 	symlinkSync,
+	writeFileSync,
 } from "node:fs";
 import { availableParallelism } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { selectHutchBinary } from "../../package/scripts/hutch-launcher.mjs";
 import { captureKitchenHangDiagnostics } from "./kitchen-hang-diagnostics";
+import { createFullscreenPhaseWatcher } from "./kitchen-fullscreen-watch";
 import {
 	createKitchenMatrix,
 	KITCHEN_MAIN_PROCESSES,
@@ -307,7 +309,7 @@ renderer, plus Bun with CEF. Use --with for a focused pass or --full
 after renderer-plumbing changes.`);
 }
 
-function pipePrefixed(stream: Readable, prefix: string, target: NodeJS.WriteStream): void {
+export function pipePrefixed(stream: Readable, prefix: string, target: Writable, observeLine?: (line: string) => void): void {
 	let pending = "";
 	stream.setEncoding("utf8");
 	stream.on("data", (chunk: string) => {
@@ -316,11 +318,15 @@ function pipePrefixed(stream: Readable, prefix: string, target: NodeJS.WriteStre
 			const newline = pending.indexOf("\n");
 			if (newline < 0) break;
 			target.write(`${prefix}${pending.slice(0, newline + 1)}`);
+			observeLine?.(pending.slice(0, newline));
 			pending = pending.slice(newline + 1);
 		}
 	});
 	stream.on("end", () => {
-		if (pending) target.write(`${prefix}${pending}\n`);
+		if (pending) {
+			target.write(`${prefix}${pending}\n`);
+			observeLine?.(pending);
+		}
 	});
 }
 
@@ -351,8 +357,24 @@ function runHutchForVariant(
 			windowsHide: false,
 		});
 		activeChildren.set(child, isolatedProcessGroup);
+		const fullscreenWatcher = createFullscreenPhaseWatcher({
+			enabled: command === "run" && timeoutSeconds !== null && process.platform === "darwin" &&
+				process.env["ELECTROBUN_DEBUG_FULLSCREEN"] === "1",
+			capture: async (phase) => {
+				const directory = await captureKitchenHangDiagnostics({
+					pid: child.pid, key, mainProcess: variant.mainProcess, isolatedProcessGroup,
+				});
+				if (directory) {
+					writeFileSync(join(directory, "phase.json"), JSON.stringify({
+						...phase, stalledForMs: 3000,
+					}, null, 2) + "\n");
+					console.error(`[${key}] Fullscreen phase diagnostics: ${directory}`);
+				}
+			},
+			onError: (error) => console.error(`[${key}] Could not collect fullscreen phase diagnostics: ${error}`),
+		});
 		if (child.stdout) pipePrefixed(child.stdout, `[${key}] `, process.stdout);
-		if (child.stderr) pipePrefixed(child.stderr, `[${key}] `, process.stderr);
+		if (child.stderr) pipePrefixed(child.stderr, `[${key}] `, process.stderr, fullscreenWatcher.observeLine);
 
 		let settled = false;
 		let timedOut = false;
@@ -396,18 +418,19 @@ function runHutchForVariant(
 				}
 			}, timeoutSeconds * 1000);
 		}
-		const reject = (error: Error) => {
+		const reject = async (error: Error) => {
 			if (settled) return;
 			settled = true;
 			clearTimers();
 			activeChildren.delete(child);
+			await fullscreenWatcher.finish();
 			rejectPromise(error);
 		};
 
 		child.on("error", (error) => {
-			reject(new Error(`${key}: failed to start Hutch: ${error.message}`));
+			void reject(new Error(`${key}: failed to start Hutch: ${error.message}`));
 		});
-		child.on("close", (code, signal) => {
+		child.on("close", async (code, signal) => {
 			if (settled) return;
 			// Closing the launcher and its pipes does not prove its descendants
 			// exited. A GUI child can ignore TERM and close/inherit no pipes. Once
@@ -419,6 +442,7 @@ function runHutchForVariant(
 			settled = true;
 			clearTimers();
 			activeChildren.delete(child);
+			await fullscreenWatcher.finish();
 			if (timedOut) {
 				rejectPromise(
 					new Error(`${key}: Hutch ${command} timed out after ${timeoutSeconds}s`),

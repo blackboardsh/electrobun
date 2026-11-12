@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { PassThrough } from "node:stream";
 import {
 	createKitchenMatrix,
 	KITCHEN_MAIN_PROCESSES,
@@ -22,6 +23,7 @@ import {
 	createKitchenMatrixRunRoot,
 	kitchenWorkspaceCopyOptions,
 	parseKitchenMatrixArguments,
+	pipePrefixed,
 	prepareKitchenVariantWorkspace,
 	publishKitchenVariantWorkspace,
 	runKitchenMatrix,
@@ -32,6 +34,132 @@ import {
 	runDiagnosticCommand,
 	selectMacosHangProcesses,
 } from "./kitchen-hang-diagnostics";
+import { createFullscreenPhaseWatcher, type FullscreenPhase } from "./kitchen-fullscreen-watch";
+
+function phaseLine(operation: string, phase: "start" | "end", windowId?: number) {
+	return `[kitchen window phase] ${JSON.stringify({ operation, phase, windowId })}`;
+}
+
+function phaseWatchFixture(enabled = true, capture?: (phase: FullscreenPhase) => Promise<void>) {
+	let now = 0;
+	const timers = new Map<() => void, number>();
+	const captures: FullscreenPhase[] = [];
+	const errors: unknown[] = [];
+	const watcher = createFullscreenPhaseWatcher({
+		enabled,
+		capture: capture ?? (async phase => { captures.push(phase); }),
+		onError: error => { errors.push(error); },
+		schedule: (callback, delay) => {
+			timers.set(callback, now + delay);
+			return () => { timers.delete(callback); };
+		},
+	});
+	return {
+		...watcher, captures, errors, timers,
+		advance(ms: number) {
+			now += ms;
+			for (const [callback, at] of timers) {
+				if (at <= now) { timers.delete(callback); callback(); }
+			}
+		},
+	};
+}
+
+describe("fullscreen phase diagnostics", () => {
+	it("does nothing when disabled or when output is not a valid targeted marker", async () => {
+		const disabled = phaseWatchFixture(false);
+		disabled.observeLine(phaseLine("fullscreen.setTrue", "start", 29));
+		expect(disabled.timers.size).toBe(0);
+		const enabled = phaseWatchFixture();
+		for (const line of ["ordinary output", "[kitchen window phase] {", phaseLine("fixture.construct", "start"),
+			phaseLine("fullscreen.setTrue", "start", -1)]) enabled.observeLine(line);
+		expect(enabled.timers.size).toBe(0);
+		await disabled.finish();
+		await enabled.finish();
+	});
+
+	it("keeps the outer creation timer across nested fixtures and accepts its new window ID", async () => {
+		const watcher = phaseWatchFixture();
+		watcher.observeLine(phaseLine("fullscreen.createWindow", "start"));
+		watcher.advance(2000);
+		watcher.observeLine(phaseLine("fixture.construct", "end", 29));
+		watcher.observeLine(phaseLine("fixture.wait100ms", "start", 29));
+		expect(watcher.timers.size).toBe(1);
+		watcher.observeLine(phaseLine("fullscreen.createWindow", "end", 29));
+		watcher.advance(3000);
+		expect(watcher.captures).toEqual([]);
+		expect(watcher.timers.size).toBe(0);
+		await watcher.finish();
+	});
+
+	it("captures only once after three seconds of an unresolved phase", async () => {
+		const watcher = phaseWatchFixture();
+		watcher.observeLine(phaseLine("baseline.getFrame", "start", 29));
+		watcher.observeLine(phaseLine("baseline.getFrame", "end", 30));
+		watcher.advance(2999);
+		expect(watcher.captures).toEqual([]);
+		watcher.advance(1);
+		expect(watcher.captures).toEqual([{ operation: "baseline.getFrame", windowId: 29 }]);
+		watcher.observeLine(phaseLine("fullscreen.exitObservationAndAssert", "start", 29));
+		watcher.advance(3000);
+		expect(watcher.captures).toHaveLength(1);
+		await watcher.finish();
+	});
+
+	it("replaces an unfinished phase and cancels timers on launch completion", async () => {
+		const watcher = phaseWatchFixture();
+		watcher.observeLine(phaseLine("fullscreen.setTrue", "start", 29));
+		watcher.advance(2500);
+		watcher.observeLine(phaseLine("fullscreen.enterObservationAndAssert", "start", 29));
+		watcher.advance(1000);
+		expect(watcher.captures).toEqual([]);
+		expect(watcher.timers.size).toBe(1);
+		await watcher.finish();
+		watcher.observeLine(phaseLine("fullscreen.setFalse", "start", 29));
+		watcher.advance(3000);
+		expect(watcher.captures).toEqual([]);
+		expect(watcher.timers.size).toBe(0);
+	});
+
+	it("waits for an in-flight report and contains capture failure", async () => {
+		let rejectCapture!: (error: Error) => void;
+		const report = new Promise<void>((_, reject) => { rejectCapture = reject; });
+		const watcher = phaseWatchFixture(true, () => report);
+		watcher.observeLine(phaseLine("fullscreen.exitObservationAndAssert", "start", 29));
+		watcher.advance(3000);
+		let finished = false;
+		const completion = watcher.finish().then(() => { finished = true; });
+		await Promise.resolve();
+		expect(finished).toBe(false);
+		const failure = new Error("sample unavailable");
+		rejectCapture(failure);
+		await completion;
+		expect(finished).toBe(true);
+		expect(watcher.errors).toEqual([failure]);
+	});
+
+	it("observes split stderr lines without changing their forwarded contents", async () => {
+		const input = new PassThrough();
+		const output = new PassThrough();
+		let forwarded = "";
+		output.on("data", chunk => { forwarded += chunk.toString(); });
+		const watcher = phaseWatchFixture();
+		pipePrefixed(input, "[bun-native] ", output, watcher.observeLine);
+		const start = phaseLine("fullscreen.setTrue", "start", 29);
+		input.write(start.slice(0, 12));
+		expect(watcher.timers.size).toBe(0);
+		input.write(start.slice(12) + "\n");
+		expect(watcher.timers.size).toBe(1);
+		const end = phaseLine("fullscreen.setTrue", "end", 29);
+		const ended = new Promise<void>(resolve => input.once("end", resolve));
+		input.end(end);
+		await ended;
+		expect(watcher.timers.size).toBe(0);
+		expect(forwarded).toBe(`[bun-native] ${start}\n[bun-native] ${end}\n`);
+		await watcher.finish();
+		output.end();
+	});
+});
 
 function signalOwnedProcess(pid: number, signal: NodeJS.Signals | 0): boolean {
 	if (!Number.isInteger(pid) || pid <= 1) throw new Error(`Invalid fixture PID: ${pid}`);
