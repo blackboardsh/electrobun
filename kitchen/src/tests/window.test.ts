@@ -4,7 +4,7 @@ import { defineTest, expect, sleep, type TitleBarStyle } from "../test-framework
 import { BrowserWindow, Screen } from "electrobun/main";
 import { createTestHarnessRPC } from "./rpc.test";
 import { isFullscreenRestored, waitForWindowObservation, type FullscreenSnapshot } from "../test-framework/window-observation";
-import { finishWindowPhase, startWindowPhase } from "../test-framework/window-diagnostics";
+import { finishWindowPhase, readWindowSnapshot, startWindowPhase } from "../test-framework/window-diagnostics";
 
 type ViewportSize = {
   width: number;
@@ -50,34 +50,40 @@ async function waitForFullscreen(
   }
 }
 
-function readFullscreenSnapshot(window: Pick<BrowserWindow, "isFullScreen" | "getFrame">, diagnosticWindowId?: number): FullscreenSnapshot {
-  // Split only the initial snapshot's timings; polling keeps its existing reads
-  // and frequency without producing a diagnostic line for every observation.
+function readFullscreenSnapshot(
+  window: Pick<BrowserWindow, "isFullScreen" | "getFrame">,
+  diagnosticWindowId?: number,
+  diagnosticMode: "baseline" | "restoration" = "baseline",
+): FullscreenSnapshot {
+  const readers = {
+    isFullScreen: () => window.isFullScreen(),
+    getFrame: () => ({ ...window.getFrame() }),
+    getPrimaryDisplay: () => ({ ...Screen.getPrimaryDisplay().workArea }),
+  };
+  if (diagnosticMode === "restoration") return readWindowSnapshot(readers, diagnosticWindowId);
+  // Keep the initial per-field markers; restoration emits only slow snapshots.
   if (diagnosticWindowId !== undefined && process.env["ELECTROBUN_DEBUG_FULLSCREEN"] === "1") {
     let phase = startWindowPhase("baseline.isFullScreen", diagnosticWindowId);
-    const fullscreen = window.isFullScreen();
+    const fullscreen = readers.isFullScreen();
     finishWindowPhase(phase);
     phase = startWindowPhase("baseline.getFrame", diagnosticWindowId);
-    const frame = { ...window.getFrame() };
+    const frame = readers.getFrame();
     finishWindowPhase(phase);
     phase = startWindowPhase("baseline.getPrimaryDisplay", diagnosticWindowId);
-    const workArea = { ...Screen.getPrimaryDisplay().workArea };
+    const workArea = readers.getPrimaryDisplay();
     finishWindowPhase(phase);
     return { fullscreen, frame, workArea };
   }
-  return {
-    fullscreen: window.isFullScreen(),
-    frame: { ...window.getFrame() },
-    workArea: { ...Screen.getPrimaryDisplay().workArea },
-  };
+  return readWindowSnapshot(readers);
 }
 
 async function waitForFullscreenRestoration(
   window: Pick<BrowserWindow, "isFullScreen" | "getFrame">,
   original: FullscreenSnapshot,
   log: (message: string) => void,
+  diagnosticWindowId: number,
 ): Promise<void> {
-  await waitForWindowObservation(`Fullscreen restoration to ${JSON.stringify(original)}`, () => readFullscreenSnapshot(window),
+  await waitForWindowObservation(`Fullscreen restoration to ${JSON.stringify(original)}`, () => readFullscreenSnapshot(window, diagnosticWindowId, "restoration"),
     (observed) => isFullscreenRestored(observed, original),
     { timeoutMs: 5000 * (process.platform === "win32" ? 3 : 1), log });
 }
@@ -433,7 +439,7 @@ export const windowTests = [
       win.window.setFullScreen(false);
       finishWindowPhase(phase);
       phase = startWindowPhase("fullscreen.exitObservationAndAssert", win.id);
-      await waitForFullscreenRestoration(win.window, original, log);
+      await waitForFullscreenRestoration(win.window, original, log, win.id);
       expect(win.window.isFullScreen()).toBe(false);
       finishWindowPhase(phase);
 
@@ -485,7 +491,7 @@ export const windowTests = [
       win.window.setFullScreen(false);
       finishWindowPhase(phase);
       phase = startWindowPhase("fullscreen.exitObservationAndAssert", win.id);
-      await waitForFullscreenRestoration(win.window, original, log);
+      await waitForFullscreenRestoration(win.window, original, log, win.id);
       expect(win.window.isFullScreen()).toBe(false);
       finishWindowPhase(phase);
     },

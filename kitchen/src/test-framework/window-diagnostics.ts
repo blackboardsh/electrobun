@@ -27,3 +27,46 @@ export function finishWindowPhase(phase: WindowPhase | undefined, windowId = pha
     elapsedMs: Math.round(finishedAt - phase.startedAt),
   })}`);
 }
+
+type WindowSnapshotReaders<Frame, WorkArea> = {
+  isFullScreen: () => boolean;
+  getFrame: () => Frame;
+  getPrimaryDisplay: () => WorkArea;
+};
+
+// Preserve the sequential native reads: a slow field can otherwise make the
+// snapshot combine fullscreen state and geometry from different moments.
+export function readWindowSnapshot<Frame, WorkArea>(
+  readers: WindowSnapshotReaders<Frame, WorkArea>,
+  windowId?: number,
+): { fullscreen: boolean; frame: Frame; workArea: WorkArea } {
+  const enabled = windowId !== undefined && process.env["ELECTROBUN_DEBUG_FULLSCREEN"] === "1";
+  const startedAt = enabled ? performance.now() : 0;
+  const fieldElapsedMs: Record<string, number> = {};
+  function read<T>(field: keyof WindowSnapshotReaders<Frame, WorkArea>, operation: () => T): T {
+    if (!enabled) return operation();
+    const started = performance.now();
+    const value = operation();
+    fieldElapsedMs[field] = Math.round(performance.now() - started);
+    return value;
+  }
+
+  const snapshot = {
+    fullscreen: read("isFullScreen", readers.isFullScreen),
+    frame: read("getFrame", readers.getFrame),
+    workArea: read("getPrimaryDisplay", readers.getPrimaryDisplay),
+  };
+  if (enabled) {
+    const finishedAt = performance.now();
+    const elapsed = finishedAt - startedAt;
+    if (elapsed > 100) {
+      console.error(`[kitchen window phase] ${JSON.stringify({
+        at: new Date().toISOString(), phase: "slow-snapshot",
+        operation: "fullscreen.restorationSnapshot", windowId,
+        startedTMs: Math.round(startedAt), tMs: Math.round(finishedAt),
+        elapsedMs: Math.round(elapsed), fieldElapsedMs,
+      })}`);
+    }
+  }
+  return snapshot;
+}
