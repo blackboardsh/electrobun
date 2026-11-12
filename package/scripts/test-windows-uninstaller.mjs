@@ -53,6 +53,7 @@ assert.equal(
 	focusedTest === undefined ||
 		focusedTest === "bootstrap" ||
 		focusedTest === "update-refresh" ||
+		focusedTest === "command-diagnostics" ||
 		focusedTest === "interactive" ||
 		focusedTest === "installer-ui",
 	true,
@@ -1566,6 +1567,37 @@ function runLauncherDelegationTest() {
 	resetChannel("stable");
 }
 
+function runShortcutPreflightDiagnosticsTest() {
+	console.log("Testing labelled shortcut preflight failures retain the installation...");
+	install("stable");
+	const paths = seedState("stable");
+	for (const [shortcut, operation] of [
+		[paths.desktopShortcut, "preflight-desktop-shortcut"],
+		[paths.startShortcut, "preflight-start-menu-shortcut"],
+	]) {
+		const before = captureFixture("stable");
+		const original = readFileSync(shortcut);
+		unlinkSync(shortcut);
+		mkdirSync(shortcut);
+		try {
+			const result = runManagerExpectingFailure("stable", ["--uninstall", "--quiet", "--delete-data"]);
+			assert.match(result.stderr, new RegExp(`operation=${operation} executable=powershell\\.exe exitCode=2`));
+			assert.match(result.stderr, /error: WindowsCommandFailed/);
+			assert.deepEqual(walkSnapshot(paths.root), before.files, "failed preflight mutated the app, data, or retry manager/manifest");
+			assert.deepEqual(registryProperties("stable"), before.registry, "failed preflight removed uninstall registration");
+			assert.equal(lstatSync(shortcut).isDirectory(), true, "failed preflight removed the unowned shortcut node");
+			assert.deepEqual(readdirSync(shortcut), []);
+		} finally {
+			rmdirSync(shortcut);
+			writeFileSync(shortcut, original);
+		}
+		assertFixtureUnchanged("stable", before, "failed shortcut preflight changed installation ownership");
+	}
+	runManager("stable", ["--uninstall", "--quiet", "--delete-data"]);
+	waitFor(() => !pathExists(paths.root), "successful retry after shortcut preflight failure", 35_000);
+	assert.equal(registryExists("stable"), false);
+}
+
 function runUpdateRefreshTest(extractor) {
 	console.log("Testing manager replacement and registration refresh after update...");
 	const installation = install("stable");
@@ -2055,6 +2087,8 @@ try {
 		runBootstrapInstallTest();
 	} else if (focusedTest === "update-refresh") {
 		runUpdateRefreshTest(extractor);
+	} else if (focusedTest === "command-diagnostics") {
+		runShortcutPreflightDiagnosticsTest();
 	} else if (focusedTest === "interactive") {
 		runInteractiveTests();
 	} else if (focusedTest === "installer-ui") {
@@ -2066,6 +2100,7 @@ try {
 		runDamagedAppTest();
 		runLocationAndJunctionSafetyTests();
 		runLauncherDelegationTest();
+		runShortcutPreflightDiagnosticsTest();
 		runUpdateRefreshTest(extractor);
 		runNonceRaceTest();
 		runLegacyManifestTest();
@@ -2085,6 +2120,8 @@ try {
 			? "Windows first-v2-launch bootstrap integration passed"
 			: focusedTest === "update-refresh"
 			? "Windows uninstaller focused update-refresh integration passed"
+			: focusedTest === "command-diagnostics"
+			? "Windows uninstaller command diagnostics integration passed"
 			: focusedTest === "interactive"
 				? "Windows uninstaller focused interactive integration passed"
 				: focusedTest === "installer-ui"

@@ -4,11 +4,13 @@ const zstd = std.compress.zstd;
 const archive_recipe = @import("archive_recipe.zig");
 const prepare_update = @import("prepare_update.zig");
 const linux_uninstall_prompt = @import("linux_uninstall_prompt.zig");
+const windows_command = @import("windows_command.zig");
 
 test {
     _ = archive_recipe;
     _ = prepare_update;
     _ = @import("stream_patch.zig");
+    _ = windows_command;
 }
 
 // Initialized at the top of main(). Test-only helpers do not touch these.
@@ -2670,8 +2672,18 @@ fn runWindowsCommand(argv: []const []const u8) !bool {
     return processExitedSuccessfully(try child.wait(g_io));
 }
 
-fn runWindowsCommandChecked(argv: []const []const u8) !void {
-    if (!try runWindowsCommand(argv)) return error.WindowsCommandFailed;
+fn runWindowsCommandChecked(allocator: std.mem.Allocator, operation: []const u8, argv: []const []const u8) !void {
+    const executable = std.fs.path.basename(argv[0]);
+    const result = windows_command.run(allocator, g_io, argv) catch |err| {
+        std.debug.print("[electrobun windows command] operation={s} executable={s} error={s}\n", .{ operation, executable, @errorName(err) });
+        return err;
+    };
+    if (processExitedSuccessfully(result.term)) return;
+    var buffer: [2 * windows_command.output_limit + 1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    result.writeFailure(&writer, operation, executable) catch {};
+    std.debug.print("{s}", .{writer.buffered()});
+    return error.WindowsCommandFailed;
 }
 
 fn getWindowsSystemExecutablePath(
@@ -2842,7 +2854,7 @@ fn createWindowsShortcutFile(
         "-Command",
         ps_content,
     };
-    try runWindowsCommandChecked(&ps_args);
+    try runWindowsCommandChecked(allocator, "create-shortcut", &ps_args);
     std.debug.print("Created Windows shortcut: {s}\n", .{lnk_path});
 }
 
@@ -2850,6 +2862,7 @@ fn deleteWindowsShortcutIfTargets(
     allocator: std.mem.Allocator,
     shortcut_path: []const u8,
     expected_target: []const u8,
+    operation: []const u8,
 ) !void {
     const escaped_shortcut = try powershellSingleQuoted(allocator, shortcut_path);
     defer allocator.free(escaped_shortcut);
@@ -2883,12 +2896,13 @@ fn deleteWindowsShortcutIfTargets(
         "-Command",
         command,
     };
-    try runWindowsCommandChecked(&argv);
+    try runWindowsCommandChecked(allocator, operation, &argv);
 }
 
 fn preflightWindowsShortcutForCleanup(
     allocator: std.mem.Allocator,
     shortcut_path: []const u8,
+    operation: []const u8,
 ) !void {
     const escaped_shortcut = try powershellSingleQuoted(allocator, shortcut_path);
     defer allocator.free(escaped_shortcut);
@@ -2917,7 +2931,7 @@ fn preflightWindowsShortcutForCleanup(
         "-Command",
         command,
     };
-    try runWindowsCommandChecked(&argv);
+    try runWindowsCommandChecked(allocator, operation, &argv);
 }
 
 fn deleteObsoleteWindowsShortcut(
@@ -2927,7 +2941,7 @@ fn deleteObsoleteWindowsShortcut(
     expected_target: []const u8,
 ) !void {
     if (try windowsPathsEqual(allocator, shortcut_path, current_shortcut_path)) return;
-    try deleteWindowsShortcutIfTargets(allocator, shortcut_path, expected_target);
+    try deleteWindowsShortcutIfTargets(allocator, shortcut_path, expected_target, "remove-obsolete-shortcut");
 }
 
 fn removePreviousWindowsShortcuts(
@@ -3168,7 +3182,7 @@ fn deleteWindowsUninstallEntry(allocator: std.mem.Allocator, identifier: []const
     // The entry is expected to exist for a registered installation. Treat any
     // delete failure as fatal so an access/registry error cannot orphan an
     // Installed Apps entry with a dead command after self-cleanup.
-    try runWindowsCommandChecked(&argv);
+    try runWindowsCommandChecked(allocator, "delete-uninstall-registry-entry", &argv);
 }
 
 fn registerWindowsUninstallEntry(
@@ -3221,7 +3235,7 @@ fn registerWindowsUninstallEntry(
         const argv = [_][]const u8{
             reg_exe, "add", key, "/v", value.name, "/t", value.kind, "/d", value.data, "/f", "/reg:64",
         };
-        try runWindowsCommandChecked(&argv);
+        try runWindowsCommandChecked(allocator, "register-uninstall-registry-entry", &argv);
     }
     std.debug.print("Registered Windows uninstaller: {s}\n", .{key});
 }
@@ -4684,7 +4698,7 @@ fn terminateWindowsAppProcesses(allocator: std.mem.Allocator, app_dir: []const u
         "-Command",
         command,
     };
-    try runWindowsCommandChecked(&argv);
+    try runWindowsCommandChecked(allocator, "terminate-app-processes", &argv);
     g_io.sleep(.fromMilliseconds(500), .awake) catch {};
 }
 
@@ -5100,8 +5114,8 @@ fn uninstallWindows(
     try validateWindowsManagedChildIfExists(channel_dir, "app", true, true);
     try validateWindowsManagedChildIfExists(channel_dir, "self-extraction", true, true);
     try validateWindowsManagedChildIfExists(channel_dir, "update.bat", false, true);
-    try preflightWindowsShortcutForCleanup(allocator, manifest.desktop_shortcut);
-    try preflightWindowsShortcutForCleanup(allocator, manifest.start_menu_shortcut);
+    try preflightWindowsShortcutForCleanup(allocator, manifest.desktop_shortcut, "preflight-desktop-shortcut");
+    try preflightWindowsShortcutForCleanup(allocator, manifest.start_menu_shortcut, "preflight-start-menu-shortcut");
 
     const update_task_name = try windowsUpdateTaskName(allocator, manifest.identifier, manifest.channel);
     defer allocator.free(update_task_name);
@@ -5119,9 +5133,9 @@ fn uninstallWindows(
         const end_task_args = [_][]const u8{ schtasks_path, "/end", "/tn", update_task_name };
         _ = runWindowsCommand(&end_task_args) catch false;
         const delete_task_args = [_][]const u8{ schtasks_path, "/delete", "/tn", update_task_name, "/f" };
-        if (!(runWindowsCommand(&delete_task_args) catch false)) {
+        runWindowsCommandChecked(allocator, "delete-legacy-update-task", &delete_task_args) catch {
             cleanup_error = error.WindowsCommandFailed;
-        }
+        };
     }
 
     // Stop only processes whose executable lives inside this channel's app
@@ -5141,10 +5155,10 @@ fn uninstallWindows(
     };
     const launcher_path = try std.fs.path.join(allocator, &.{ paths.app_dir, "bin", "launcher.exe" });
     defer allocator.free(launcher_path);
-    deleteWindowsShortcutIfTargets(allocator, manifest.desktop_shortcut, launcher_path) catch |err| if (cleanup_error == null) {
+    deleteWindowsShortcutIfTargets(allocator, manifest.desktop_shortcut, launcher_path, "delete-desktop-shortcut") catch |err| if (cleanup_error == null) {
         cleanup_error = err;
     };
-    deleteWindowsShortcutIfTargets(allocator, manifest.start_menu_shortcut, launcher_path) catch |err| if (cleanup_error == null) {
+    deleteWindowsShortcutIfTargets(allocator, manifest.start_menu_shortcut, launcher_path, "delete-start-menu-shortcut") catch |err| if (cleanup_error == null) {
         cleanup_error = err;
     };
     if (cleanup_error) |err| return err;

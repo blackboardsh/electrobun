@@ -147,7 +147,7 @@ assert(
 
 const vmTestCommands = createVmTestCommands({ hutchBinary, packageDir, platform: "linux", arch: "x64" });
 const armVmCommands = createVmTestCommands({ hutchBinary, packageDir, platform: "win32", arch: "arm64" });
-assert(armVmCommands.length === 18, "Windows ARM64 should test ten supported Kitchen variants and eight common stages");
+assert(armVmCommands.length === 19, "Windows ARM64 should test ten supported Kitchen variants, eight common stages, and Windows uninstaller diagnostics");
 assert(armVmCommands[0]!.args.includes("--jobs=1"), "Windows ARM64 builds run serially");
 assert(!armVmCommands[0]!.args.some((arg) => arg.includes("odin:")), "Windows ARM64 must not schedule unsupported Odin variants");
 const mainProcesses = [...VM_MAIN_PROCESSES];
@@ -219,6 +219,20 @@ assert(nativeUpdaterStage?.cwd === join(packageDir, "src", "extractor"), "Native
 assert(armVmCommands.find(command => command.label === "Native updater tests")?.command === join(packageDir, "vendors", "zig", "zig.exe"), "Windows updater tests select the executable suffix");
 assertArray(releaseStage?.args ?? [], ["check:release"], "Release check argv");
 
+for (const arch of ["x64", "arm64"]) {
+	const windowsCommands = createVmTestCommands({ hutchBinary, packageDir, platform: "win32", arch });
+	const diagnosticsStages = windowsCommands.filter(command => command.label === "Windows uninstaller command diagnostics");
+	assert(diagnosticsStages.length === 1, `${arch} should run the native Windows uninstaller failure-and-retry regression once`);
+	const diagnostics = diagnosticsStages[0]!;
+	assert(diagnostics.command === "node", `${arch} should use the existing Node integration runner`);
+	assertArray(diagnostics.args, ["scripts/test-windows-uninstaller.mjs"], `${arch} uninstaller diagnostics argv`);
+	assert(diagnostics.cwd === packageDir, `${arch} uninstaller diagnostics should run from package`);
+	assert(diagnostics.env?.ELECTROBUN_WINDOWS_FOCUS === "command-diagnostics", `${arch} should select the forced-preflight regression`);
+	assert(diagnostics.env?.ELECTROBUN_WINDOWS_SKIP_BUILDS === undefined, `${arch} should build and verify native test binaries`);
+	assert(diagnostics.requires === undefined, `${arch} should run uninstaller diagnostics even when unrelated Kitchen builds fail`);
+}
+assert(!vmTestCommands.some(command => command.label === "Windows uninstaller command diagnostics"), "Linux should not schedule Windows-only uninstaller diagnostics");
+
 const attemptedVmStages: string[] = [];
 const vmFailures = await runVmTestCommands(
 	vmTestCommands,
@@ -266,6 +280,7 @@ assertArray(
 // the other backends; a failed build must also skip both dependent stages.
 for (const arch of ["x64", "arm64"]) {
 	const macCommands = createVmTestCommands({ hutchBinary, packageDir, platform: "darwin", arch });
+	assert(!macCommands.some(command => command.label === "Windows uninstaller command diagnostics"), `${arch} macOS should not schedule Windows-only uninstaller diagnostics`);
 	const verifications = macCommands.filter(command => command.label.startsWith("Verify Kitchen macOS binaries"));
 	assert(verifications.length === vmVariants.length, `${arch} should validate every system and CEF app bundle`);
 	for (const [index, variant] of vmVariants.entries()) {

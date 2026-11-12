@@ -167,6 +167,13 @@ export function createVmTestCommands({
 			args: ["build", "test"],
 			cwd: join(packageDir, "src", "extractor"),
 		},
+		...(platform === "win32" ? [{
+			label: "Windows uninstaller command diagnostics",
+			command: "node",
+			args: ["scripts/test-windows-uninstaller.mjs"],
+			cwd: packageDir,
+			env: { ELECTROBUN_WINDOWS_FOCUS: "command-diagnostics" },
+		}] : []),
 		{
 			label: "Release checks",
 			command: hutchBinary,
