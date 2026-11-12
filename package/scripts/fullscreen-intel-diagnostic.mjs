@@ -56,6 +56,49 @@ export function fullSuiteLaunch(variant, { repository, dist, env }) {
 	};
 }
 
+export function selectVmBunCommands(commands) {
+	return ["system", "cef"].flatMap((renderer) => {
+		const launches = commands.filter((command) =>
+			command.args[0] === "scripts/kitchen-matrix.ts" &&
+			command.args.includes("--launch-only") && command.args.includes(`--with=bun:${renderer}`));
+		if (launches.length !== 1) throw new Error(`Expected one generated Bun ${renderer} launch`);
+		const launch = launches[0];
+		const verifiers = commands.filter((command) =>
+			command.label === launch.requires && command.args[0] === "scripts/verify-macho-deployment-target.js");
+		if (verifiers.length !== 1) throw new Error(`Expected one generated Bun ${renderer} verifier`);
+		// Keep the actual generated objects, arguments, environments and verifier
+		// dependency. The staged artifact has already satisfied the build gate.
+		return [verifiers[0], launch];
+	});
+}
+
+export async function runVmSupervisorCommands(commands, temporaryDirectory, beforeCommand = () => {}) {
+	if (!process.versions.bun) throw new Error("The VM supervisor control must run under Bun via Hutch");
+	// Import only in Bun: these VM modules use its extensionless TS resolution.
+	const { runVmTestCommands } = await import("./test-vm.ts");
+	const { runCommandWithSignalForwarding } = await import("./dev.ts");
+	const { createTestRunDiagnostics } = await import("./test-run-diagnostics.mjs");
+	const runDiagnostics = createTestRunDiagnostics("test-vm", commands, { temporaryDirectory });
+	console.log(`[test:vm] Logs and runtime details: ${runDiagnostics.summaryPath}`);
+	try {
+		const failures = await runVmTestCommands(commands,
+			(command) => runDiagnostics.run(command, (current, options) => {
+				beforeCommand(current);
+				return runCommandWithSignalForwarding(current, options);
+			}),
+			(failure) => {
+				runDiagnostics.recordFailure(failure);
+				const detail = failure.error instanceof Error ? failure.error.message : String(failure.error);
+				console.error(`[test:vm] ${failure.command.label} failed; continuing with the remaining stages.\n${detail}`);
+			});
+		runDiagnostics.finish(failures);
+		return { failures, summary: JSON.parse(readFileSync(runDiagnostics.summaryPath, "utf8")) };
+	} catch (error) {
+		runDiagnostics.finish([], error);
+		throw error;
+	}
+}
+
 export function debugCoreBuildPlan({ arch, packageRoot, zigVersion, artifactSourceTree, checkoutSourceTree }) {
 	fullscreenDiagnosticTarget(arch);
 	if (zigVersion !== ZIG_VERSION) throw new Error(`Debug Core requires Zig ${ZIG_VERSION}, got ${zigVersion}`);
@@ -552,6 +595,36 @@ async function runFullSuite() {
 	if (results.some((result) => result.status !== 0)) throw new Error("Full Kitchen suite failed; inspect results.json and owned-app phase diagnostics");
 }
 
+async function runVmSuite() {
+	if (!process.versions.bun) throw new Error("Use Hutch with HUTCH_RUNTIME=bun for run-vm");
+	const { createVmTestCommands } = await import("./test-vm.ts");
+	const { resolveHutchBinary } = await import("./dev.ts");
+	const commands = selectVmBunCommands(createVmTestCommands({ hutchBinary: resolveHutchBinary(packageRoot), packageDir: packageRoot }));
+	const provenance = JSON.parse(readFileSync(join(diagnostics, "wrapper-provenance.json"), "utf8"));
+	const bundledWrappers = ["bun:native", "bun:cef"].map(bundledWrapperEvidence);
+	writeFileSync(join(diagnostics, "bundled-wrapper-sha256.json"), JSON.stringify(bundledWrappers, null, 2));
+	const variantForCommand = (command) => command.args.includes("--with=bun:system") ? "bun:native"
+		: command.args.includes("--with=bun:cef") ? "bun:cef" : null;
+	recordContext("before");
+	const { failures, summary } = await runVmSupervisorCommands(commands, diagnostics, (command) => {
+		const variant = variantForCommand(command);
+		if (variant) bundledWrapperEvidence(variant);
+	});
+	const results = summary.stages.flatMap((stage) => {
+		const variant = variantForCommand(stage);
+		if (!variant) return [];
+		const log = existsSync(stage.log) ? readFileSync(stage.log, "utf8") : "";
+		const fullSuiteObserved = log.includes("Auto-running automated tests in 3 seconds");
+		const successMarkerObserved = log.includes("Auto-run complete. Exiting with code 0");
+		return [{ variant, mode: provenance.mode, supervisor: "vm", wrapper: bundledWrappers.find((item) => item.variant === variant),
+			status: stage.status === "passed" && fullSuiteObserved && successMarkerObserved ? 0 : 1,
+			fullSuiteObserved, successMarkerObserved, stage }];
+	});
+	writeFileSync(join(diagnostics, "results.json"), JSON.stringify(results, null, 2));
+	recordContext("after");
+	if (failures.length || results.some((result) => result.status !== 0)) throw new Error("VM-supervised Kitchen suite failed; inspect results.json and test-vm logs");
+}
+
 async function main() {
 	if (process.platform !== "darwin") throw new Error("Run this diagnostic on macOS");
 	mkdirSync(diagnostics, { recursive: true });
@@ -567,7 +640,16 @@ async function main() {
 	} else if (process.argv[2] === "prepare") prepare();
 	else if (process.argv[2] === "run") await runTests();
 	else if (process.argv[2] === "run-full") await runFullSuite();
-	else throw new Error("Usage: node fullscreen-intel-diagnostic.mjs prepare|run|run-full|stock-only");
+	else if (process.argv[2] === "run-vm") await runVmSuite();
+	else throw new Error("Usage: fullscreen-intel-diagnostic.mjs prepare|run|run-full|run-vm|stock-only");
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+	try {
+		await main();
+	} catch (error) {
+		if (process.argv[2] !== "run-vm") throw error;
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exitCode = Number.isInteger(error?.status) ? error.status : 1;
+	}
+}

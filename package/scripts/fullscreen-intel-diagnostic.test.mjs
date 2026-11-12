@@ -6,11 +6,29 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import {
 	assertOnlyCoreChanged, assertPackagedRuntimeHashes, debugCoreBuildPlan, devkitFileHashes,
-	diagnosticRuntimeEnvironment, fullscreenDiagnosticTarget, fullSuiteLaunch,
+	diagnosticRuntimeEnvironment, fullscreenDiagnosticTarget, fullSuiteLaunch, selectVmBunCommands,
 } from "./fullscreen-intel-diagnostic.mjs";
 
 const coreTree = "a".repeat(40);
 const debugPlanOptions = { packageRoot: resolve("fixture package"), zigVersion: "0.17.0", artifactSourceTree: coreTree, checkoutSourceTree: coreTree };
+
+test("VM control keeps only both generated Bun verifiers and launches without changing their commands", () => {
+	const build = { label: "build", args: ["dev:matrix", "--build-only"] };
+	const verification = (name) => ({ label: `verify ${name}`, args: ["scripts/verify-macho-deployment-target.js", "--arch=arm64", name], requires: build.label });
+	const launch = (name) => ({ label: `launch ${name}`, args: ["scripts/kitchen-matrix.ts", "--launch-only", `--with=${name}`, "--timeout=1200"], requires: `verify ${name}`, env: { AUTO_RUN: "1" } });
+	const commands = [build, ...["bun:system", "cottontail:system", "bun:cef", "zig:cef"].flatMap((name) => [verification(name), launch(name)]), { label: "checks", args: ["check:release"] }];
+	const selected = selectVmBunCommands(commands);
+	assert.deepEqual(selected.map((command) => command.label), ["verify bun:system", "launch bun:system", "verify bun:cef", "launch bun:cef"]);
+	for (const command of selected) assert.equal(commands.find((candidate) => candidate.label === command.label), command, "VM logger depends on the generated command object identity");
+	for (const command of selected.filter((item) => item.args.includes("--launch-only"))) {
+		assert.ok(command.args.includes("--timeout=1200"));
+		assert.equal(command.env.AUTO_RUN, "1");
+		assert.ok(selected.some((candidate) => candidate.label === command.requires));
+	}
+	assert.throws(() => selectVmBunCommands(commands.filter((command) => command.label !== "verify bun:system")), /verifier/);
+	assert.throws(() => selectVmBunCommands([...commands, launch("bun:system")]), /one generated Bun system launch/);
+	assert.throws(() => selectVmBunCommands(commands.filter((command) => command.label !== "launch bun:cef")), /one generated Bun cef launch/);
+});
 
 test("runtime evidence records only temporary directories and the selected runtime variants", () => {
 	const selected = { TMPDIR: "/fixture/tmp", TMP: "", TEMP: "/fixture/temp", ELECTROBUN_DIAGNOSTICS_TEMP: "/fixture/diagnostics" };
@@ -173,6 +191,7 @@ test("diagnostic defaults retain the exact beta16 artifacts without rebuilding t
 		rebuild_debug_core: "false",
 		use_vm_temp_dir: "false",
 		clear_vm_user_caches: "false",
+		use_vm_supervisor: "false",
 		full_suite: "true",
 	})) {
 		const block = workflowBlock(new RegExp(`^\\s*${input}:\\s*$`));
@@ -192,7 +211,7 @@ test("VM temporary directories are opt-in and configured before installing tools
 });
 
 test("Debug Core is explicit, uses pinned Zig and skips unrelated stock controls", () => {
-	assert.match(workflowBlock(/^\s*stock-cocoa:\s*$/), /^\s*if:\s*\$\{\{ !inputs\.rebuild_debug_core && !inputs\.clear_vm_user_caches \}\}\s*$/m);
+	assert.match(workflowBlock(/^\s*stock-cocoa:\s*$/), /^\s*if:\s*\$\{\{ !inputs\.rebuild_debug_core && !inputs\.clear_vm_user_caches && !inputs\.use_vm_supervisor \}\}\s*$/m);
 	const zig = workflowBlock(/^\s*- uses: mlugg\/setup-zig@v2\s*$/);
 	assert.match(zig, /^\s*if:\s*inputs\.rebuild_debug_core\s*$/m);
 	assert.match(zig, /^\s*version:\s*0\.17\.0\s*$/m);
@@ -201,6 +220,17 @@ test("Debug Core is explicit, uses pinned Zig and skips unrelated stock controls
 	assert.match(prepare, /REBUILD_NATIVE:\s*\$\{\{ inputs\.rebuild_native \}\}/);
 	assert.ok(workflow.includes("contents/package/src?ref=$ARTIFACT_SHA"));
 	assert.ok(workflow.includes("artifact-core-tree-sha.txt"));
+});
+
+test("VM supervisor runs directly under Hutch's Bun runtime without changing application temporary directories", () => {
+	const block = workflowBlock(/^\s*- name: Run Kitchen diagnosis\s*$/);
+	assert.match(block, /^\s*working-directory:\s*package\s*$/m);
+	assert.ok(block.includes("inputs.use_vm_supervisor && 'run-vm'"));
+	assert.ok(block.includes("HUTCH_RUNTIME=bun hutch scripts/fullscreen-intel-diagnostic.mjs run-vm"));
+	assert.ok(block.includes('node scripts/fullscreen-intel-diagnostic.mjs "$DIAGNOSTIC_MODE"'));
+	assert.ok(block.includes("(inputs.full_suite || inputs.use_vm_supervisor) && 45 || 15"));
+	assert.doesNotMatch(block, /TMPDIR=|TMP=|TEMP=/);
+	assert.ok(workflowBlock(/^concurrency:\s*$/).includes('supervisor-${{ inputs.use_vm_supervisor }}'));
 });
 
 test("cache control is isolated, guarded and retains before/after deletion evidence", () => {

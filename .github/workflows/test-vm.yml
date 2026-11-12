@@ -299,6 +299,98 @@ jobs:
         working-directory: package
         run: hutch test:vm
 
+      - name: Collect actual macOS runtime evidence
+        if: always() && runner.os == 'macOS'
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { spawnSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { copyFileSync, createReadStream, lstatSync, mkdirSync, readdirSync, readlinkSync, statSync, writeFileSync } from 'node:fs';
+          import { basename, join, relative } from 'node:path';
+
+          const repository = process.cwd();
+          const destination = join(process.env.ELECTROBUN_DIAGNOSTICS_TEMP || process.env.RUNNER_TEMP, 'electrobun-macos-runtime-evidence');
+          mkdirSync(destination, { recursive: true });
+          const retainedNames = new Set(['libElectrobunCore.dylib', 'libNativeWrapper.dylib', 'launcher', 'native-devkit.json', 'main.js', 'preload-full.js', 'preload-sandboxed.js', 'compile_flags.txt']);
+          const retained = new Map();
+          const evidence = { capturedAt: new Date().toISOString(), files: [], missing: [], errors: [], commands: [] };
+          const saveIndex = () => writeFileSync(join(destination, 'index.json'), JSON.stringify(evidence, null, 2) + '\n');
+          function command(binary, args) {
+            const result = spawnSync(binary, args, { cwd: repository, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024 });
+            const entry = { binary, args, status: result.status, signal: result.signal, stdout: result.stdout || '', stderr: result.stderr || '', error: result.error?.message };
+            evidence.commands.push(entry);
+            return entry.stdout.trim();
+          }
+          async function file(path, retain = retainedNames.has(basename(path))) {
+            const source = relative(repository, path);
+            try {
+              const link = lstatSync(path);
+              const info = statSync(path);
+              if (!info.isFile()) return;
+              const hash = createHash('sha256');
+              for await (const chunk of createReadStream(path)) hash.update(chunk);
+              const sha256 = hash.digest('hex');
+              const entry = { source, size: info.size, mode: info.mode & 0o777, sha256 };
+              if (link.isSymbolicLink()) entry.symlink = readlinkSync(path);
+              if (retain) {
+                if (!retained.has(sha256)) {
+                  const saved = join('files', sha256, basename(path));
+                  mkdirSync(join(destination, 'files', sha256), { recursive: true });
+                  copyFileSync(path, join(destination, saved));
+                  retained.set(sha256, saved);
+                }
+                entry.retainedAs = retained.get(sha256);
+              }
+              evidence.files.push(entry);
+            } catch (error) {
+              if (error.code === 'ENOENT') evidence.missing.push(source);
+              else evidence.errors.push({ source, error: error.message });
+            }
+          }
+          function entries(path) {
+            try { return readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)); }
+            catch (error) {
+              const source = relative(repository, path);
+              if (error.code === 'ENOENT') evidence.missing.push(source);
+              else evidence.errors.push({ source, error: error.message });
+              return [];
+            }
+          }
+          async function directFiles(path) {
+            // Hash runtime files only; never descend into CEF frameworks or SDK trees.
+            for (const entry of entries(path)) if (entry.isFile() || entry.isSymbolicLink()) await file(join(path, entry.name));
+            saveIndex();
+          }
+          evidence.sourceRevision = command('git', ['rev-parse', 'HEAD']);
+          evidence.environment = Object.fromEntries(['ELECTROBUN_BUILD_ARCH', 'TMPDIR', 'TMP', 'TEMP', 'ImageOS', 'ImageVersion', 'DEVELOPER_DIR', 'SDKROOT', 'MACOSX_DEPLOYMENT_TARGET'].map((name) => [name, process.env[name] ?? null]));
+          for (const [binary, args] of [
+            ['sw_vers', []], ['uname', ['-a']], ['xcode-select', ['-p']], ['xcodebuild', ['-version']],
+            ['xcrun', ['--sdk', 'macosx', '--show-sdk-path']], ['xcrun', ['--sdk', 'macosx', '--show-sdk-version']],
+            ['xcrun', ['--sdk', 'macosx', '--show-sdk-build-version']], ['xcrun', ['--sdk', 'macosx', 'clang++', '--version']],
+            [join(repository, 'package/vendors/zig/zig'), ['version']],
+          ]) command(binary, args);
+          saveIndex();
+          await directFiles(join(repository, 'package/dist'));
+          await file(join(repository, 'package/src/native/compile_flags.txt'));
+          const matrix = join(repository, 'kitchen/build/matrix');
+          for (const variant of entries(matrix).filter((entry) => entry.isDirectory())) {
+            const variantRoot = join(matrix, variant.name);
+            for (const build of entries(variantRoot).filter((entry) => entry.isDirectory() && entry.name.startsWith('dev-macos-'))) {
+              const buildRoot = join(variantRoot, build.name);
+              for (const app of entries(buildRoot).filter((entry) => entry.isDirectory() && entry.name.endsWith('.app'))) {
+                const contents = join(buildRoot, app.name, 'Contents');
+                await directFiles(join(contents, 'MacOS'));
+                for (const name of ['main.js', 'preload-full.js', 'preload-sandboxed.js']) await file(join(contents, 'Resources', name));
+              }
+            }
+          }
+          saveIndex();
+          console.log(`Recorded ${evidence.files.length} runtime hashes; retained ${retained.size} distinct files; ${evidence.missing.length} missing paths and ${evidence.errors.length} read errors`);
+          NODE
+
       - name: Collect fresh macOS VM crash reports
         if: always() && runner.os == 'macOS'
         continue-on-error: true
@@ -372,6 +464,7 @@ jobs:
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-check-release-*/**
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-core-sync-*/**
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-kitchen-hang-*/**
+            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-macos-runtime-evidence/**
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/updater-lifecycle-e2e-*/signals/**
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/updater-lifecycle-e2e-diagnostics-*/**
             ${{ runner.temp }}/electrobun-macos-crash-reports/**

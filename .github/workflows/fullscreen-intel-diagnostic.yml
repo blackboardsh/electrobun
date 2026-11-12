@@ -36,6 +36,10 @@ on:
         description: Clear only the hosted macOS user's caches and logs, matching the full VM suite
         type: boolean
         default: false
+      use_vm_supervisor:
+        description: Run the full staged Bun suites through the VM supervisor and synchronous logger
+        type: boolean
+        default: false
       full_suite:
         description: Run the full Bun native and CEF Kitchen suites, retaining the prelude and owned-app samples
         type: boolean
@@ -46,12 +50,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: fullscreen-intel-diagnostic-${{ github.ref }}-temp-${{ inputs.use_vm_temp_dir }}-cache-${{ inputs.clear_vm_user_caches }}
+  group: fullscreen-intel-diagnostic-${{ github.ref }}-temp-${{ inputs.use_vm_temp_dir }}-cache-${{ inputs.clear_vm_user_caches }}-supervisor-${{ inputs.use_vm_supervisor }}
   cancel-in-progress: false
 
 jobs:
   stock-cocoa:
-    if: ${{ !inputs.rebuild_debug_core && !inputs.clear_vm_user_caches }}
+    if: ${{ !inputs.rebuild_debug_core && !inputs.clear_vm_user_caches && !inputs.use_vm_supervisor }}
     name: Stock Cocoa (${{ matrix.runner }})
     strategy:
       fail-fast: false
@@ -203,10 +207,16 @@ jobs:
       - name: Verify packaged native binaries
         run: node package/scripts/verify-macho-deployment-target.js --arch="$ELECTROBUN_BUILD_ARCH" kitchen/build/matrix
       - name: Run Kitchen diagnosis
-        timeout-minutes: ${{ inputs.full_suite && 45 || 15 }}
+        timeout-minutes: ${{ (inputs.full_suite || inputs.use_vm_supervisor) && 45 || 15 }}
+        working-directory: package
         env:
-          DIAGNOSTIC_MODE: ${{ inputs.full_suite && 'run-full' || 'run' }}
-        run: node package/scripts/fullscreen-intel-diagnostic.mjs "$DIAGNOSTIC_MODE"
+          DIAGNOSTIC_MODE: ${{ inputs.use_vm_supervisor && 'run-vm' || (inputs.full_suite && 'run-full' || 'run') }}
+        run: |
+          if [[ "$DIAGNOSTIC_MODE" == run-vm ]]; then
+            HUTCH_RUNTIME=bun hutch scripts/fullscreen-intel-diagnostic.mjs run-vm
+          else
+            node scripts/fullscreen-intel-diagnostic.mjs "$DIAGNOSTIC_MODE"
+          fi
       - name: Retain fullscreen diagnostics
         if: always()
         uses: actions/upload-artifact@v6
