@@ -36,19 +36,19 @@ import {
 } from "./kitchen-hang-diagnostics";
 import { createFullscreenPhaseWatcher, type FullscreenPhase } from "./kitchen-fullscreen-watch";
 
-function phaseLine(operation: string, phase: "start" | "end", windowId?: number) {
-	return `[kitchen window phase] ${JSON.stringify({ operation, phase, windowId })}`;
+function phaseLine(operation: string, phase: "start" | "end", windowId?: number, testId?: string) {
+	return `[kitchen window phase] ${JSON.stringify({ operation, phase, windowId, testId })}`;
 }
 
-function phaseWatchFixture(enabled = true, capture?: (phase: FullscreenPhase) => Promise<void>) {
+function phaseWatchFixture(enabled = true, capture?: (phase: FullscreenPhase) => Promise<void>, onError?: (error: unknown) => void) {
 	let now = 0;
 	const timers = new Map<() => void, number>();
 	const captures: FullscreenPhase[] = [];
 	const errors: unknown[] = [];
 	const watcher = createFullscreenPhaseWatcher({
 		enabled,
-		capture: capture ?? (async phase => { captures.push(phase); }),
-		onError: error => { errors.push(error); },
+		capture: phase => { captures.push(phase); return capture?.(phase) ?? Promise.resolve(); },
+		onError: error => { errors.push(error); onError?.(error); },
 		schedule: (callback, delay) => {
 			timers.set(callback, now + delay);
 			return () => { timers.delete(callback); };
@@ -65,14 +65,23 @@ function phaseWatchFixture(enabled = true, capture?: (phase: FullscreenPhase) =>
 	};
 }
 
+function pendingPhaseCapture() {
+	let resolve!: () => void;
+	let reject!: (error: Error) => void;
+	const report = new Promise<void>((complete, fail) => { resolve = complete; reject = fail; });
+	return { report, resolve, reject };
+}
+
 describe("fullscreen phase diagnostics", () => {
 	it("does nothing when disabled or when output is not a valid targeted marker", async () => {
 		const disabled = phaseWatchFixture(false);
 		disabled.observeLine(phaseLine("fullscreen.setTrue", "start", 29));
+		disabled.observeLine(phaseLine("fixture.construct", "start"));
 		expect(disabled.timers.size).toBe(0);
 		const enabled = phaseWatchFixture();
-		for (const line of ["ordinary output", "[kitchen window phase] {", phaseLine("fixture.construct", "start"),
-			phaseLine("fullscreen.setTrue", "start", -1)]) enabled.observeLine(line);
+		for (const line of ["ordinary output", "[kitchen window phase] {", phaseLine("fixture.wait100ms", "start"),
+			phaseLine("fullscreen.setTrue", "start", -1),
+			'[kitchen window phase] {"operation":"fixture.construct","phase":"start","testId":42}']) enabled.observeLine(line);
 		expect(enabled.timers.size).toBe(0);
 		await disabled.finish();
 		await enabled.finish();
@@ -82,27 +91,77 @@ describe("fullscreen phase diagnostics", () => {
 		const watcher = phaseWatchFixture();
 		watcher.observeLine(phaseLine("fullscreen.createWindow", "start"));
 		watcher.advance(2000);
+		watcher.observeLine(phaseLine("fixture.construct", "start", undefined, "fullscreen"));
 		watcher.observeLine(phaseLine("fixture.construct", "end", 29));
 		watcher.observeLine(phaseLine("fixture.wait100ms", "start", 29));
 		expect(watcher.timers.size).toBe(1);
 		watcher.observeLine(phaseLine("fullscreen.createWindow", "end", 29));
-		watcher.advance(3000);
+		watcher.advance(5000);
 		expect(watcher.captures).toEqual([]);
 		expect(watcher.timers.size).toBe(0);
 		await watcher.finish();
 	});
 
-	it("captures only once after three seconds of an unresolved phase", async () => {
+	it("captures fullscreen at three seconds and a later constructor at five, with no third capture", async () => {
 		const watcher = phaseWatchFixture();
 		watcher.observeLine(phaseLine("baseline.getFrame", "start", 29));
 		watcher.observeLine(phaseLine("baseline.getFrame", "end", 30));
 		watcher.advance(2999);
 		expect(watcher.captures).toEqual([]);
 		watcher.advance(1);
-		expect(watcher.captures).toEqual([{ operation: "baseline.getFrame", windowId: 29 }]);
+		expect(watcher.captures).toEqual([{ operation: "baseline.getFrame", windowId: 29, stalledForMs: 3000 }]);
+		await Promise.resolve();
+		watcher.observeLine(phaseLine("baseline.getFrame", "end", 29));
+		watcher.observeLine('[kitchen window phase] {"operation":"fixture.construct","phase":"start","testId":"always-on-top","at":"2026-11-12T17:00:00.000Z","tMs":12345}');
+		watcher.observeLine(phaseLine("fixture.construct", "end", 30, "other-test"));
+		watcher.advance(4999);
+		expect(watcher.captures).toHaveLength(1);
+		watcher.advance(1);
+		expect(watcher.captures[1]).toEqual({ operation: "fixture.construct", testId: "always-on-top", at: "2026-11-12T17:00:00.000Z", tMs: 12345, stalledForMs: 5000 });
+		await Promise.resolve();
+		watcher.observeLine(phaseLine("fixture.construct", "end", 30, "always-on-top"));
 		watcher.observeLine(phaseLine("fullscreen.exitObservationAndAssert", "start", 29));
 		watcher.advance(3000);
+		watcher.observeLine(phaseLine("fullscreen.exitObservationAndAssert", "end", 29));
+		watcher.observeLine(phaseLine("fixture.construct", "start", undefined, "later"));
+		watcher.advance(5000);
+		expect(watcher.captures).toHaveLength(2);
+		expect(watcher.timers.size).toBe(0);
+		await watcher.finish();
+	});
+
+	it("does not capture a short constructor or spend its budget", async () => {
+		const watcher = phaseWatchFixture();
+		watcher.observeLine(phaseLine("fixture.construct", "start", undefined, "short"));
+		watcher.advance(4999);
+		watcher.observeLine(phaseLine("fixture.construct", "end", 29, "short"));
+		watcher.advance(5000);
+		expect(watcher.captures).toEqual([]);
+		watcher.observeLine(phaseLine("fixture.construct", "start", undefined, "slow"));
+		watcher.advance(5000);
+		expect(watcher.captures).toEqual([{ operation: "fixture.construct", testId: "slow", stalledForMs: 5000 }]);
+		await watcher.finish();
+	});
+
+	it("tracks a fullscreen parent after its budget is spent so nested fixtures stay excluded", async () => {
+		const watcher = phaseWatchFixture();
+		watcher.observeLine(phaseLine("fullscreen.setTrue", "start", 29));
+		watcher.advance(3000);
+		await Promise.resolve();
+		watcher.observeLine(phaseLine("fullscreen.setTrue", "end", 29));
+		watcher.observeLine(phaseLine("fullscreen.createWindow", "start", undefined, "second-fullscreen"));
+		watcher.observeLine(phaseLine("fixture.construct", "start", undefined, "second-fullscreen"));
+		watcher.advance(5000);
+		watcher.observeLine(phaseLine("fixture.construct", "end", 30, "second-fullscreen"));
+		watcher.observeLine(phaseLine("fullscreen.createWindow", "end", 30, "wrong-test"));
+		watcher.observeLine(phaseLine("fixture.construct", "start", undefined, "still-nested"));
+		watcher.advance(5000);
 		expect(watcher.captures).toHaveLength(1);
+		expect(watcher.timers.size).toBe(0);
+		watcher.observeLine(phaseLine("fullscreen.createWindow", "end", 30, "second-fullscreen"));
+		watcher.observeLine(phaseLine("fixture.construct", "start", undefined, "ordinary"));
+		watcher.advance(5000);
+		expect(watcher.captures[1]).toMatchObject({ operation: "fixture.construct", testId: "ordinary", stalledForMs: 5000 });
 		await watcher.finish();
 	});
 
@@ -121,12 +180,15 @@ describe("fullscreen phase diagnostics", () => {
 		expect(watcher.timers.size).toBe(0);
 	});
 
-	it("waits for an in-flight report and contains capture failure", async () => {
+	it("finish drops deferred work while awaiting an in-flight report and contains capture failure", async () => {
 		let rejectCapture!: (error: Error) => void;
 		const report = new Promise<void>((_, reject) => { rejectCapture = reject; });
 		const watcher = phaseWatchFixture(true, () => report);
 		watcher.observeLine(phaseLine("fullscreen.exitObservationAndAssert", "start", 29));
 		watcher.advance(3000);
+		watcher.observeLine(phaseLine("fullscreen.exitObservationAndAssert", "end", 29));
+		watcher.observeLine(phaseLine("fixture.construct", "start", undefined, "later"));
+		watcher.advance(5000);
 		let finished = false;
 		const completion = watcher.finish().then(() => { finished = true; });
 		await Promise.resolve();
@@ -136,6 +198,66 @@ describe("fullscreen phase diagnostics", () => {
 		await completion;
 		expect(finished).toBe(true);
 		expect(watcher.errors).toEqual([failure]);
+		expect(watcher.captures).toHaveLength(1);
+		expect(watcher.timers.size).toBe(0);
+	});
+
+	it("serializes a deferred constructor capture behind an active fullscreen report", async () => {
+		const first = pendingPhaseCapture();
+		const second = pendingPhaseCapture();
+		const watcher = phaseWatchFixture(true, phase => phase.operation === "fixture.construct" ? second.report : first.report);
+		watcher.observeLine(phaseLine("fullscreen.setTrue", "start", 29));
+		watcher.advance(3000);
+		watcher.observeLine(phaseLine("fullscreen.setTrue", "end", 29));
+		watcher.observeLine(phaseLine("fixture.construct", "start", undefined, "later"));
+		watcher.advance(5000);
+		expect(watcher.captures).toHaveLength(1);
+		first.resolve();
+		await Promise.resolve();
+		expect(watcher.captures).toHaveLength(2);
+		expect(watcher.captures[1]).toMatchObject({ testId: "later", stalledForMs: 5000 });
+		second.resolve();
+		await watcher.finish();
+	});
+
+	it("discards ended or replaced deferred phases without spending the constructor budget", async () => {
+		for (const replacement of [false, true]) {
+			const first = pendingPhaseCapture();
+			const watcher = phaseWatchFixture(true, phase => phase.operation === "fixture.construct" ? Promise.resolve() : first.report);
+			watcher.observeLine(phaseLine("fullscreen.setTrue", "start", 29));
+			watcher.advance(3000);
+			watcher.observeLine(phaseLine("fullscreen.setTrue", "end", 29));
+			watcher.observeLine(phaseLine("fixture.construct", "start", undefined, "same-test"));
+			watcher.advance(5000);
+			if (!replacement) watcher.observeLine(phaseLine("fixture.construct", "end", 30, "same-test"));
+			watcher.observeLine(phaseLine("fixture.construct", "start", undefined, "same-test"));
+			first.resolve();
+			await Promise.resolve();
+			expect(watcher.captures).toHaveLength(1);
+			watcher.advance(4999);
+			expect(watcher.captures).toHaveLength(1);
+			watcher.advance(1);
+			expect(watcher.captures).toHaveLength(2);
+			await watcher.finish();
+		}
+	});
+
+	it("spends a failed budget and contains even a throwing error handler", async () => {
+		const failure = new Error("sample unavailable");
+		const watcher = phaseWatchFixture(true, phase => {
+			if (phase.operation !== "fixture.construct") throw failure;
+			return Promise.resolve();
+		}, () => { throw new Error("cannot log"); });
+		watcher.observeLine(phaseLine("fullscreen.setTrue", "start", 29));
+		watcher.advance(3000);
+		watcher.observeLine(phaseLine("fullscreen.setFalse", "start", 29));
+		watcher.advance(3000);
+		watcher.observeLine(phaseLine("fullscreen.setFalse", "end", 29));
+		watcher.observeLine(phaseLine("fixture.construct", "start", undefined, "later"));
+		watcher.advance(5000);
+		expect(watcher.errors).toEqual([failure]);
+		expect(watcher.captures).toHaveLength(2);
+		await watcher.finish();
 	});
 
 	it("observes split stderr lines without changing their forwarded contents", async () => {
@@ -203,7 +325,10 @@ function shellQuote(value: string): string {
 }
 
 describe("Kitchen hang diagnostics", () => {
-	const completed = { exitCode: 0, errorCode: null, signal: null, killed: false, elapsedMs: 1 };
+	const completed = {
+		exitCode: 0, errorCode: null, signal: null, killed: false, elapsedMs: 1,
+		startedAt: "2026-11-12T17:15:02.000Z", finishedAt: "2026-11-12T17:15:02.001Z",
+	};
 	const listing = [
 		"100 1 100 /Users/runner/.hutch/bin/hutch-canary",
 		"101 100 100 /tmp/Kitchen.app/Contents/MacOS/launcher",
@@ -221,7 +346,7 @@ describe("Kitchen hang diagnostics", () => {
 		expect(selectMacosHangProcesses(listing, 100, "main", false).targets).toEqual([]);
 	});
 
-	it("preserves native stacks and provenance without external dSYM lookup", async () => {
+	it("uses sparse sampling and records timestamps with native stack provenance", async () => {
 		const temporaryDirectory = mkdtempSync(join(tmpdir(), "kitchen-diagnostics-test-"));
 		const commands: string[] = [];
 		try {
@@ -235,9 +360,9 @@ describe("Kitchen hang diagnostics", () => {
 					expect(timeout).toBe(2000);
 					return { ...completed, stdout: listing, stderr: "", error: null };
 				}
-				expect(args.slice(0, 4)).toEqual(["102", "2", "-nodsyms", "-file"]);
+				expect(args.slice(0, 6)).toEqual(["102", "1", "10", "-mayDie", "-nodsyms", "-file"]);
 				expect(timeout).toBe(8000);
-				writeFileSync(args[4]!, "Thread 0: ebui_destroy -> dispatch_sync\n");
+				writeFileSync(args[6]!, "Thread 0: ebui_destroy -> dispatch_sync\n");
 				return { ...completed, stdout: "", stderr: "Sampling complete", error: null };
 			});
 			expect(commands).toEqual(["/bin/ps", "/usr/bin/sample"]);
@@ -246,7 +371,11 @@ describe("Kitchen hang diagnostics", () => {
 			expect(provenance.targets).toEqual([102]);
 			expect(provenance.exitCode).toBe(0);
 			expect(provenance.elapsedMs).toBe(1);
+			expect(provenance).toMatchObject({ startedAt: completed.startedAt, finishedAt: completed.finishedAt });
 			expect(JSON.stringify(provenance)).not.toContain("Other.app");
+			const sample = JSON.parse(readFileSync(join(directory!, "sample-102-command.json"), "utf8"));
+			expect(sample).toMatchObject({ ...completed, timeoutMs: 8000 });
+			expect(sample.args).toEqual(["102", "1", "10", "-mayDie", "-nodsyms", "-file", join(directory!, "sample-102.txt")]);
 		} finally {
 			rmSync(temporaryDirectory, { recursive: true, force: true });
 		}
@@ -265,6 +394,7 @@ describe("Kitchen hang diagnostics", () => {
 			expect(result.stderr).toBe("Cannot examine process");
 			expect(result.exitCode).toBe(1);
 			expect(result.killed).toBe(false);
+			expect(result).toMatchObject({ startedAt: completed.startedAt, finishedAt: completed.finishedAt });
 		} finally {
 			rmSync(temporaryDirectory, { recursive: true, force: true });
 		}
@@ -297,13 +427,24 @@ describe("Kitchen hang diagnostics", () => {
 		expect(result.killed).toBe(true);
 		if (process.platform !== "win32") expect(result.signal).toBe("SIGKILL");
 		expect(result.elapsedMs).toBeGreaterThanOrEqual(90);
+		expect(new Date(result.startedAt).toISOString()).toBe(result.startedAt);
+		expect(new Date(result.finishedAt).toISOString()).toBe(result.finishedAt);
+		expect(Date.parse(result.startedAt)).toBeGreaterThanOrEqual(startedAt);
+		expect(Date.parse(result.finishedAt)).toBeGreaterThanOrEqual(Date.parse(result.startedAt));
+		expect(Date.parse(result.finishedAt)).toBeLessThanOrEqual(Date.now());
 		expect(Date.now() - startedAt).toBeLessThan(3000);
 	});
 
 	it("distinguishes an ordinary command failure from watchdog termination", async () => {
+		const startedAt = Date.now();
 		const result = await runDiagnosticCommand(process.execPath, ["-e", "process.exit(7)"], 2000);
 		expect(result).toMatchObject({ exitCode: 7, signal: null, killed: false, errorCode: null });
 		expect(result.error).not.toBeNull();
+		expect(new Date(result.startedAt).toISOString()).toBe(result.startedAt);
+		expect(new Date(result.finishedAt).toISOString()).toBe(result.finishedAt);
+		expect(Date.parse(result.startedAt)).toBeGreaterThanOrEqual(startedAt);
+		expect(Date.parse(result.finishedAt)).toBeGreaterThanOrEqual(Date.parse(result.startedAt));
+		expect(Date.parse(result.finishedAt)).toBeLessThanOrEqual(Date.now());
 	});
 
 	it.skipIf(process.platform !== "darwin")("discovers an actual detached app group without inspecting unrelated processes", async () => {

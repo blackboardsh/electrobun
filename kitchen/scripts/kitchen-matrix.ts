@@ -365,13 +365,11 @@ function runHutchForVariant(
 					pid: child.pid, key, mainProcess: variant.mainProcess, isolatedProcessGroup,
 				});
 				if (directory) {
-					writeFileSync(join(directory, "phase.json"), JSON.stringify({
-						...phase, stalledForMs: 3000,
-					}, null, 2) + "\n");
-					console.error(`[${key}] Fullscreen phase diagnostics: ${directory}`);
+					writeFileSync(join(directory, "phase.json"), JSON.stringify(phase, null, 2) + "\n");
+					console.error(`[${key}] Window phase diagnostics (${phase.operation} stalled ${phase.stalledForMs}ms): ${directory}`);
 				}
 			},
-			onError: (error) => console.error(`[${key}] Could not collect fullscreen phase diagnostics: ${error}`),
+			onError: (error) => console.error(`[${key}] Could not collect window phase diagnostics: ${error}`),
 		});
 		if (child.stdout) pipePrefixed(child.stdout, `[${key}] `, process.stdout);
 		if (child.stderr) pipePrefixed(child.stderr, `[${key}] `, process.stderr, fullscreenWatcher.observeLine);

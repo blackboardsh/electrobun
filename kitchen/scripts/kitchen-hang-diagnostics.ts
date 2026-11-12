@@ -12,6 +12,8 @@ type CommandResult = {
 	errorCode: string | null;
 	signal: NodeJS.Signals | null;
 	killed: boolean;
+	startedAt: string;
+	finishedAt: string;
 	elapsedMs: number;
 };
 type CommandRunner = (file: string, args: string[], timeoutMs: number) => Promise<CommandResult>;
@@ -19,7 +21,8 @@ type CommandRunner = (file: string, args: string[], timeoutMs: number) => Promis
 // SIGKILL also bounds a diagnostic tool that ignores graceful termination.
 export const runDiagnosticCommand: CommandRunner = (file, args, timeoutMs) =>
 	new Promise((resolve) => {
-		const startedAt = performance.now();
+		const startedAt = new Date().toISOString();
+		const started = performance.now();
 		const child = execFile(file, args, {
 			encoding: "utf8", timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: 2 * 1024 * 1024,
 		}, (error, stdout, stderr) => {
@@ -29,7 +32,8 @@ export const runDiagnosticCommand: CommandRunner = (file, args, timeoutMs) =>
 				errorCode: typeof error?.code === "string" ? error.code : null,
 				signal: error?.signal ?? child.signalCode,
 				killed: error?.killed ?? child.killed,
-				elapsedMs: Math.round(performance.now() - startedAt),
+				startedAt, finishedAt: new Date().toISOString(),
+				elapsedMs: Math.round(performance.now() - started),
 			});
 		});
 	});
@@ -103,12 +107,13 @@ export async function captureKitchenHangDiagnostics({
 	}
 	await Promise.all(targets.map(async (info) => {
 		const report = join(directory, `sample-${info.pid}.txt`);
-		// External dSYM discovery can outlast the sampling itself and prevent any
-		// report from being written before the tool deadline. Keep image symbols
-		// and addresses, without that additional lookup or a longer timeout.
-		const result = await run("/usr/bin/sample", [String(info.pid), "2", "-nodsyms", "-file", report], 8000);
+		// Each sample suspends the target to collect every thread's stack. Use a
+		// short, sparse capture to limit its effect on the stalled app. Capture
+		// symbol locations before the target can exit, without external dSYMs.
+		const args = [String(info.pid), "1", "10", "-mayDie", "-nodsyms", "-file", report];
+		const result = await run("/usr/bin/sample", args, 8000);
 		writeFileSync(join(directory, `sample-${info.pid}-command.json`), JSON.stringify({
-			command: "/usr/bin/sample", args: [String(info.pid), "2", "-nodsyms", "-file", report], timeoutMs: 8000,
+			command: "/usr/bin/sample", args, timeoutMs: 8000,
 			...result,
 		}, null, 2) + "\n");
 	}));
