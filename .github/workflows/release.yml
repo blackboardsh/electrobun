@@ -344,7 +344,10 @@ jobs:
         working-directory: package
 
       - name: Test core synchronization under contention
-        timeout-minutes: 15
+        # Windows ARM covers both native ARM64 and emulated x64, including the
+        # real Core suite. Allow aggregate time while keeping each compile and
+        # test process bounded by the stress runner's unchanged deadlines.
+        timeout-minutes: 30
         run: node scripts/core-synchronization-stress.mjs
         working-directory: package
 
