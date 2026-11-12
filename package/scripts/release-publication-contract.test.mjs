@@ -603,6 +603,12 @@ function validateIntelGuiMatrices(source, intelSelector, armSelector) {
 	assert.equal(matrices[0][0].runner, "macos-15-intel");
 	assert.ok(matrices.at(-1).length > 1, "the default must retain the full platform matrix");
 	for (const [index, matrix] of matrices.entries()) {
+		if (armSelector) {
+			for (const arm of matrix.filter(({ platform }) => platform === "macos-arm64")) {
+				assert.deepEqual(arm, { runner: "macos-15", platform: "macos-arm64", python: "arm64" },
+					"all published ARM GUI routes need the validated macOS 15 desktop session");
+			}
+		}
 		if (armSelector && index === 1) {
 			assert.equal(expression.slice(alternatives[0].index + alternatives[0][0].length, alternatives[1].index).trim(), `|| ${armSelector} &&`);
 			assert.deepEqual(matrix, [{ runner: "macos-15", platform: "macos-arm64", python: "arm64" }],
@@ -646,12 +652,12 @@ for (const [filename, intelSelector, armSelector] of [
 }
 
 const publishedSmokeWorkflow = readFileSync(new URL("../../.github/workflows/desktop-smoke.yml", import.meta.url), "utf8");
-test("published desktop smoke permits one native ARM15 diagnostic without changing the default matrix", () => {
+test("published desktop smoke uses native ARM macOS 15 in focused and full matrices", () => {
 	assert.match(publishedSmokeWorkflow, /macos_arm_only:\n        description: [^\n]+\n        type: boolean\n        default: false/);
 	const expression = publishedSmokeWorkflow.match(/^        include: \$\{\{ fromJSON\((.+)\) \}\}$/m)[1];
 	const matrices = [...expression.matchAll(/'(\[[^']+\])'/g)].map(([, json]) => JSON.parse(json));
 	assert.deepEqual(matrices.at(-1), [
-		{ runner: "macos-26", platform: "macos-arm64", python: "arm64" },
+		{ runner: "macos-15", platform: "macos-arm64", python: "arm64" },
 		{ runner: "macos-15-intel", platform: "macos-x64", python: "x64" },
 		{ runner: "ubuntu-24.04", platform: "linux-x64", python: "x64" },
 		{ runner: "ubuntu-24.04-arm", platform: "linux-arm64", python: "arm64" },
@@ -659,8 +665,13 @@ test("published desktop smoke permits one native ARM15 diagnostic without changi
 		{ runner: "windows-11-arm", platform: "windows-arm64", python: "x64" },
 	]);
 	const branch = '"runner":"macos-15","platform":"macos-arm64","python":"arm64"';
-	for (const replacement of [branch.replace('macos-15', 'macos-26'), branch.replace('"python":"arm64"', '"python":"x64"')]) {
-		assert.throws(() => validateIntelGuiMatrices(publishedSmokeWorkflow.replace(branch, replacement), "inputs.macos_intel_only", "inputs.macos_arm_only"), { code: "ERR_ASSERTION" });
+	const occurrences = [...publishedSmokeWorkflow.matchAll(new RegExp(branch, "g"))];
+	assert.equal(occurrences.length, 2, "check both targeted and default ARM routes");
+	for (const { index } of occurrences) {
+		for (const replacement of [branch.replace('macos-15', 'macos-26'), branch.replace('"python":"arm64"', '"python":"x64"')]) {
+			const changed = publishedSmokeWorkflow.slice(0, index) + publishedSmokeWorkflow.slice(index).replace(branch, replacement);
+			assert.throws(() => validateIntelGuiMatrices(changed, "inputs.macos_intel_only", "inputs.macos_arm_only"), { code: "ERR_ASSERTION" });
+		}
 	}
 });
 
