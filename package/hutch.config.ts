@@ -55,7 +55,9 @@ export default {
 			"hutch scripts/test-windows-ui-native.js --require-native-wrapper",
 		"test:installer-ui":
 			"node scripts/run-bun-test.js src/shared/windows-installer-progress.test.ts",
-		"test:unit": "node scripts/run-bun-test.js src/shared src/sdks/main src/config src/preload && hutch test:webkit-bridge-auth && hutch test:spell-check && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:linux-x11-geometry-native && hutch test:wayland-screen-capture-frame-native && hutch test:views-url-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
+		"test:unit": "node scripts/run-bun-test.js src/shared src/browser/ui src/sdks/main src/config src/preload && hutch test:webkit-bridge-auth && hutch test:spell-check && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:linux-x11-geometry-native && hutch test:wayland-screen-capture-frame-native && hutch test:views-url-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
+		"test:warren": "node scripts/run-bun-test.js src/browser/ui/__tests__/dom.test.ts",
+		"test:warren:browser": "node --test scripts/warren-dom.browser.test.mjs",
 		"test:webkit-bridge-auth": "node --test scripts/webkit-bridge-auth.test.mjs",
 		"test:native-symbol-contract":
 			"node scripts/run-bun-test.js src/shared/native-symbol-contract.test.ts",

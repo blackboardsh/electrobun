@@ -215,7 +215,8 @@ function createText(value: string | number | LiveBinding<string | number>): void
 	const node = docOf(point.parent).createTextNode("");
 	if (isLive(value)) {
 		claimLive(value as LiveBinding<string | number>, (v) => {
-			node.data = v == null ? "" : String(v);
+			const text = v == null ? "" : String(v);
+			if (node.data !== text) node.data = text;
 		});
 	} else {
 		node.data = String(value);
@@ -387,7 +388,9 @@ function createLiveChild(binding: LiveBinding<unknown>): void {
 				existing.nodeType === 3 &&
 				existing.nextSibling === end
 			) {
-				(existing as Text).data = String(value);
+				// Even assigning the same text collapses a browser selection.
+				const text = String(value);
+				if ((existing as Text).data !== text) (existing as Text).data = text;
 				return;
 			}
 			clearRange(parent, start, end);

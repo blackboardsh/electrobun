@@ -556,6 +556,7 @@ function validateReleaseTestGates(source) {
 	const release = job(source, "release");
 	const vm = job(source, "test-vm");
 	const uiCore = job(source, "ui-core");
+	const warren = job(source, "warren");
 	const smoke = job(source, "desktop-smoke");
 	const dependencies = (body) => {
 		const match = body.match(/^    needs: \[([^\]]+)\]$/m);
@@ -565,26 +566,39 @@ function validateReleaseTestGates(source) {
 	assert.ok(dependencies(release).includes("build"));
 	assert.ok(dependencies(release).includes("test-vm"), "publication must wait for VM tests");
 	assert.ok(dependencies(release).includes("ui-core"), "publication must wait for UI engine tests");
+	assert.ok(dependencies(release).includes("warren"), "publication must wait for Warren DOM and browser tests");
 	assert.ok(dependencies(smoke).includes("npm-publish"), "desktop smoke must wait for npm");
 	assert.ok(dependencies(smoke).includes("publish-templates"), "desktop smoke must wait for templates");
 	assert.match(vm, /uses: \.\/\.github\/workflows\/test-vm\.yml/);
 	assert.match(uiCore, /uses: \.\/\.github\/workflows\/ui-core\.yml/);
+	assert.match(warren, /uses: \.\/\.github\/workflows\/warren\.yml/);
 	assert.match(smoke, /uses: \.\/\.github\/workflows\/desktop-smoke\.yml/);
 	const buildRef = job(source, "build").match(/^          ref: (.+)$/m)?.[1];
 	assert.ok(buildRef, "release build must select an exact source ref");
 	assert.equal(vm.match(/^      ref: (.+)$/m)?.[1], buildRef, "VM tests must build the same release ref");
 	assert.equal(uiCore.match(/^      ref: (.+)$/m)?.[1], buildRef, "UI engine tests must test the same release ref");
+	assert.equal(warren.match(/^      ref: (.+)$/m)?.[1], buildRef, "Warren tests must test the same release ref");
 	assert.match(smoke, /version: \$\{\{ github\.event\.inputs\.tag \|\| github\.ref_name \}\}/);
 }
 
-test("release VM gate and post-publication desktop smoke use the release being published", () => {
+test("release test gates and post-publication desktop smoke use the release being published", () => {
 	validateReleaseTestGates(workflow);
+});
+
+test("the reusable Warren gate runs DOM and browser regressions on the requested release ref", () => {
+	const warren = readFileSync(new URL("../../.github/workflows/warren.yml", import.meta.url), "utf8");
+	assert.match(warren, /workflow_call:\n    inputs:\n      ref:/);
+	assert.match(warren, /ref: \$\{\{ inputs\.ref \|\| github\.sha \}\}/);
+	assert.match(warren, /run: hutch run test:warren\n/);
+	assert.match(warren, /run: hutch run test:warren:browser\n/);
+	assert.match(warren, /playwright@\d+\.\d+\.\d+/);
 });
 
 test("test gate contract rejects early publication or premature desktop smoke", () => {
 	for (const [before, after] of [
-		["needs: [build, test-vm, ui-core]", "needs: [build, ui-core]"],
-		["needs: [build, test-vm, ui-core]", "needs: [build, test-vm]"],
+		["needs: [build, test-vm, ui-core, warren]", "needs: [build, ui-core, warren]"],
+		["needs: [build, test-vm, ui-core, warren]", "needs: [build, test-vm, warren]"],
+		["needs: [build, test-vm, ui-core, warren]", "needs: [build, test-vm, ui-core]"],
 		["needs: [npm-publish, publish-templates]", "needs: [npm-publish]"],
 		["needs: [npm-publish, publish-templates]", "needs: [publish-templates]"],
 	]) {

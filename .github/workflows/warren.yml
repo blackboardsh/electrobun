@@ -1,0 +1,76 @@
+name: Warren renderer
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact release tag or commit to test
+        type: string
+        required: true
+  pull_request:
+    paths:
+      - '.github/workflows/warren.yml'
+      - '.github/actions/install-hutch/**'
+      - 'package/src/shared/warren/**'
+      - 'package/src/browser/ui/**'
+      - 'package/src/sdks/main/ui/**'
+      - 'package/scripts/warren-dom.browser.test.mjs'
+      - 'package/scripts/fixtures/warren-dom.*'
+      - 'package/scripts/run-bun-test.js'
+      - 'package/scripts/run-cottontail-test.js'
+      - 'package/scripts/hutch-launcher.mjs'
+      - 'package/hutch.config.ts'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/warren.yml'
+      - '.github/actions/install-hutch/**'
+      - 'package/src/shared/warren/**'
+      - 'package/src/browser/ui/**'
+      - 'package/src/sdks/main/ui/**'
+      - 'package/scripts/warren-dom.browser.test.mjs'
+      - 'package/scripts/fixtures/warren-dom.*'
+      - 'package/scripts/run-bun-test.js'
+      - 'package/scripts/run-cottontail-test.js'
+      - 'package/scripts/hutch-launcher.mjs'
+      - 'package/hutch.config.ts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warren-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.workflow == 'Warren renderer' }}
+
+jobs:
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      HUTCH_NO_UPDATE_CHECK: '1'
+      HUTCH_RUNTIME: bun
+    defaults:
+      run:
+        working-directory: package
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.1'
+      - uses: ./.github/actions/install-hutch
+        with:
+          channel: canary
+      - name: Install browser test dependency
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/warren-browser" --no-package-lock --ignore-scripts playwright@1.63.0
+          node "$RUNNER_TEMP/warren-browser/node_modules/playwright/cli.js" install --with-deps chromium
+          echo "ELECTROBUN_TEST_PLAYWRIGHT=$RUNNER_TEMP/warren-browser/node_modules/playwright" >> "$GITHUB_ENV"
+      - name: Test DOM reconciliation
+        run: hutch run test:warren
+      - name: Test browser selection and interaction state
+        run: hutch run test:warren:browser

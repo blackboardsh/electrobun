@@ -199,8 +199,11 @@ export function createJsxRuntime(renderer: WarrenRenderer): WarrenJsxRuntime {
 		if (isLive(when)) {
 			when.claimed = true;
 			return element(() => {
+				// A refreshed object can invalidate `when` without changing its
+				// branch. Retain that branch's nodes, focus and local state.
+				const visible = memo(() => Boolean(when.fn()));
 				renderer.dynamic(() => {
-					mountChild(when.fn() ? props.children : props.fallback);
+					mountChild(visible() ? props.children : props.fallback);
 				});
 			});
 		}

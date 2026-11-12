@@ -33,6 +33,11 @@ jobs:
     with:
       ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
 
+  warren:
+    uses: ./.github/workflows/warren.yml
+    with:
+      ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+
   build:
     strategy:
       fail-fast: false
@@ -479,7 +484,7 @@ jobs:
           rm -rf kitchen/build
 
   release:
-    needs: [build, test-vm, ui-core]
+    needs: [build, test-vm, ui-core, warren]
     runs-on: ubuntu-latest
     permissions:
       contents: write

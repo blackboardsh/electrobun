@@ -2,7 +2,7 @@
 // control flow with keyed reconciliation, events, Portal, and teardown.
 
 import { describe, expect, test } from "bun:test";
-import { live, memo, setDevMode, signal, store } from "../../../shared/warren/reactive";
+import { cleanup, inert, live, memo, setDevMode, signal, store } from "../../../shared/warren/reactive";
 import {
 	For,
 	Fragment,
@@ -74,6 +74,31 @@ describe("DOM renderer", () => {
 		expect(container.children[0]).toBe(div!);
 		expect(div!.className).toBe("b");
 		expect(div!.getAttribute("title")).toBe("B");
+	});
+
+	test("unchanged live text does not write CharacterData on a fresh response", () => {
+		const [response, setResponse] = signal<{ value: string | number }>({ value: 1 });
+		const { container, dispose } = mount(() =>
+			jsx("code", { children: live(() => response().value) }),
+		);
+		try {
+			const code = container.children[0]!;
+			const text = code.childNodes.find(node => node instanceof StubText) as StubText;
+			let value = text.data;
+			let writes = 0;
+			Object.defineProperty(text, "data", {
+				get: () => value,
+				set: (next: string) => { writes++; value = next; },
+			});
+			setResponse({ value: 1 });
+			setResponse({ value: "1" });
+			expect(writes).toBe(0);
+			expect(code.childNodes.includes(text)).toBe(true);
+			setResponse({ value: "new command" });
+			expect(writes).toBe(1);
+			expect(code.textContent).toBe("new command");
+			expect(code.childNodes.includes(text)).toBe(true);
+		} finally { dispose(); }
 	});
 
 	test("classList toggles classes from an object", () => {
@@ -165,6 +190,54 @@ describe("DOM renderer", () => {
 		);
 		setOn(true);
 		expect(container.children[0]!.textContent).toBe("frozen-off");
+	});
+
+	test("Show retains truthy and falsy branches until their boolean selection changes", () => {
+		const [response, setResponse] = signal<{ ready: unknown; version: string }>({ ready: 1, version: "1.0" });
+		let mounted = 0;
+		let cleaned = 0;
+		const branch = (tag: string) => () => inert(() => {
+			mounted++;
+			cleanup(() => { cleaned++; });
+			return jsx(tag, { children: live(() => response().version) });
+		});
+		const { container, dispose } = mount(() => Show({
+			when: live(() => response().ready),
+			children: branch("details"),
+			fallback: branch("aside"),
+		}));
+		try {
+			const details = container.children[0]!;
+			details.setAttribute("open", "");
+			setResponse({ ready: true, version: "1.0" });
+			setResponse({ ready: { uploaded: true }, version: "1.1" });
+			expect(container.children[0]).toBe(details);
+			expect(details.hasAttribute("open")).toBe(true);
+			expect(details.textContent).toBe("1.1");
+			expect(mounted).toBe(1);
+			expect(cleaned).toBe(0);
+
+			setResponse({ ready: false, version: "1.2" });
+			const fallback = container.children[0]!;
+			expect(fallback.tagName).toBe("aside");
+			expect(details.parentNode).toBe(null);
+			expect(cleaned).toBe(1);
+			setResponse({ ready: null, version: "1.3" });
+			setResponse({ ready: 0, version: "1.4" });
+			expect(container.children[0]).toBe(fallback);
+			expect(fallback.textContent).toBe("1.4");
+			expect(mounted).toBe(2);
+			expect(cleaned).toBe(1);
+
+			setResponse({ ready: true, version: "1.5" });
+			expect(container.children[0]!.tagName).toBe("details");
+			expect(container.children[0]).not.toBe(details);
+			expect(container.children[0]!.textContent).toBe("1.5");
+			expect(cleaned).toBe(2);
+		} finally { dispose(); }
+		expect(cleaned).toBe(3);
+		setResponse({ ready: false, version: "after disposal" });
+		expect(container.childNodes.length).toBe(0);
 	});
 
 	test("For reconciles keyed rows: identity preserved across reorder", () => {
