@@ -592,7 +592,7 @@ test("test gate contract rejects early publication or premature desktop smoke", 
 	}
 });
 
-function validateIntelGuiMatrices(source, intelSelector, armSelector) {
+function validateIntelGuiMatrices(source, intelSelector, armSelector, armTarget = { runner: "macos-15", platform: "macos-arm64", python: "arm64" }) {
 	const expression = source.match(/^        include: \$\{\{ fromJSON\((.+)\) \}\}$/m)?.[1];
 	assert.ok(expression, "GUI workflow must expose its selectable runner matrices");
 	const alternatives = [...expression.matchAll(/'(\[[^']+\])'/g)];
@@ -604,14 +604,14 @@ function validateIntelGuiMatrices(source, intelSelector, armSelector) {
 	assert.ok(matrices.at(-1).length > 1, "the default must retain the full platform matrix");
 	for (const [index, matrix] of matrices.entries()) {
 		if (armSelector) {
-			for (const arm of matrix.filter(({ platform }) => platform === "macos-arm64")) {
-				assert.deepEqual(arm, { runner: "macos-15", platform: "macos-arm64", python: "arm64" },
-					"all published ARM GUI routes need the validated macOS 15 desktop session");
+			for (const arm of matrix.filter(({ runner, platform, arch }) => runner.startsWith("macos-") && (platform === "macos-arm64" || arch === "arm64"))) {
+				assert.deepEqual(arm, armTarget,
+					"focused and full ARM routes must use the same native runner");
 			}
 		}
 		if (armSelector && index === 1) {
 			assert.equal(expression.slice(alternatives[0].index + alternatives[0][0].length, alternatives[1].index).trim(), `|| ${armSelector} &&`);
-			assert.deepEqual(matrix, [{ runner: "macos-15", platform: "macos-arm64", python: "arm64" }],
+			assert.deepEqual(matrix, [armTarget],
 				"only the explicit ARM-only selection may omit Intel macOS coverage");
 			continue;
 		}
@@ -630,15 +630,15 @@ function validateIntelGuiMatrices(source, intelSelector, armSelector) {
 	}
 }
 
-for (const [filename, intelSelector, armSelector] of [
-	["test-vm.yml", "inputs.macos_intel_only"],
+for (const [filename, intelSelector, armSelector, armTarget] of [
+	["test-vm.yml", "inputs.macos_intel_only", "inputs.macos_arm_only", { runner: "macos-26", arch: "arm64" }],
 	["source-desktop-smoke.yml", "inputs.runners == 'macos-intel'"],
 	["desktop-smoke.yml", "inputs.macos_intel_only", "inputs.macos_arm_only"],
 ]) {
 	const source = readFileSync(new URL(`../../.github/workflows/${filename}`, import.meta.url), "utf8")
 		.replace(/\r\n/g, "\n");
 	test(`${filename} routes every Intel GUI selection to macOS 15`, () => {
-		validateIntelGuiMatrices(source, intelSelector, armSelector);
+		validateIntelGuiMatrices(source, intelSelector, armSelector, armTarget);
 	});
 	test(`${filename} rejects a single Intel GUI branch reverting to macOS 26`, () => {
 		const runner = '"runner":"macos-15-intel"';
@@ -646,7 +646,7 @@ for (const [filename, intelSelector, armSelector] of [
 		assert.ok(occurrences.length >= 2, "check both targeted and default Intel routes");
 		for (const { index } of occurrences) {
 			const changed = source.slice(0, index) + source.slice(index).replace(runner, '"runner":"macos-26-intel"');
-			assert.throws(() => validateIntelGuiMatrices(changed, intelSelector, armSelector), { code: "ERR_ASSERTION" });
+			assert.throws(() => validateIntelGuiMatrices(changed, intelSelector, armSelector, armTarget), { code: "ERR_ASSERTION" });
 		}
 	});
 }
