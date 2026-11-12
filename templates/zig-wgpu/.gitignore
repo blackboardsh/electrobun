@@ -4,3 +4,4 @@ build
 artifacts
 .DS_Store
 
+cottontail-tmp/
