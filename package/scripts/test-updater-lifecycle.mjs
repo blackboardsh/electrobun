@@ -30,6 +30,7 @@ import { assertRecipeMatchesInstalled, readCompressedTarIdentity } from "./archi
 import { assertLifecycleInstallation, loadLifecycleHost } from "./updater-lifecycle-host.mjs";
 import { inspectLifecycleChecksum, publishLifecycleReleaseFiles } from "./updater-lifecycle-artifacts.mjs";
 import { parseUpdaterLifecycleBackend, updaterLifecycleFixturePath, writeUpdaterLifecycleControl } from "./updater-lifecycle-fixture.mjs";
+import { runLifecycleCommand, snapshotLifecycleTree } from "./updater-lifecycle-diagnostics.mjs";
 
 const FOCUSES = new Set(["build", "install", "update", "uninstall", "full"]);
 const INITIAL_VERSION = "1.0.0";
@@ -138,6 +139,7 @@ const backgroundChildren = new Set();
 let launcherFailure;
 let installed = false;
 let uninstallVerified = false;
+let uninstallAttempt = null;
 const completedUpdateResults = [];
 let cleanupManifest;
 const cleanupTransactionIds = new Set();
@@ -249,43 +251,12 @@ function commandText(command, args) {
 function run(command, args = [], options = {}) {
 	const display = options.label || commandText(command, args);
 	console.log(`[updater-e2e] ${display}`);
-	return new Promise((resolvePromise, reject) => {
-		const child = spawn(command, args, {
-			cwd: options.cwd || temporaryRoot,
-			env: options.env || process.env,
-			stdio: ["ignore", "pipe", "pipe"],
-			windowsHide: true,
-		});
-		let stdout = "";
-		let stderr = "";
-		const append = (streamName, chunk) => {
-			const text = chunk.toString();
-			if (streamName === "stdout") stdout = (stdout + text).slice(-4 * 1024 * 1024);
-			else stderr = (stderr + text).slice(-4 * 1024 * 1024);
-			if (options.echo) process[streamName].write(text);
-		};
-		child.stdout.on("data", (chunk) => append("stdout", chunk));
-		child.stderr.on("data", (chunk) => append("stderr", chunk));
-		const timer = setTimeout(() => {
-			child.kill();
-			reject(new Error(`${display} timed out after ${options.timeout || timeoutMs}ms`));
-		}, options.timeout || timeoutMs);
-		child.once("error", (error) => {
-			clearTimeout(timer);
-			reject(error);
-		});
-		child.once("exit", (code, signal) => {
-			clearTimeout(timer);
-			if (code === 0) {
-				resolvePromise({ stdout, stderr });
-				return;
-			}
-			reject(
-				new Error(
-					`${display} failed (${code ?? signal}):\n${stdout}\n${stderr}`,
-				),
-			);
-		});
+	return runLifecycleCommand(command, args, {
+		cwd: options.cwd || temporaryRoot,
+		env: options.env || process.env,
+		label: display,
+		timeout: options.timeout || timeoutMs,
+		echo: options.echo,
 	});
 }
 
@@ -372,17 +343,19 @@ function assertLauncherHealthy(description) {
 	}
 }
 
-async function logWindowsUpdateDiagnostics(description) {
-	if (process.platform !== "win32" || process.env.ELECTROBUN_UPDATER_E2E_DIAGNOSTICS !== "1") return;
+async function logWindowsUpdateDiagnostics(description, { force = false } = {}) {
+	if (process.platform !== "win32" || (!force && process.env.ELECTROBUN_UPDATER_E2E_DIAGNOSTICS !== "1")) return null;
 	try {
 		console.log(`[updater-e2e] ${description}; app TEMP=${profile.environment.TEMP}; relaunch limit=${relaunchTimeoutMs}ms`);
-		await run("powershell.exe", [
+		return await run("powershell.exe", [
 			"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
 			"-File", join(packageRoot, "scripts", "updater-windows-diagnostics.ps1"),
 			"-ChannelRoot", channelRoot,
+			...(completedUpdateResults.length ? ["-TransactionIdsCsv", completedUpdateResults.map(result => result.transaction_id).join(",")] : []),
 		], { timeout: 20_000, echo: true, label: "Windows updater task/process snapshot" });
 	} catch (error) {
 		console.error(`[updater-e2e] Diagnostic snapshot failed: ${error.message}`);
+		return { error: error.message };
 	}
 }
 
@@ -1127,15 +1100,23 @@ async function verifyFirstPostV1LaunchBootstrap(release) {
 
 async function uninstallAndVerify() {
 	const manager = platform.uninstallerPath(channelRoot);
-	assert.equal(pathExists(manager), true, `cannot run missing uninstaller: ${manager}`);
 	const launcher = platform.launcherPath(appBundlePath);
+	uninstallAttempt = { startedAt: new Date().toISOString(), manager, launcher, command: null };
+	assert.equal(pathExists(manager), true, `cannot run missing uninstaller: ${manager}`);
 	assert.equal(pathExists(launcher), true, `cannot run missing launcher: ${launcher}`);
-	await run(launcher, ["--uninstall", "--quiet", "--delete-data"], {
-		cwd: dirname(launcher),
-		env: profile.environment,
-		label: "delegate app-and-data uninstall through installed launcher",
-		timeout: 2 * 60_000,
-	});
+	try {
+		uninstallAttempt.command = await run(launcher, ["--uninstall", "--quiet", "--delete-data"], {
+			cwd: dirname(launcher),
+			env: profile.environment,
+			label: "delegate app-and-data uninstall through installed launcher",
+			timeout: 2 * 60_000,
+			// The manager may report an error after its delegating launcher exits.
+			echo: true,
+		});
+	} catch (error) {
+		uninstallAttempt.command = error.commandResult ?? null;
+		throw error;
+	}
 	await waitFor("uninstaller cleanup", () => !pathExists(channelRoot), 90_000);
 	assert.equal(pathExists(appBundlePath), false, "uninstaller left the installed app bundle");
 	assert.equal(pathExists(channelRoot), false, `uninstaller left install state: ${channelRoot}`);
@@ -1795,7 +1776,13 @@ try {
 	);
 } catch (error) {
 	failure = error;
-	await logWindowsUpdateDiagnostics("Failure before cleanup");
+	const uninstallSnapshot = uninstallAttempt && !uninstallVerified ? {
+		capturedAt: new Date().toISOString(),
+		attempt: uninstallAttempt,
+		expectedManifest: cleanupManifest,
+		tree: snapshotLifecycleTree(channelRoot),
+	} : null;
+	const windowsSnapshot = await logWindowsUpdateDiagnostics("Failure before cleanup", { force: uninstallSnapshot !== null });
 	console.error(`[updater-e2e] FAIL: ${error.stack || error}`);
 	console.error(`[updater-e2e] Artifact requests:\n${JSON.stringify(requests, null, 2)}`);
 	// Cleanup removes the fixture tree. Preserve bounded diagnostics separately
@@ -1805,6 +1792,10 @@ try {
 			const diagnosticsRoot = mkdtempSync(join(temporaryBase, "updater-lifecycle-e2e-diagnostics-"));
 			cpSync(signalDirectory, join(diagnosticsRoot, "signals"), { recursive: true });
 			writeFileSync(join(diagnosticsRoot, "artifact-requests.json"), `${JSON.stringify(requests, null, 2)}\n`);
+			if (uninstallSnapshot) {
+				writeFileSync(join(diagnosticsRoot, "uninstall-snapshot.json"), `${JSON.stringify({ ...uninstallSnapshot, windows: windowsSnapshot }, null, 2)}\n`);
+				console.error(`[updater-e2e] Uninstall snapshot:\n${JSON.stringify(uninstallSnapshot, null, 2)}`);
+			}
 			const artifactSources = pathExists(releaseRoot)
 				? readdirSync(releaseRoot).map((label) => [join(releaseRoot, label), `releases/${label}`])
 				: [];

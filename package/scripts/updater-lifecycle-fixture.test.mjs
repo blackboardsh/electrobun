@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -10,6 +10,105 @@ import {
 	updaterLifecycleFixturePath,
 	writeUpdaterLifecycleControl,
 } from "./updater-lifecycle-fixture.mjs";
+import { runLifecycleCommand, snapshotLifecycleTree } from "./updater-lifecycle-diagnostics.mjs";
+
+async function waitForCommandOutput(record, timeout = 10_000) {
+	assert.ok(record, "command must retain its live output record");
+	const deadline = Date.now() + timeout;
+	while (!record.outputClosed && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+	assert.equal(record.outputClosed, true, "command pipes did not close within the diagnostic deadline");
+}
+
+test("delegated command output remains visible after its parent exits without waiting for inherited pipes", { timeout: 30_000 }, async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "updater-lifecycle-delegation-"));
+	const gate = join(root, "manager-can-finish");
+	let record;
+	// Release and drain the descendant before removing its gate, including when
+	// a failed assertion or command timeout interrupts the normal test path.
+	t.after(async () => {
+		writeFileSync(gate, "finish");
+		try { if (record) await waitForCommandOutput(record, 15_000); }
+		finally { rmSync(root, { recursive: true, force: true }); }
+	});
+	const descendant = `
+		const fs = require('node:fs');
+		const poll = setInterval(() => {
+			if (!fs.existsSync(${JSON.stringify(gate)})) return;
+			clearInterval(poll);
+			process.stderr.write('delayed manager failure\\n', () => process.exit(0));
+		}, 10);
+		setTimeout(() => process.exit(2), 15000).unref();
+	`;
+	const parent = `
+		require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], {
+			stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true,
+		}).unref();
+		process.exit(0);
+	`;
+	let echoed = "";
+	try {
+		record = await runLifecycleCommand(process.execPath, ["-e", parent], {
+			cwd: root, env: process.env, label: "delegating launcher", timeout: 10_000,
+			echo: true, output: { stdout: { write() {} }, stderr: { write(chunk) { echoed += chunk.toString(); } } },
+		});
+	} catch (error) {
+		record = error.commandResult;
+		throw error;
+	}
+	assert.equal(record.exitCode, 0);
+	assert.equal(record.outputClosed, false, "launcher exit must not wait for its delegated manager's pipes");
+	assert.equal(record.stderr, "");
+	writeFileSync(gate, "finish");
+	await waitForCommandOutput(record);
+	assert.equal(record.stderr, "delayed manager failure\n");
+	assert.equal(echoed, record.stderr, "late manager errors must reach the retained CI log");
+	assert.equal(JSON.parse(JSON.stringify(record)).stderr, record.stderr, "failure snapshots must include late output");
+});
+
+test("lifecycle command diagnostics bound captured output and retain nonzero exit failures", async () => {
+	const record = await runLifecycleCommand(process.execPath, ["-e", "process.stderr.write('x'.repeat(8192) + 'end')"], {
+		cwd: process.cwd(), env: process.env, label: "bounded output", timeout: 10_000, maxOutputBytes: 64,
+	});
+	await waitForCommandOutput(record);
+	assert.equal(Buffer.byteLength(record.stderr), 64);
+	assert.ok(record.stderr.endsWith("end"));
+	let failedRecord;
+	await assert.rejects(runLifecycleCommand(process.execPath, ["-e", "process.stderr.write('manager failed'); process.exitCode = 7"], {
+		cwd: process.cwd(), env: process.env, label: "failed manager", timeout: 10_000,
+	}), error => {
+		assert.match(error.message, /failed manager failed \(7\):/);
+		assert.equal(error.commandResult.exitCode, 7);
+		failedRecord = error.commandResult;
+		return true;
+	});
+	await waitForCommandOutput(failedRecord);
+	assert.equal(failedRecord.stderr, "manager failed");
+	await assert.rejects(runLifecycleCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+		cwd: process.cwd(), env: process.env, label: "stalled manager", timeout: 100,
+	}), error => {
+		assert.match(error.message, /stalled manager timed out after 100ms/);
+		assert.equal(typeof error.commandResult.pid, "number");
+		return true;
+	});
+});
+
+test("uninstall snapshots bound breadth and depth, preserve missing roots, and never follow links", (t) => {
+	const root = project(t);
+	const outside = project(t);
+	writeFileSync(join(outside, "private-data"), "must never be read");
+	symlinkSync(outside, join(root, "linked-profile"), process.platform === "win32" ? "junction" : "dir");
+	mkdirSync(join(root, "src", "nested"));
+	writeFileSync(join(root, "src", "nested", "hidden-by-depth"), "data");
+	const snapshot = snapshotLifecycleTree(root, { maxDepth: 1 });
+	assert.equal(snapshot.truncated, true);
+	assert.ok(snapshot.entries.some(entry => entry.path === "linked-profile" && entry.kind === "symlink"));
+	assert.equal(snapshot.entries.some(entry => /private-data|hidden-by-depth|nested/.test(entry.path)), false);
+	for (let i = 0; i < 20; i++) writeFileSync(join(root, `file-${i}`), "data");
+	const bounded = snapshotLifecycleTree(root, { maxEntries: 5 });
+	assert.equal(bounded.entries.length, 5);
+	assert.equal(bounded.truncated, true);
+	assert.deepEqual(snapshotLifecycleTree(join(root, "removed")).entries, [{ path: ".", error: "ENOENT" }]);
+});
 
 test("native fixture event logging appends records with the platform's real file APIs", () => {
 	const packageRoot = fileURLToPath(new URL("../", import.meta.url));
