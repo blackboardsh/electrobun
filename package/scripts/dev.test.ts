@@ -177,6 +177,10 @@ assertArray(
 );
 assert(kitchenBuild?.cwd === packageDir, "Kitchen build should run dev:matrix from package");
 assert(kitchenBuild?.env?.AUTO_RUN === undefined, "Builds should not auto-run");
+assert(vmTestCommands.every(command => command.env?.ELECTROBUN_DEBUG_FULLSCREEN === undefined),
+	"Linux stages should not enable AppKit diagnostics");
+assert(armVmCommands.every(command => command.env?.ELECTROBUN_DEBUG_FULLSCREEN === undefined),
+	"Windows stages should not enable AppKit diagnostics");
 vmVariants.forEach((variant, index) => {
 	const command = vmTestCommands[1 + index];
 	assertArray(
@@ -280,6 +284,11 @@ assertArray(
 // the other backends; a failed build must also skip both dependent stages.
 for (const arch of ["x64", "arm64"]) {
 	const macCommands = createVmTestCommands({ hutchBinary, packageDir, platform: "darwin", arch });
+	for (const command of macCommands) {
+		assert(command.env?.ELECTROBUN_DEBUG_FULLSCREEN ===
+			(command.label.startsWith("Kitchen automated tests") ? "1" : undefined),
+			`${arch} fullscreen diagnostics should be scoped to Kitchen launches`);
+	}
 	assert(!macCommands.some(command => command.label === "Windows uninstaller command diagnostics"), `${arch} macOS should not schedule Windows-only uninstaller diagnostics`);
 	const verifications = macCommands.filter(command => command.label.startsWith("Verify Kitchen macOS binaries"));
 	assert(verifications.length === vmVariants.length, `${arch} should validate every system and CEF app bundle`);

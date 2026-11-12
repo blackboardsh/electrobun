@@ -4,6 +4,7 @@ import { defineTest, expect, sleep, type TitleBarStyle } from "../test-framework
 import { BrowserWindow, Screen } from "electrobun/main";
 import { createTestHarnessRPC } from "./rpc.test";
 import { isFullscreenRestored, waitForWindowObservation, type FullscreenSnapshot } from "../test-framework/window-observation";
+import { finishWindowPhase, startWindowPhase } from "../test-framework/window-diagnostics";
 
 type ViewportSize = {
   width: number;
@@ -49,7 +50,21 @@ async function waitForFullscreen(
   }
 }
 
-function readFullscreenSnapshot(window: Pick<BrowserWindow, "isFullScreen" | "getFrame">): FullscreenSnapshot {
+function readFullscreenSnapshot(window: Pick<BrowserWindow, "isFullScreen" | "getFrame">, diagnosticWindowId?: number): FullscreenSnapshot {
+  // Split only the initial snapshot's timings; polling keeps its existing reads
+  // and frequency without producing a diagnostic line for every observation.
+  if (diagnosticWindowId !== undefined && process.env["ELECTROBUN_DEBUG_FULLSCREEN"] === "1") {
+    let phase = startWindowPhase("baseline.isFullScreen", diagnosticWindowId);
+    const fullscreen = window.isFullScreen();
+    finishWindowPhase(phase);
+    phase = startWindowPhase("baseline.getFrame", diagnosticWindowId);
+    const frame = { ...window.getFrame() };
+    finishWindowPhase(phase);
+    phase = startWindowPhase("baseline.getPrimaryDisplay", diagnosticWindowId);
+    const workArea = { ...Screen.getPrimaryDisplay().workArea };
+    finishWindowPhase(phase);
+    return { fullscreen, frame, workArea };
+  }
   return {
     fullscreen: window.isFullScreen(),
     frame: { ...window.getFrame() },
@@ -386,27 +401,41 @@ export const windowTests = [
     description: "Test window fullscreen mode",
     timeout: 15000,
     async run({ createWindow, log }) {
+      let phase = startWindowPhase("fullscreen.createWindow");
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Fullscreen Test",
         renderer: 'cef',
       });
+      finishWindowPhase(phase, win.id);
 
+      phase = startWindowPhase("fullscreen.wait500ms", win.id);
       await sleep(500);
+      finishWindowPhase(phase);
 
       log("Checking initial fullscreen state");
+      phase = startWindowPhase("fullscreen.initialState", win.id);
       expect(win.window.isFullScreen()).toBe(false);
+      finishWindowPhase(phase);
 
       log("Entering fullscreen");
-      const original = readFullscreenSnapshot(win.window);
+      const original = readFullscreenSnapshot(win.window, win.id);
+      phase = startWindowPhase("fullscreen.setTrue", win.id);
       win.window.setFullScreen(true);
+      finishWindowPhase(phase);
+      phase = startWindowPhase("fullscreen.enterObservationAndAssert", win.id);
       await waitForFullscreen(win.window, true, log);
       expect(win.window.isFullScreen()).toBe(true);
+      finishWindowPhase(phase);
 
       log("Exiting fullscreen");
+      phase = startWindowPhase("fullscreen.setFalse", win.id);
       win.window.setFullScreen(false);
+      finishWindowPhase(phase);
+      phase = startWindowPhase("fullscreen.exitObservationAndAssert", win.id);
       await waitForFullscreenRestoration(win.window, original, log);
       expect(win.window.isFullScreen()).toBe(false);
+      finishWindowPhase(phase);
 
       log("Fullscreen toggle completed");
     },
@@ -423,28 +452,42 @@ export const windowTests = [
         return;
       }
 
+      let phase = startWindowPhase("fullscreen.createWindow");
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Hidden Fullscreen Test",
         renderer: "cef",
         titleBarStyle: "hidden",
       });
+      finishWindowPhase(phase, win.id);
 
+      phase = startWindowPhase("fullscreen.wait500ms", win.id);
       await sleep(500);
+      finishWindowPhase(phase);
 
       log("Checking initial fullscreen state");
+      phase = startWindowPhase("fullscreen.initialState", win.id);
       expect(win.window.isFullScreen()).toBe(false);
+      finishWindowPhase(phase);
 
       log("Entering fullscreen with hidden titlebar");
-      const original = readFullscreenSnapshot(win.window);
+      const original = readFullscreenSnapshot(win.window, win.id);
+      phase = startWindowPhase("fullscreen.setTrue", win.id);
       win.window.setFullScreen(true);
+      finishWindowPhase(phase);
+      phase = startWindowPhase("fullscreen.enterObservationAndAssert", win.id);
       await waitForFullscreen(win.window, true, log);
       expect(win.window.isFullScreen()).toBe(true);
+      finishWindowPhase(phase);
 
       log("Exiting fullscreen with hidden titlebar");
+      phase = startWindowPhase("fullscreen.setFalse", win.id);
       win.window.setFullScreen(false);
+      finishWindowPhase(phase);
+      phase = startWindowPhase("fullscreen.exitObservationAndAssert", win.id);
       await waitForFullscreenRestoration(win.window, original, log);
       expect(win.window.isFullScreen()).toBe(false);
+      finishWindowPhase(phase);
     },
   }),
 

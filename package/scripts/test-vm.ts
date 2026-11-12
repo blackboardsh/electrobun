@@ -124,7 +124,12 @@ export function createVmTestCommands({
 					`--timeout=${VM_KITCHEN_TIMEOUT_SECONDS}`,
 				],
 				cwd: kitchenDir,
-				env: { ...kitchenEnv, AUTO_RUN: "1" },
+				env: {
+					...kitchenEnv,
+					AUTO_RUN: "1",
+					// Preserve AppKit transition evidence in the normal VM job.
+					...(platform === "darwin" ? { ELECTROBUN_DEBUG_FULLSCREEN: "1" } : {}),
+				},
 				requires: platform === "darwin" ? verifyLabel : buildLabel,
 			}];
 		}),

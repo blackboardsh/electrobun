@@ -11,6 +11,7 @@ import type {
 import { ExclusiveRunCoordinator } from "./exclusive-run";
 import { getTestSkipReason } from "./requirements";
 import { TestDeadlineError, withTestDeadline } from "./test-deadline";
+import { finishWindowPhase, startWindowPhase } from "./window-diagnostics";
 
 type TestEventHandler = (event: TestEvent) => void;
 
@@ -79,6 +80,7 @@ export class TestExecutor {
 
     return {
       createWindow: async (options: WindowOptions): Promise<TestWindow> => {
+        const construction = startWindowPhase("fixture.construct", undefined, testId);
         const win = new BrowserWindow({
           title: options.title || `Test: ${testId}`,
           url: options.url || undefined,
@@ -102,9 +104,12 @@ export class TestExecutor {
           allowedProtocols: options.allowedProtocols,
           spellCheck: options.spellCheck ?? false,
         });
+        finishWindowPhase(construction, win.id);
 
         // Wait a bit for window to be created
+        const fixtureWait = startWindowPhase("fixture.wait100ms", win.id, testId);
         await new Promise(resolve => setTimeout(resolve, 100));
+        finishWindowPhase(fixtureWait);
 
         const testWindow: TestWindow = {
           id: win.id,
