@@ -1,6 +1,7 @@
 // Test Harness - A bundled view that tests can use for RPC testing
 import Electrobun, { Electroview } from "electrobun/view";
 import type { RPCSchema } from "electrobun";
+import type { HarnessReadyNotice } from "../tests/rpc-harness-readiness";
 
 export type StressMessageStats = {
   count: number;
@@ -163,7 +164,7 @@ export type TestHarnessRPC = {
       };
     };
     messages: {
-      ready: {};
+      ready: HarnessReadyNotice;
       ping: { timestamp: number };
       stressMessageToBun: { id: number; payload?: string };
       stressWebviewMessageSummary: StressMessageStats;
@@ -446,4 +447,7 @@ function runRpcStress(config: {
 (window as any).testHarnessReady = true;
 
 console.log("Test harness initialized");
-electrobun.rpc.send.ready({});
+electrobun.rpc.send.ready({
+  rendererReadyAt: Date.now(),
+  webviewId: window.__electrobunWebviewId,
+});

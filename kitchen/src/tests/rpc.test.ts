@@ -1,6 +1,7 @@
 // RPC Tests - Tests for bidirectional RPC communication
 
 import { defineTest, expect, sleep } from "../test-framework/types";
+import type { TestContext, WindowOptions } from "../test-framework/types";
 import { BrowserView, BuildConfig } from "electrobun/main";
 import type {
   SocketSendSummary,
@@ -10,6 +11,7 @@ import type {
 } from "../test-harness/index";
 import { waitForHostSocketOpen } from "./rpc-stress-readiness";
 import { reportRpcStressFailure } from "./rpc-stress-diagnostics";
+import { createHarnessReadiness, type HarnessReadyNotice } from "./rpc-harness-readiness";
 
 function createStressMessageCollector() {
   const ids = new Set<number>();
@@ -110,7 +112,7 @@ function assertAllStressMessagesArrived(label: string, stats: StressMessageStats
 
 // Create RPC config for test harness
 type StressHandlers = {
-  ready?: () => void;
+  ready?: (notice: HarnessReadyNotice) => void;
   echoReceived?: () => void;
   bunStressMessages?: ReturnType<typeof createStressMessageCollector>;
   webviewMessageSummary?: StressValueCollector<StressMessageStats>;
@@ -140,7 +142,7 @@ export function createTestHarnessRPC(
         },
       },
       messages: {
-        ready: () => stressHandlers.ready?.(),
+        ready: (notice) => stressHandlers.ready?.(notice),
         ping: ({ timestamp }) => {
           console.log(`Received ping at ${timestamp}`);
         },
@@ -159,6 +161,40 @@ export function createTestHarnessRPC(
       },
     },
   });
+}
+
+async function createReadyRpcWindow(
+  createWindow: TestContext["createWindow"],
+  options: Omit<WindowOptions, "rpc" | "url">,
+) {
+  const startedAt = performance.now();
+  const readiness = createHarnessReadiness();
+  const rpc = createTestHarnessRPC(10000, { ready: readiness.signal });
+  const phase = (name: string, details: Record<string, unknown> = {}) => {
+    // Write directly to the retained process log, without sending extra RPC
+    // traffic to the test-runner UI while diagnosing the target webview.
+    console.log(`[RPC harness] ${JSON.stringify({
+      phase: name,
+      timestamp: new Date().toISOString(),
+      elapsedMs: Math.round(performance.now() - startedAt),
+      title: options.title,
+      ...details,
+    })}`);
+  };
+
+  phase("creating-window");
+  const win = await createWindow({
+    ...options,
+    url: "views://test-harness/index.html",
+    rpc,
+  });
+  phase("waiting-for-ready", { windowId: win.id, webviewId: win.webviewId });
+  // The existing outer test deadline also covers window creation and this
+  // wait. The ready handler is installed before either can emit the event.
+  const ready = await readiness.wait();
+  expect(ready.webviewId, "ready message webview").toBe(win.webviewId);
+  phase("ready", { windowId: win.id, ...ready });
+  return win;
 }
 
 export const rpcTests = [
@@ -206,17 +242,10 @@ export const rpcTests = [
     category: "RPC",
     description: "Test that bun can make RPC requests to webview and receive responses",
     async run({ createWindow, log }) {
-      const rpc = createTestHarnessRPC();
-      const win = await createWindow({
-        url: "views://test-harness/index.html",
-        rpc,
+      const win = await createReadyRpcWindow(createWindow, {
         title: "RPC Test",
         renderer: 'cef',
       });
-
-      // Wait longer for webview to be ready when running in parallel
-      // CEF takes longer to initialize under heavy load
-      await sleep(2000);
 
       log("Calling webview.multiply({ a: 6, b: 7 })");
       const result = await win.webview.rpc?.request.multiply({ a: 6, b: 7 });
@@ -231,15 +260,10 @@ export const rpcTests = [
     category: "RPC",
     description: "Test that webview can make RPC requests to bun and receive responses",
     async run({ createWindow, log }) {
-      const rpc = createTestHarnessRPC();
-      const win = await createWindow({
-        url: "views://test-harness/index.html",
-        rpc,
+      const win = await createReadyRpcWindow(createWindow, {
         title: "RPC Test",
         renderer: 'cef',
       });
-
-      await sleep(1000);
 
       // Execute JS in webview to call bun's add method
       log("Triggering webview to call bun.add({ a: 100, b: 23 })");
@@ -257,16 +281,12 @@ export const rpcTests = [
     category: "RPC",
     description: "Keep a modal-style request alive without changing other RPC timeouts",
     async run({ createWindow, log }) {
-      const rpc = createTestHarnessRPC();
-      const win = await createWindow({
-        url: "views://test-harness/index.html",
-        rpc,
+      const win = await createReadyRpcWindow(createWindow, {
         title: "RPC Timeout Override Test",
         renderer: BuildConfig.getSync().defaultRenderer,
       });
 
-      await sleep(1000);
-
+      log("Requesting delayed response with a finite timeout override");
       const timedOut = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
         script: `
           return window.electrobun.rpc.request.delayed(
@@ -279,6 +299,7 @@ export const rpcTests = [
         `,
       });
       expect(timedOut).toBe("RPC request timed out.");
+      log("Finite override timed out; requesting modal-style response");
 
       const dialogStyleResult = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
         script: `
@@ -298,15 +319,10 @@ export const rpcTests = [
     category: "RPC",
     description: "Test echo with a simple string",
     async run({ createWindow, log }) {
-      const rpc = createTestHarnessRPC();
-      const win = await createWindow({
-        url: "views://test-harness/index.html",
-        rpc,
+      const win = await createReadyRpcWindow(createWindow, {
         title: "RPC Test",
         renderer: 'cef',
       });
-
-      await sleep(1000);
 
       const testString = "Hello, Electrobun!";
       log(`Testing echo with: "${testString}"`);
@@ -375,15 +391,10 @@ export const rpcTests = [
     description: "Test transferring 1MB of data via RPC",
     timeout: 30000,
     async run({ createWindow, log }) {
-      const rpc = createTestHarnessRPC();
-      const win = await createWindow({
-        url: "views://test-harness/index.html",
-        rpc,
+      const win = await createReadyRpcWindow(createWindow, {
         title: "RPC Test",
         renderer: 'cef',
       });
-
-      await sleep(1000);
 
       const size = 1024 * 1024; // 1MB
       log(`Sending ${size} bytes to bun`);
@@ -405,15 +416,10 @@ export const rpcTests = [
     category: "RPC",
     description: "Test evaluating synchronous JavaScript in webview",
     async run({ createWindow, log }) {
-      const rpc = createTestHarnessRPC();
-      const win = await createWindow({
-        url: "views://test-harness/index.html",
-        rpc,
+      const win = await createReadyRpcWindow(createWindow, {
         title: "RPC Test",
         renderer: 'cef',
       });
-
-      await sleep(1000);
 
       log("Evaluating: 2 + 2");
       const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
@@ -430,17 +436,10 @@ export const rpcTests = [
     category: "RPC",
     description: "Test evaluating async JavaScript that returns a promise",
     async run({ createWindow, log }) {
-      const rpc = createTestHarnessRPC();
-      const win = await createWindow({
-        url: "views://test-harness/index.html",
-        rpc,
+      const win = await createReadyRpcWindow(createWindow, {
         title: "RPC Test",
         renderer: 'cef',
       });
-
-      // Wait longer for webview to be ready when running in parallel
-      // CEF takes longer to initialize under heavy load
-      await sleep(2000);
 
       log("Evaluating async script with 200ms delay");
       const startTime = Date.now();
@@ -465,15 +464,10 @@ export const rpcTests = [
     category: "RPC",
     description: "Test that evaluated JS can access the DOM",
     async run({ createWindow, log }) {
-      const rpc = createTestHarnessRPC();
-      const win = await createWindow({
-        url: "views://test-harness/index.html",
-        rpc,
+      const win = await createReadyRpcWindow(createWindow, {
         title: "RPC Test Window",
         renderer: 'cef',
       });
-
-      await sleep(1000);
 
       log("Getting H1 content via JS evaluation");
       const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
@@ -490,15 +484,10 @@ export const rpcTests = [
     category: "RPC",
     description: "Test getting document title via RPC request",
     async run({ createWindow, log }) {
-      const rpc = createTestHarnessRPC();
-      const win = await createWindow({
-        url: "views://test-harness/index.html",
-        rpc,
+      const win = await createReadyRpcWindow(createWindow, {
         title: "RPC Test",
         renderer: 'cef',
       });
-
-      await sleep(1000);
 
       log("Getting document title via RPC");
       const title = await win.webview.rpc?.request.getDocumentTitle({});
