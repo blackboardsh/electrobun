@@ -9,8 +9,8 @@ import {
 	chmodSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { basename, dirname, join } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
 import { PassThrough } from "node:stream";
 import {
 	createKitchenMatrix,
@@ -203,6 +203,7 @@ function shellQuote(value: string): string {
 }
 
 describe("Kitchen hang diagnostics", () => {
+	const completed = { exitCode: 0, errorCode: null, signal: null, killed: false, elapsedMs: 1 };
 	const listing = [
 		"100 1 100 /Users/runner/.hutch/bin/hutch-canary",
 		"101 100 100 /tmp/Kitchen.app/Contents/MacOS/launcher",
@@ -229,16 +230,22 @@ describe("Kitchen hang diagnostics", () => {
 				platform: "darwin", temporaryDirectory,
 			}, async (file, args, timeout) => {
 				commands.push(file);
-				if (file === "/bin/ps") return { stdout: listing, stderr: "", error: null };
+				if (file === "/bin/ps") {
+					expect(args).toEqual(["-g", "100", "-o", "pid=,ppid=,pgid=,comm="]);
+					expect(timeout).toBe(2000);
+					return { ...completed, stdout: listing, stderr: "", error: null };
+				}
 				expect(args.slice(0, 4)).toEqual(["102", "2", "-nodsyms", "-file"]);
 				expect(timeout).toBe(8000);
 				writeFileSync(args[4]!, "Thread 0: ebui_destroy -> dispatch_sync\n");
-				return { stdout: "", stderr: "Sampling complete", error: null };
+				return { ...completed, stdout: "", stderr: "Sampling complete", error: null };
 			});
 			expect(commands).toEqual(["/bin/ps", "/usr/bin/sample"]);
 			expect(readFileSync(join(directory!, "sample-102.txt"), "utf8")).toContain("ebui_destroy");
 			const provenance = JSON.parse(readFileSync(join(directory!, "processes.json"), "utf8"));
 			expect(provenance.targets).toEqual([102]);
+			expect(provenance.exitCode).toBe(0);
+			expect(provenance.elapsedMs).toBe(1);
 			expect(JSON.stringify(provenance)).not.toContain("Other.app");
 		} finally {
 			rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -252,9 +259,12 @@ describe("Kitchen hang diagnostics", () => {
 				pid: 100, key: "cottontail-cef", mainProcess: "cottontail", isolatedProcessGroup: true,
 				platform: "darwin", temporaryDirectory,
 			}, async (file) => file === "/bin/ps"
-				? { stdout: listing, stderr: "", error: null }
-				: { stdout: "", stderr: "Cannot examine process", error: "sample failed" });
-			expect(readFileSync(join(directory!, "sample-102-command.json"), "utf8")).toContain("Cannot examine process");
+				? { ...completed, stdout: listing, stderr: "", error: null }
+				: { ...completed, exitCode: 1, stdout: "", stderr: "Cannot examine process", error: "sample failed" });
+			const result = JSON.parse(readFileSync(join(directory!, "sample-102-command.json"), "utf8"));
+			expect(result.stderr).toBe("Cannot examine process");
+			expect(result.exitCode).toBe(1);
+			expect(result.killed).toBe(false);
 		} finally {
 			rmSync(temporaryDirectory, { recursive: true, force: true });
 		}
@@ -269,10 +279,12 @@ describe("Kitchen hang diagnostics", () => {
 				platform: "darwin", temporaryDirectory,
 			}, async () => {
 				calls++;
-				return { stdout: "", stderr: "ps unavailable", error: "failed" };
+				return { ...completed, exitCode: null, signal: "SIGKILL", killed: true, elapsedMs: 2001, stdout: "", stderr: "", error: "failed" };
 			});
 			expect(calls).toBe(1);
 			expect(readFileSync(join(directory!, "sample-error.txt"), "utf8")).toContain("No live application runtime");
+			const result = JSON.parse(readFileSync(join(directory!, "processes.json"), "utf8"));
+			expect(result).toMatchObject({ exitCode: null, signal: "SIGKILL", killed: true, elapsedMs: 2001, timeoutMs: 2000 });
 		} finally {
 			rmSync(temporaryDirectory, { recursive: true, force: true });
 		}
@@ -282,8 +294,53 @@ describe("Kitchen hang diagnostics", () => {
 		const startedAt = Date.now();
 		const result = await runDiagnosticCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], 100);
 		expect(result.error).not.toBeNull();
+		expect(result.killed).toBe(true);
+		if (process.platform !== "win32") expect(result.signal).toBe("SIGKILL");
+		expect(result.elapsedMs).toBeGreaterThanOrEqual(90);
 		expect(Date.now() - startedAt).toBeLessThan(3000);
 	});
+
+	it("distinguishes an ordinary command failure from watchdog termination", async () => {
+		const result = await runDiagnosticCommand(process.execPath, ["-e", "process.exit(7)"], 2000);
+		expect(result).toMatchObject({ exitCode: 7, signal: null, killed: false, errorCode: null });
+		expect(result.error).not.toBeNull();
+	});
+
+	it.skipIf(process.platform !== "darwin")("discovers an actual detached app group without inspecting unrelated processes", async () => {
+		const leader = spawn(process.execPath, ["-e", `
+			const { spawn } = require("node:child_process");
+			const child = spawn(process.execPath, ["-e", 'process.stdout.write("ready"); setInterval(() => {}, 1000)']);
+			child.stdout.once("data", () => console.log(child.pid));
+			setInterval(() => {}, 1000);
+		`], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
+		const exited = new Promise<void>(resolve => leader.once("exit", () => resolve()));
+		let readinessTimer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const childPid = await new Promise<number>((resolve, reject) => {
+				readinessTimer = setTimeout(() => reject(new Error("Owned group fixture did not start")), 5000);
+				leader.once("error", reject);
+				let output = "";
+				leader.stdout!.on("data", chunk => {
+					output += chunk.toString();
+					if (/^\d+\n$/.test(output)) resolve(Number(output.trim()));
+				});
+			});
+			const args = ["-g", String(leader.pid), "-o", "pid=,ppid=,pgid=,comm="];
+			const result = await runDiagnosticCommand("/bin/ps", args, 2000);
+			expect(result).toMatchObject({ exitCode: 0, signal: null, killed: false, error: null });
+			const selected = selectMacosHangProcesses(result.stdout, leader.pid!, basename(process.execPath), true);
+			expect(selected.targets.map(info => info.pid)).toEqual([childPid]);
+			expect(selected.tree.every(info => info.group === leader.pid)).toBe(true);
+		} finally {
+			clearTimeout(readinessTimer);
+			if (leader.pid) {
+				try { process.kill(-leader.pid, "SIGKILL"); } catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				}
+			}
+			await exited;
+		}
+	}, 10000);
 });
 
 describe("kitchen matrix", () => {

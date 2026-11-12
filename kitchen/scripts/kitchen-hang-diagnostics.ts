@@ -8,16 +8,29 @@ type CommandResult = {
 	stdout: string;
 	stderr: string;
 	error: string | null;
+	exitCode: number | null;
+	errorCode: string | null;
+	signal: NodeJS.Signals | null;
+	killed: boolean;
+	elapsedMs: number;
 };
 type CommandRunner = (file: string, args: string[], timeoutMs: number) => Promise<CommandResult>;
 
 // SIGKILL also bounds a diagnostic tool that ignores graceful termination.
 export const runDiagnosticCommand: CommandRunner = (file, args, timeoutMs) =>
 	new Promise((resolve) => {
-		execFile(file, args, {
+		const startedAt = performance.now();
+		const child = execFile(file, args, {
 			encoding: "utf8", timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: 2 * 1024 * 1024,
 		}, (error, stdout, stderr) => {
-			resolve({ stdout, stderr, error: error?.message ?? null });
+			resolve({
+				stdout, stderr, error: error?.message ?? null,
+				exitCode: typeof error?.code === "number" ? error.code : child.exitCode,
+				errorCode: typeof error?.code === "string" ? error.code : null,
+				signal: error?.signal ?? child.signalCode,
+				killed: error?.killed ?? child.killed,
+				elapsedMs: Math.round(performance.now() - startedAt),
+			});
 		});
 	});
 
@@ -72,11 +85,17 @@ export async function captureKitchenHangDiagnostics({
 	const directory = mkdtempSync(join(temporaryDirectory, `electrobun-kitchen-hang-${key}-`));
 	const runtimeName = mainProcess === "bun" || mainProcess === "cottontail" ? mainProcess : "main";
 	// comm intentionally excludes process arguments; only the owned tree is
-	// persisted, not the runner's unrelated processes.
-	const listing = await run("/bin/ps", ["-axo", "pid=,ppid=,pgid=,comm="], 2000);
+	// persisted, not the runner's unrelated processes. Timed runs already own
+	// an isolated group: avoid resolving every host executable during a stall.
+	const discoveryArgs = isolatedProcessGroup
+		? ["-g", String(pid), "-o", "pid=,ppid=,pgid=,comm="]
+		: ["-axo", "pid=,ppid=,pgid=,comm="];
+	const listing = await run("/bin/ps", discoveryArgs, 2000);
 	const { tree, targets } = selectMacosHangProcesses(listing.stdout, pid, runtimeName, isolatedProcessGroup);
+	const { stdout: _listing, ...discoveryResult } = listing;
 	writeFileSync(join(directory, "processes.json"), JSON.stringify({
-		key, pid, runtimeName, error: listing.error, stderr: listing.stderr, tree,
+		key, pid, runtimeName, command: "/bin/ps", args: discoveryArgs, timeoutMs: 2000,
+		...discoveryResult, tree,
 		targets: targets.map((info) => info.pid),
 	}, null, 2) + "\n");
 	if (!targets.length) {
@@ -88,7 +107,10 @@ export async function captureKitchenHangDiagnostics({
 		// report from being written before the tool deadline. Keep image symbols
 		// and addresses, without that additional lookup or a longer timeout.
 		const result = await run("/usr/bin/sample", [String(info.pid), "2", "-nodsyms", "-file", report], 8000);
-		writeFileSync(join(directory, `sample-${info.pid}-command.json`), JSON.stringify(result, null, 2) + "\n");
+		writeFileSync(join(directory, `sample-${info.pid}-command.json`), JSON.stringify({
+			command: "/usr/bin/sample", args: [String(info.pid), "2", "-nodsyms", "-file", report], timeoutMs: 8000,
+			...result,
+		}, null, 2) + "\n");
 	}));
 	return directory;
 }
