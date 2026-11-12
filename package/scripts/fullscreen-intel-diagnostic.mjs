@@ -29,6 +29,16 @@ export function fullscreenDiagnosticTarget(arch) {
 
 const target = fullscreenDiagnosticTarget(process.arch);
 
+export function diagnosticRuntimeEnvironment(env) {
+	return {
+		TMPDIR: env.TMPDIR ?? null,
+		TMP: env.TMP ?? null,
+		TEMP: env.TEMP ?? null,
+		ELECTROBUN_DIAGNOSTICS_TEMP: env.ELECTROBUN_DIAGNOSTICS_TEMP ?? null,
+		variants: ["bun:native", "bun:cef"],
+	};
+}
+
 export function fullSuiteLaunch(variant, { repository, dist, env }) {
 	if (variant !== "bun:native" && variant !== "bun:cef") throw new Error(`Unsupported diagnostic variant: ${variant}`);
 	return {
@@ -545,6 +555,9 @@ async function runFullSuite() {
 async function main() {
 	if (process.platform !== "darwin") throw new Error("Run this diagnostic on macOS");
 	mkdirSync(diagnostics, { recursive: true });
+	if (process.argv[2] !== "stock-only") {
+		writeFileSync(join(diagnostics, "runtime-environment.json"), JSON.stringify(diagnosticRuntimeEnvironment(process.env), null, 2));
+	}
 	if (process.argv[2] === "stock-only") {
 		recordContext("before");
 		const results = await runControls(["stock"]);

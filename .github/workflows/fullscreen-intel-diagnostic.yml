@@ -28,6 +28,10 @@ on:
         description: Replace only Core with a Debug build of the artifact's exact source
         type: boolean
         default: false
+      use_vm_temp_dir:
+        description: Use the full VM suite's temporary directory for tools and app processes
+        type: boolean
+        default: false
       full_suite:
         description: Run the full Bun native and CEF Kitchen suites, retaining the prelude and owned-app samples
         type: boolean
@@ -126,6 +130,13 @@ jobs:
           if [[ "$REBUILD_DEBUG_CORE" == true ]]; then
             gh api "repos/$GITHUB_REPOSITORY/contents/package/src?ref=$ARTIFACT_SHA" --jq '.[] | select(.name == "core" and .type == "dir") | .sha' > "$FULLSCREEN_DIAGNOSTICS/artifact-core-tree-sha.txt"
           fi
+      - name: Use full VM temporary directory
+        if: inputs.use_vm_temp_dir
+        shell: bash
+        run: |
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v7
         with:
           github-token: ${{ github.token }}

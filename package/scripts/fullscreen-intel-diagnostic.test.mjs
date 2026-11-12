@@ -5,11 +5,21 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import {
 	assertOnlyCoreChanged, assertPackagedRuntimeHashes, debugCoreBuildPlan, devkitFileHashes,
-	fullscreenDiagnosticTarget, fullSuiteLaunch,
+	diagnosticRuntimeEnvironment, fullscreenDiagnosticTarget, fullSuiteLaunch,
 } from "./fullscreen-intel-diagnostic.mjs";
 
 const coreTree = "a".repeat(40);
 const debugPlanOptions = { packageRoot: resolve("fixture package"), zigVersion: "0.17.0", artifactSourceTree: coreTree, checkoutSourceTree: coreTree };
+
+test("runtime evidence records only temporary directories and the selected runtime variants", () => {
+	const selected = { TMPDIR: "/fixture/tmp", TMP: "", TEMP: "/fixture/temp", ELECTROBUN_DIAGNOSTICS_TEMP: "/fixture/diagnostics" };
+	assert.deepEqual(diagnosticRuntimeEnvironment({ ...selected, GH_TOKEN: "secret", PATH: "tools", UNRELATED: "private" }), {
+		...selected, variants: ["bun:native", "bun:cef"],
+	});
+	assert.deepEqual(diagnosticRuntimeEnvironment({}), {
+		TMPDIR: null, TMP: null, TEMP: null, ELECTROBUN_DIAGNOSTICS_TEMP: null, variants: ["bun:native", "bun:cef"],
+	});
+});
 
 for (const [arch, zigArch] of [["arm64", "aarch64"], ["x64", "x86_64"]]) {
 	test(`Debug Core plan builds only ${arch} Core with the VM's Debug mode and macOS baseline`, () => {
@@ -111,6 +121,7 @@ for (const variant of ["bun:native", "bun:cef"]) {
 			AUTO_RUN_CATEGORY: "BrowserWindow",
 			AUTO_RUN_WGPU: "1",
 			ELECTROBUN_DEBUG_FULLSCREEN: "0",
+			TMPDIR: "/fixture/tmp", TMP: "/fixture/tmp", TEMP: "/fixture/tmp",
 		});
 		const launch = fullSuiteLaunch(variant, { repository, dist, env: inherited });
 		assert.deepEqual(launch.args, [
@@ -159,12 +170,23 @@ test("diagnostic defaults retain the exact beta16 artifacts without rebuilding t
 		artifact_sha: "146da4c44a13ac1ae761696e1a578bb98d7a0aea",
 		rebuild_native: "false",
 		rebuild_debug_core: "false",
+		use_vm_temp_dir: "false",
 		full_suite: "true",
 	})) {
 		const block = workflowBlock(new RegExp(`^\\s*${input}:\\s*$`));
 		const value = block.match(/^\s*default:\s*([^\r\n]+)$/m)?.[1].trim().replace(/^(['"])(.*)\1$/, "$2");
 		assert.equal(value, expected, `unexpected default for ${input}`);
 	}
+});
+
+test("VM temporary directories are opt-in and configured before installing tools or building apps", () => {
+	const block = workflowBlock(/^\s*- name: Use full VM temporary directory\s*$/);
+	assert.match(block, /^\s*if:\s*inputs\.use_vm_temp_dir\s*$/m);
+	const assignments = block.match(/echo "(?:TMPDIR|TMP|TEMP)=\$RUNNER_TEMP" >> "\$GITHUB_ENV"/g);
+	const vmWorkflow = readFileSync(new URL("../../.github/workflows/test-vm.yml", import.meta.url), "utf8");
+	assert.deepEqual(assignments, vmWorkflow.match(/echo "(?:TMPDIR|TMP|TEMP)=\$RUNNER_TEMP" >> "\$GITHUB_ENV"/g));
+	assert.equal(assignments?.length, 3);
+	assert.ok(workflow.indexOf("- name: Use full VM temporary directory") < workflow.indexOf("- uses: ./.github/actions/install-hutch"));
 });
 
 test("Debug Core is explicit, uses pinned Zig and skips unrelated stock controls", () => {
