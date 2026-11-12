@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Diagnostic-only: reuse a CI devkit, replace only its native window wrapper,
+// Diagnostic-only: reuse a CI devkit, optionally replace its native window wrapper,
 // and exercise the same packaged Kitchen tests used by the full VM suite.
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -16,7 +16,35 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(packageRoot, "..");
 const dist = join(packageRoot, "dist");
 const diagnostics = resolve(process.env.FULLSCREEN_DIAGNOSTICS ?? join(repository, "fullscreen-diagnostics"));
-mkdirSync(diagnostics, { recursive: true });
+
+export function fullscreenDiagnosticTarget(arch) {
+	return {
+		arch,
+		machine: macosNativeArchitecture(arch),
+		artifactSuffix: `darwin-${arch}`,
+		bundleDirectory: `dev-macos-${arch}`,
+		cefPlatform: arch === "arm64" ? "macosarm64" : "macosx64",
+	};
+}
+
+const target = fullscreenDiagnosticTarget(process.arch);
+
+export function fullSuiteLaunch(variant, { repository, dist, env }) {
+	if (variant !== "bun:native" && variant !== "bun:cef") throw new Error(`Unsupported diagnostic variant: ${variant}`);
+	return {
+		args: ["scripts/kitchen-matrix.ts", "--launch-only", `--with=${variant}`, "--timeout=1200"],
+		cwd: join(repository, "kitchen"),
+		env: {
+			...env, HUTCH_ELECTROBUN_DEVKIT_ROOT: dist, AUTO_RUN: "1",
+			AUTO_RUN_TEST_NAME: "", AUTO_RUN_CATEGORY: "", AUTO_RUN_WGPU: "",
+			ELECTROBUN_DEBUG_FULLSCREEN: "1",
+		},
+		// Let the matrix's existing watchdog collect stacks and terminate its
+		// owned app first. Its phase watcher is the only sampler in this mode.
+		timeoutMs: 1_230_000,
+		observeTransitions: false,
+	};
+}
 
 function command(binary, args, options = {}) {
 	console.log(`+ ${binary} ${args.join(" ")}`);
@@ -101,7 +129,7 @@ async function sampleStalledEntry(label, appPid) {
 	writeFileSync(join(diagnostics, `${label}-sample-results.json`), JSON.stringify(results, null, 2));
 }
 
-async function runObservedProcess(label, binary, args, options = {}, timeout = 75_000) {
+async function runObservedProcess(label, binary, args, options = {}, timeout = 75_000, observeTransitions = true) {
 	const output = createWriteStream(join(diagnostics, `${label}.log`));
 	const observations = [];
 	let entered = false;
@@ -147,6 +175,7 @@ async function runObservedProcess(label, binary, args, options = {}, timeout = 7
 			stream.on("data", (chunk) => {
 				output.write(chunk);
 				process.stdout.write(chunk);
+				if (!observeTransitions) return;
 				pending += chunk.toString();
 				const lines = pending.split("\n");
 				pending = lines.pop();
@@ -277,16 +306,17 @@ function prepare() {
 	mkdirSync(dist, { recursive: true });
 	const artifactHashes = {};
 	for (const kind of ["core", "cef"]) {
-		const archive = join(repository, "diagnostic-artifacts", `electrobun-${kind}-darwin-x64.tar.gz`);
+		const archive = join(repository, "diagnostic-artifacts", `electrobun-${kind}-${target.artifactSuffix}.tar.gz`);
 		artifactHashes[kind] = sha256(archive);
 		command("tar", ["-xzf", archive, "-C", dist]);
 	}
 	writeFileSync(join(diagnostics, "artifact-sha256.json"), JSON.stringify(artifactHashes, null, 2));
 	const version = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).version;
-	validateNativeDevkitManifest({ coreRoot: dist, expectedVersion: version, expectedTarget: { os: "macos", arch: "x64" } });
-	command(process.execPath, ["scripts/verify-macho-deployment-target.js", "--arch=x64", dist]);
+	validateNativeDevkitManifest({ coreRoot: dist, expectedVersion: version, expectedTarget: { os: "macos", arch: target.arch } });
+	command(process.execPath, ["scripts/verify-macho-deployment-target.js", `--arch=${target.arch}`, dist]);
 	const provenance = {
 		mode: process.env.REBUILD_NATIVE === "false" ? "original-artifact" : "rebuilt-native-wrapper",
+		architecture: target.arch,
 		artifactRun: JSON.parse(readFileSync(join(diagnostics, "artifact-run.json"), "utf8")).id,
 		artifactSourceRevision: JSON.parse(readFileSync(join(diagnostics, "artifact-run.json"), "utf8")).head_sha,
 		artifactHashes,
@@ -306,9 +336,9 @@ function prepare() {
 	mkdirSync(cef, { recursive: true });
 	mkdirSync(dawn, { recursive: true });
 	const cefArchive = join(scratch, "cef.tar.bz2");
-	download(`https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_macosx64_minimal.tar.bz2`, cefArchive);
+	download(`https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION}+chromium-${CHROMIUM_VERSION}_${target.cefPlatform}_minimal.tar.bz2`, cefArchive);
 	command("tar", ["-xjf", cefArchive, "--strip-components=1", "-C", cef]);
-	const dawnArtifact = ownedBuildDependencyArtifact("electrobun-dawn", "macos", "x64");
+	const dawnArtifact = ownedBuildDependencyArtifact("electrobun-dawn", "macos", target.arch);
 	const dawnArchive = join(scratch, "dawn.tar.gz");
 	download(dawnArtifact.url, dawnArchive);
 	download(dawnArtifact.checksumUrl, `${dawnArchive}.sha256`);
@@ -320,18 +350,18 @@ function prepare() {
 	const dawnRoot = existsSync(join(dawn, "include")) ? dawn : join(dawn, dawnEntries[0]);
 	if (!existsSync(join(dawnRoot, "include", "dawn", "webgpu.h"))) throw new Error("Dawn headers missing");
 	const cefBuild = join(cef, "build");
-	command("cmake", ["-S", cef, "-B", cefBuild, "-DPROJECT_ARCH=x86_64", "-DCMAKE_OSX_ARCHITECTURES=x86_64", "-DCMAKE_BUILD_TYPE=Release", `-DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOS_DEPLOYMENT_TARGET}`]);
+	command("cmake", ["-S", cef, "-B", cefBuild, `-DPROJECT_ARCH=${target.machine}`, `-DCMAKE_OSX_ARCHITECTURES=${target.machine}`, "-DCMAKE_BUILD_TYPE=Release", `-DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOS_DEPLOYMENT_TARGET}`]);
 	command("cmake", ["--build", cefBuild, "--target", "libcef_dll_wrapper", "--parallel", "8"]);
 	const sdk = command("xcrun", ["--sdk", "macosx", "--show-sdk-path"], { encoding: "utf8", stdio: "pipe" }).stdout.trim();
 	if (!sdk) throw new Error("Missing macOS SDK path");
-	const targetFlags = ["-arch", "x86_64", `-mmacosx-version-min=${MACOS_DEPLOYMENT_TARGET}`];
+	const targetFlags = ["-arch", target.machine, `-mmacosx-version-min=${MACOS_DEPLOYMENT_TARGET}`];
 	const object = join(scratch, "nativeWrapper.o");
 	command("xcrun", ["--sdk", "macosx", "clang++", "-c", "src/native/macos/nativeWrapper.mm", "-o", object, ...targetFlags, "-fobjc-arc", "-fno-objc-msgsend-selector-stubs", `-I${cef}`, `-I${join(dawnRoot, "include")}`, "-std=c++20", "-isysroot", sdk]);
 	const wrapper = join(dist, "libNativeWrapper.dylib");
 	renameSync(wrapper, join(diagnostics, "original-libNativeWrapper.dylib"));
 	command("xcrun", ["--sdk", "macosx", "clang++", ...targetFlags, "-o", wrapper, object, join(dist, "libasar.dylib"), "-framework", "Cocoa", "-framework", "WebKit", "-framework", "QuartzCore", "-framework", "Metal", "-framework", "MetalKit", "-framework", "UserNotifications", `-F${join(cef, "Release")}`, "-weak_framework", "Chromium Embedded Framework", `-L${join(cefBuild, "libcef_dll_wrapper")}`, "-lcef_dll_wrapper", "-stdlib=libc++", "-shared", "-install_name", "@executable_path/libNativeWrapper.dylib", "-Wl,-rpath,@executable_path"]);
 	command("codesign", ["--force", "--sign", "-", wrapper]);
-	command(process.execPath, ["scripts/verify-macho-deployment-target.js", "--arch=x64", wrapper]);
+	command(process.execPath, ["scripts/verify-macho-deployment-target.js", `--arch=${target.arch}`, wrapper]);
 	provenance.devkitWrapperSha256 = sha256(wrapper);
 	writeFileSync(join(diagnostics, "wrapper-provenance.json"), JSON.stringify(provenance, null, 2));
 	writeFileSync(join(diagnostics, "instrumented-wrapper-sha256.txt"), `${provenance.devkitWrapperSha256}\n`);
@@ -341,7 +371,8 @@ function prepare() {
 
 function bundledWrapperEvidence(variant) {
 	const provenance = JSON.parse(readFileSync(join(diagnostics, "wrapper-provenance.json"), "utf8"));
-	const root = join(repository, "kitchen", "build", "matrix", variant.replace(":", "-"), "dev-macos-x64");
+	if (provenance.architecture !== target.arch) throw new Error("Prepared devkit architecture differs from the current runner");
+	const root = join(repository, "kitchen", "build", "matrix", variant.replace(":", "-"), target.bundleDirectory);
 	const apps = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.endsWith(".app"));
 	if (apps.length !== 1) throw new Error(`Expected one packaged app for ${variant}; found ${apps.length}`);
 	const wrapper = join(root, apps[0].name, "Contents", "MacOS", "libNativeWrapper.dylib");
@@ -390,14 +421,47 @@ async function runTests() {
 	if ([...controlResults, ...results].some((result) => result.status !== 0)) throw new Error("Fullscreen diagnostic failed; inspect control-results.json, per-case logs and results.json");
 }
 
-if (process.platform !== "darwin") throw new Error("Run this diagnostic on macOS");
-if (process.argv[2] !== "stock-only" && process.arch !== "x64") throw new Error("Run the integration diagnostic on native Intel macOS");
-if (process.argv[2] === "stock-only") {
+async function runFullSuite() {
+	const provenance = JSON.parse(readFileSync(join(diagnostics, "wrapper-provenance.json"), "utf8"));
+	const bundledWrappers = ["bun:native", "bun:cef"].map(bundledWrapperEvidence);
+	writeFileSync(join(diagnostics, "bundled-wrapper-sha256.json"), JSON.stringify(bundledWrappers, null, 2));
+	if (bundledWrappers.some((wrapper) => !wrapper.matchesDevkit)) throw new Error("Packaged Kitchen wrapper differs from the prepared devkit; refusing to launch");
 	recordContext("before");
-	const results = await runControls(["stock"]);
+	const results = [];
+	for (const variant of ["bun:native", "bun:cef"]) {
+		const label = `${variant.replace(":", "-")}-full-suite`;
+		const wrapper = bundledWrapperEvidence(variant);
+		if (!wrapper.matchesDevkit) throw new Error(`${label}: packaged wrapper changed before launch`);
+		const launch = fullSuiteLaunch(variant, { repository, dist, env: process.env });
+		const result = { variant, mode: provenance.mode, wrapper, ...await runObservedProcess(
+			label, selectHutchBinary(), launch.args, { cwd: launch.cwd, env: launch.env },
+			launch.timeoutMs, launch.observeTransitions,
+		) };
+		const log = readFileSync(join(diagnostics, `${label}.log`), "utf8");
+		result.fullSuiteObserved = log.includes("Auto-running automated tests in 3 seconds");
+		result.successMarkerObserved = log.includes("Auto-run complete. Exiting with code 0");
+		if (!result.fullSuiteObserved || !result.successMarkerObserved) result.status = result.status || 1;
+		results.push(result);
+		writeFileSync(join(diagnostics, "results.json"), JSON.stringify(results, null, 2));
+		recordContext(`${label}-after`, false);
+	}
 	recordContext("after");
-	await collectDesktopLogs();
-	if (results.some((result) => result.status !== 0)) throw new Error("Stock Cocoa control failed; inspect control-results.json");
-} else if (process.argv[2] === "prepare") prepare();
-else if (process.argv[2] === "run") await runTests();
-else throw new Error("Usage: node fullscreen-intel-diagnostic.mjs prepare|run|stock-only");
+	if (results.some((result) => result.status !== 0)) throw new Error("Full Kitchen suite failed; inspect results.json and owned-app phase diagnostics");
+}
+
+async function main() {
+	if (process.platform !== "darwin") throw new Error("Run this diagnostic on macOS");
+	mkdirSync(diagnostics, { recursive: true });
+	if (process.argv[2] === "stock-only") {
+		recordContext("before");
+		const results = await runControls(["stock"]);
+		recordContext("after");
+		await collectDesktopLogs();
+		if (results.some((result) => result.status !== 0)) throw new Error("Stock Cocoa control failed; inspect control-results.json");
+	} else if (process.argv[2] === "prepare") prepare();
+	else if (process.argv[2] === "run") await runTests();
+	else if (process.argv[2] === "run-full") await runFullSuite();
+	else throw new Error("Usage: node fullscreen-intel-diagnostic.mjs prepare|run|run-full|stock-only");
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
