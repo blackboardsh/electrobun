@@ -2424,7 +2424,7 @@ async function buildNative() {
 					await $`pkg-config --cflags webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1`.quiet();
 				pkgConfigCflags = cflagsResult.stdout.toString().trim();
 				const libsResult =
-					await $`pkg-config --libs webkit2gtk-4.1 gtk+-3.0 ayatana-appindicator3-0.1`.quiet();
+					await $`pkg-config --libs webkit2gtk-4.1 gtk+-3.0`.quiet();
 				pkgConfigLibs = libsResult.stdout.toString().trim();
 				hasAppIndicator = true;
 				console.log("Successfully retrieved pkg-config flags");
@@ -2514,7 +2514,7 @@ async function buildNative() {
 			];
 			await $`${waylandPipeWireCaptureCompileCmd}`;
 
-			// Link with WebKitGTK, AppIndicator, and optionally CEF libraries using weak linking
+			// Link with WebKitGTK, and optionally CEF libraries using weak linking
 			await $`mkdir -p src/native/build`;
 
 			// Build both GTK-only and CEF versions for Linux
