@@ -1,6 +1,7 @@
 export class TestDeadlineError extends Error {
-	constructor(readonly timeoutMs: number) {
-		super(`Test timed out after ${timeoutMs}ms`);
+	constructor(readonly timeoutMs: number, options?: ErrorOptions) {
+		const detail = options ? `; underlying failure: ${options.cause instanceof Error ? options.cause.message : String(options.cause)}` : "";
+		super(`Test timed out after ${timeoutMs}ms${detail}`, options);
 		this.name = "TestDeadlineError";
 	}
 }
@@ -23,6 +24,13 @@ export async function withTestDeadline<T>(
 		// then resolve its promise before the overdue timer callback runs.
 		if (performance.now() >= deadline) throw new TestDeadlineError(timeoutMs);
 		return result;
+	} catch (error) {
+		// A late native call can reject before the timer runs too. Preserve the
+		// failure for diagnosis while still invalidating this test's executor.
+		if (!(error instanceof TestDeadlineError) && performance.now() >= deadline) {
+			throw new TestDeadlineError(timeoutMs, { cause: error });
+		}
+		throw error;
 	} finally {
 		clearTimeout(timer);
 	}

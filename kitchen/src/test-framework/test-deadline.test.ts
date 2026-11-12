@@ -76,9 +76,63 @@ describe("test deadlines", () => {
 			clear.mockRestore();
 		}
 	});
+
+	test("classifies a late rejection before the timer runs and preserves its cause", async () => {
+		const clock = spyOn(performance, "now").mockReturnValue(100);
+		const timers = spyOn(globalThis, "setTimeout");
+		const clear = spyOn(globalThis, "clearTimeout");
+		try {
+			const failure = new Error("Fullscreen restoration exceeded its observation limit");
+			const operation = Promise.resolve().then(() => {
+				// A blocked native getter returns after the outer deadline. Its
+				// rejection reaches Promise.race before the overdue timer callback.
+				clock.mockReturnValue(1100);
+				throw failure;
+			});
+			const error = await withTestDeadline(operation, 1000).catch(error => error);
+			expect(error).toBeInstanceOf(TestDeadlineError);
+			expect(error.cause).toBe(failure);
+			expect(error.message).toContain("Test timed out after 1000ms");
+			expect(error.message).toContain(failure.message);
+			const handles = timers.mock.results.map(result => {
+				if (result.type !== "return") throw new Error("setTimeout did not return a timer handle");
+				return result.value;
+			});
+			expect(clear.mock.calls.map(([handle]) => handle)).toEqual(handles);
+		} finally {
+			clock.mockRestore();
+			timers.mockRestore();
+			clear.mockRestore();
+		}
+	});
 });
 
 describe("executor timeout isolation", () => {
+	test("stops the next test when native work rejects after the deadline before the timer runs", async () => {
+		const clock = spyOn(performance, "now").mockReturnValue(100);
+		const executor = new TestExecutor();
+		let subsequentRuns = 0;
+		try {
+			executor.registerTests([
+				definition("late native rejection", async () => {
+					clock.mockReturnValue(10_000);
+					throw new Error("Fullscreen restoration exceeded its observation limit");
+				}),
+				definition("subsequent task", async () => { subsequentRuns++; }),
+			]);
+			const results = await executor.runAllAutomated();
+			expect(results.map(result => result.status)).toEqual(["failed"]);
+			expect(results[0]?.error).toContain("Test timed out after");
+			expect(results[0]?.error).toContain("Fullscreen restoration exceeded its observation limit");
+			expect(subsequentRuns).toBe(0);
+			expect(executor.getSummary().pending).toBe(1);
+			await expect(executor.runTest(definition("manual retry", async () => { subsequentRuns++; })))
+				.rejects.toThrow("Restart Kitchen Sink");
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
 	test("stops the suite and defers cleanup until the timed-out task settles", async () => {
 		const executor = new TestExecutor();
 		const finished = deferred();
