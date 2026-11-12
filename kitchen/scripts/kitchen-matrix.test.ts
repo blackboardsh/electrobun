@@ -220,7 +220,7 @@ describe("Kitchen hang diagnostics", () => {
 		expect(selectMacosHangProcesses(listing, 100, "main", false).targets).toEqual([]);
 	});
 
-	it("preserves a native app's sample and process provenance before returning", async () => {
+	it("preserves native stacks and provenance without external dSYM lookup", async () => {
 		const temporaryDirectory = mkdtempSync(join(tmpdir(), "kitchen-diagnostics-test-"));
 		const commands: string[] = [];
 		try {
@@ -230,9 +230,9 @@ describe("Kitchen hang diagnostics", () => {
 			}, async (file, args, timeout) => {
 				commands.push(file);
 				if (file === "/bin/ps") return { stdout: listing, stderr: "", error: null };
-				expect(args.slice(0, 3)).toEqual(["102", "2", "-file"]);
+				expect(args.slice(0, 4)).toEqual(["102", "2", "-nodsyms", "-file"]);
 				expect(timeout).toBe(8000);
-				writeFileSync(args[3]!, "Thread 0: ebui_destroy -> dispatch_sync\n");
+				writeFileSync(args[4]!, "Thread 0: ebui_destroy -> dispatch_sync\n");
 				return { stdout: "", stderr: "Sampling complete", error: null };
 			});
 			expect(commands).toEqual(["/bin/ps", "/usr/bin/sample"]);

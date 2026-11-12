@@ -84,7 +84,10 @@ export async function captureKitchenHangDiagnostics({
 	}
 	await Promise.all(targets.map(async (info) => {
 		const report = join(directory, `sample-${info.pid}.txt`);
-		const result = await run("/usr/bin/sample", [String(info.pid), "2", "-file", report], 8000);
+		// External dSYM discovery can outlast the sampling itself and prevent any
+		// report from being written before the tool deadline. Keep image symbols
+		// and addresses, without that additional lookup or a longer timeout.
+		const result = await run("/usr/bin/sample", [String(info.pid), "2", "-nodsyms", "-file", report], 8000);
 		writeFileSync(join(directory, `sample-${info.pid}-command.json`), JSON.stringify(result, null, 2) + "\n");
 	}));
 	return directory;
