@@ -357,12 +357,16 @@ function runHutchForVariant(
 			windowsHide: false,
 		});
 		activeChildren.set(child, isolatedProcessGroup);
+		let capturedHostResources = false;
 		const fullscreenWatcher = createFullscreenPhaseWatcher({
 			enabled: command === "run" && timeoutSeconds !== null && process.platform === "darwin" &&
 				process.env["ELECTROBUN_DEBUG_FULLSCREEN"] === "1",
 			capture: async (phase) => {
+				const includeHostResources = !capturedHostResources;
+				capturedHostResources = true;
 				const directory = await captureKitchenHangDiagnostics({
 					pid: child.pid, key, mainProcess: variant.mainProcess, isolatedProcessGroup,
+					captureMode: "phase", includeHostResources,
 				});
 				if (directory) {
 					writeFileSync(join(directory, "phase.json"), JSON.stringify(phase, null, 2) + "\n");

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 type ProcessInfo = { pid: number; parent: number; group: number; executable: string };
 type CommandResult = {
@@ -37,6 +37,27 @@ export const runDiagnosticCommand: CommandRunner = (file, args, timeoutMs) =>
 			});
 		});
 	});
+
+// Use the same small snapshot after the build and during a stall. Arguments and
+// environment are deliberately excluded from the host-wide process listing.
+// Each independent command is bounded and a failed probe is still evidence.
+export async function captureMacosHostResources({
+	reportPath, platform = process.platform,
+}: { reportPath: string; platform?: string }, run: CommandRunner = runDiagnosticCommand): Promise<void> {
+	if (platform !== "darwin") return;
+	const startedAt = new Date().toISOString();
+	const commands = [
+		{ name: "processes", command: "/bin/ps", args: ["-axo", "pid=,ppid=,pgid=,state=,%cpu=,rss=,comm="] },
+		{ name: "virtualMemory", command: "/usr/bin/vm_stat", args: [] },
+		{ name: "system", command: "/usr/sbin/sysctl", args: ["vm.swapusage", "vm.loadavg", "hw.memsize", "hw.ncpu"] },
+		{ name: "disk", command: "/bin/df", args: ["-k", dirname(reportPath)] },
+	];
+	const results = await Promise.all(commands.map(async (command) => {
+		try { return { ...command, timeoutMs: 2000, ...await run(command.command, command.args, 2000) }; }
+		catch (error) { return { ...command, timeoutMs: 2000, error: String(error) }; }
+	}));
+	writeFileSync(reportPath, JSON.stringify({ startedAt, finishedAt: new Date().toISOString(), commands: results }, null, 2) + "\n");
+}
 
 export function selectMacosHangProcesses(
 	listing: string, rootPid: number, runtimeName: string, isolatedProcessGroup: boolean,
@@ -74,6 +95,7 @@ export function selectMacosHangProcesses(
 
 export async function captureKitchenHangDiagnostics({
 	pid, key, mainProcess, isolatedProcessGroup,
+	captureMode = "watchdog", includeHostResources = false,
 	platform = process.platform,
 	temporaryDirectory = process.env["ELECTROBUN_DIAGNOSTICS_TEMP"] || tmpdir(),
 }: {
@@ -81,12 +103,18 @@ export async function captureKitchenHangDiagnostics({
 	key: string;
 	mainProcess: string;
 	isolatedProcessGroup: boolean;
+	captureMode?: "phase" | "watchdog";
+	includeHostResources?: boolean;
 	platform?: string;
 	temporaryDirectory?: string;
 }, run: CommandRunner = runDiagnosticCommand): Promise<string | null> {
 	if (platform !== "darwin" || !pid) return null;
 	mkdirSync(temporaryDirectory, { recursive: true });
 	const directory = mkdtempSync(join(temporaryDirectory, `electrobun-kitchen-hang-${key}-`));
+	const hostResources = includeHostResources
+		? captureMacosHostResources({ reportPath: join(directory, "host-resources.json"), platform }, run)
+			.catch(error => { console.error(`[${key}] Could not write host resource diagnostics: ${error}`); })
+		: Promise.resolve();
 	const runtimeName = mainProcess === "bun" || mainProcess === "cottontail" ? mainProcess : "main";
 	// comm intentionally excludes process arguments; only the owned tree is
 	// persisted, not the runner's unrelated processes. Timed runs already own
@@ -105,17 +133,21 @@ export async function captureKitchenHangDiagnostics({
 	if (!targets.length) {
 		writeFileSync(join(directory, "sample-error.txt"), "No live application runtime found in the launched process tree.\n");
 	}
-	await Promise.all(targets.map(async (info) => {
+	// The short whole-app watchdog retains its existing shutdown allowance.
+	// Phase sampling happens while tests run; allow symbolication to finish
+	// after the one-second capture, even if the app has already failed/exited.
+	const sampleTimeoutMs = captureMode === "phase" ? 45000 : 8000;
+	await Promise.all([hostResources, ...targets.map(async (info) => {
 		const report = join(directory, `sample-${info.pid}.txt`);
 		// Each sample suspends the target to collect every thread's stack. Use a
 		// short, sparse capture to limit its effect on the stalled app. Capture
 		// symbol locations before the target can exit, without external dSYMs.
 		const args = [String(info.pid), "1", "10", "-mayDie", "-nodsyms", "-file", report];
-		const result = await run("/usr/bin/sample", args, 8000);
+		const result = await run("/usr/bin/sample", args, sampleTimeoutMs);
 		writeFileSync(join(directory, `sample-${info.pid}-command.json`), JSON.stringify({
-			command: "/usr/bin/sample", args, timeoutMs: 8000,
+			command: "/usr/bin/sample", args, timeoutMs: sampleTimeoutMs,
 			...result,
 		}, null, 2) + "\n");
-	}));
+	})]);
 	return directory;
 }

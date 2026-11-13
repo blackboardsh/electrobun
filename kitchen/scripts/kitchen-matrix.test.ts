@@ -31,6 +31,7 @@ import {
 } from "./kitchen-matrix";
 import {
 	captureKitchenHangDiagnostics,
+	captureMacosHostResources,
 	runDiagnosticCommand,
 	selectMacosHangProcesses,
 } from "./kitchen-hang-diagnostics";
@@ -338,6 +339,43 @@ describe("Kitchen hang diagnostics", () => {
 		"105 1 105 /tmp/Other.app/Contents/MacOS/cottontail",
 	].join("\n");
 
+	it("records bounded host probes including a failed probe without collecting arguments or environment", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "kitchen-host-diagnostics-test-"));
+		const reportPath = join(directory, "host-resources.json");
+		const commands: string[] = [];
+		try {
+			await captureMacosHostResources({ reportPath, platform: "darwin" }, async (file, args, timeout) => {
+				commands.push(file);
+				expect(timeout).toBe(2000);
+				if (file === "/bin/ps") expect(args).toEqual(["-axo", "pid=,ppid=,pgid=,state=,%cpu=,rss=,comm="]);
+				if (file === "/bin/df") expect(args).toEqual(["-k", directory]);
+				if (file === "/usr/bin/vm_stat") throw new Error("probe unavailable");
+				return { ...completed, stdout: file === "/bin/ps" ? "102 101 100 S 2.1 1234 /tmp/Kitchen.app/Contents/MacOS/bun\n" : "probe output", stderr: "", error: null };
+			});
+			expect(commands).toEqual(["/bin/ps", "/usr/bin/vm_stat", "/usr/sbin/sysctl", "/bin/df"]);
+			const report = JSON.parse(readFileSync(reportPath, "utf8"));
+			expect(report.commands).toHaveLength(4);
+			expect(report.commands[0]).toMatchObject({ ...completed, name: "processes", timeoutMs: 2000 });
+			expect(report.commands[0].args).toEqual(["-axo", "pid=,ppid=,pgid=,state=,%cpu=,rss=,comm="]);
+			expect(report.commands[1]).toMatchObject({ name: "virtualMemory", error: "Error: probe unavailable" });
+			expect(report.commands[2]).toMatchObject({ ...completed, name: "system", timeoutMs: 2000 });
+			expect(report.commands[2].args).toEqual(["vm.swapusage", "vm.loadavg", "hw.memsize", "hw.ncpu"]);
+			expect(report.commands[3]).toMatchObject({ ...completed, name: "disk", timeoutMs: 2000, args: ["-k", directory] });
+			expect(Date.parse(report.finishedAt)).toBeGreaterThanOrEqual(Date.parse(report.startedAt));
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("does not run macOS host probes on other platforms", async () => {
+		let calls = 0;
+		await captureMacosHostResources({ reportPath: "/unused-host-resources.json", platform: "linux" }, async () => {
+			calls++;
+			return { ...completed, stdout: "", stderr: "", error: null };
+		});
+		expect(calls).toBe(0);
+	});
+
 	it("finds the app runtime rather than its launcher, CEF helpers, or other apps", () => {
 		const result = selectMacosHangProcesses(listing, 100, "cottontail", true);
 		expect(result.targets.map((info) => info.pid)).toEqual([102]);
@@ -396,6 +434,38 @@ describe("Kitchen hang diagnostics", () => {
 			expect(result.killed).toBe(false);
 			expect(result).toMatchObject({ startedAt: completed.startedAt, finishedAt: completed.finishedAt });
 		} finally {
+			rmSync(temporaryDirectory, { recursive: true, force: true });
+		}
+	});
+
+	it("allows phase symbolication to finish while the host snapshot runs independently", async () => {
+		const temporaryDirectory = mkdtempSync(join(tmpdir(), "kitchen-diagnostics-test-"));
+		let finishHostProbe!: () => void;
+		const hostProbe = new Promise<void>(resolve => { finishHostProbe = resolve; });
+		let sampleStarted!: () => void;
+		const sampling = new Promise<void>(resolve => { sampleStarted = resolve; });
+		try {
+			const capture = captureKitchenHangDiagnostics({
+				pid: 100, key: "cottontail-native", mainProcess: "cottontail", isolatedProcessGroup: true,
+				platform: "darwin", temporaryDirectory, captureMode: "phase", includeHostResources: true,
+			}, async (file, args, timeout) => {
+				if (file === "/usr/bin/vm_stat") await hostProbe;
+				if (file === "/usr/bin/sample") {
+					expect(timeout).toBe(45000);
+					sampleStarted();
+					return { ...completed, elapsedMs: 12000, stdout: "", stderr: "Sampling complete", error: null };
+				}
+				expect(timeout).toBe(2000);
+				return { ...completed, stdout: args[0] === "-g" ? listing : "probe output", stderr: "", error: null };
+			});
+			await sampling;
+			finishHostProbe();
+			const directory = await capture;
+			const sample = JSON.parse(readFileSync(join(directory!, "sample-102-command.json"), "utf8"));
+			expect(sample).toMatchObject({ timeoutMs: 45000, elapsedMs: 12000, exitCode: 0, killed: false });
+			expect(JSON.parse(readFileSync(join(directory!, "host-resources.json"), "utf8")).commands).toHaveLength(4);
+		} finally {
+			finishHostProbe();
 			rmSync(temporaryDirectory, { recursive: true, force: true });
 		}
 	});

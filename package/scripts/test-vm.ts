@@ -1,4 +1,5 @@
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { captureMacosHostResources } from "../../kitchen/scripts/kitchen-hang-diagnostics";
 import {
 	KITCHEN_MAIN_PROCESSES,
 	kitchenVariantKey,
@@ -244,7 +245,18 @@ async function main(): Promise<void> {
 	let failures: VmTestFailure[];
 	try {
 		failures = await runVmTestCommands(commands,
-			(command) => diagnostics.run(command, runCommandWithSignalForwarding),
+			async (command) => {
+				await diagnostics.run(command, runCommandWithSignalForwarding);
+				if (command === commands[0]) {
+					try {
+						await captureMacosHostResources({
+							reportPath: join(dirname(diagnostics.summaryPath), "host-after-preparation.json"),
+						});
+					} catch (error) {
+						console.error(`[test:vm] Could not write host resource diagnostics: ${error}`);
+					}
+				}
+			},
 			(failure) => {
 				diagnostics.recordFailure(failure);
 				defaultFailureReporter(failure);
