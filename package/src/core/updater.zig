@@ -583,7 +583,10 @@ pub const Engine = struct {
     }
 
     fn reconcile(self: *Engine, op: *Operation) !void {
-        const staged = try self.prepared();
+        const staged = protocol.loadPreparedForReconciliation(self.allocator, self.io, self.config) catch |err| switch (err) {
+            error.Canceled, error.OutOfMemory => return err,
+            else => null,
+        };
         defer if (staged) |value| value.deinit();
         const result = try results.reconcile(self.allocator, self.io, self.config.local, self.config.channel_root, if (staged) |value| value.value else null) orelse return;
         defer results.freeResult(self.allocator, result);
@@ -904,6 +907,79 @@ test "dev external and none operations never consult network or require staging"
         try testState(&fixture.engine, &apply_id, .completed);
         try std.testing.expect(fixture.engine.approval_operation == null);
     }
+}
+
+test "startup reconciliation waits for the result after the installed stage is consumed" {
+    var fixture = try TestFixture.init();
+    defer fixture.deinit();
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const config = fixture.engine.config;
+    const extraction = try protocol.extractionPath(a, config.channel_root);
+    defer a.free(extraction);
+    try protocol.ensurePrivateDirectory(a, io, extraction);
+    const stage = try std.fmt.allocPrint(a, "{s}.prepared-{s}", .{ config.app_bundle_path, config.local.hash });
+    defer a.free(stage);
+    const recipe = try protocol.recipePath(a, config.channel_root, config.local.hash);
+    defer a.free(recipe);
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = recipe, .data = "{}" });
+    const record_path = try protocol.preparedPath(a, config.channel_root);
+    defer a.free(record_path);
+    try protocol.atomicWriteJson(a, io, config.channel_root, record_path, protocol.Prepared{
+        .schema_version = 2,
+        .identifier = config.local.identifier,
+        .channel = config.local.channel,
+        .version = config.local.version,
+        .hash = config.local.hash,
+        .platform = protocol.native_platform,
+        .arch = protocol.native_arch,
+        .staging_path = stage,
+        .recipe_path = recipe,
+        .recipe_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        .artifact_file = "canary-macos-arm64-Fixture.app.tar.zst",
+    }, 0o600);
+    // The helper has installed the payload and removed its empty stage, but
+    // has not published its result yet. Apply must still reject this record.
+    try Io.Dir.cwd().createDirPath(io, stage);
+    try Io.Dir.cwd().deleteDir(io, stage);
+    try std.testing.expectError(error.FileNotFound, protocol.loadPrepared(a, io, config));
+    try fixture.engine.start();
+    fixture.engine.mutex.lockUncancelable(io);
+    const startup_id = fixture.engine.current.?.id;
+    fixture.engine.mutex.unlock(io);
+    try testState(&fixture.engine, &startup_id, .running);
+    try Io.sleep(io, .fromMilliseconds(100), .awake);
+
+    const transaction = "123456789abcdef0123456789abcdef0";
+    const filename = try std.fmt.allocPrint(a, ".electrobun-update-{s}.result.json", .{transaction});
+    defer a.free(filename);
+    const path = try std.fs.path.join(a, &.{ config.channel_root, filename });
+    defer a.free(path);
+    try protocol.atomicWriteJson(a, io, config.channel_root, path, protocol.Result{
+        .schema_version = 1,
+        .transaction_id = transaction,
+        .success = true,
+        .phase = .complete,
+        .message = "Activated",
+        .identifier = config.local.identifier,
+        .channel = config.local.channel,
+        .version = config.local.version,
+        .hash = config.local.hash,
+    }, 0o600);
+    try testState(&fixture.engine, &startup_id, .completed);
+    const events = try fixture.engine.eventsJson(0, 256);
+    defer a.free(events);
+    const parsed = try std.json.parseFromSlice(struct { entries: []const Entry }, a, events, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+    try std.testing.expectEqualStrings("complete", parsed.value.entries[0].status);
+    try std.testing.expectEqualStrings(&startup_id, parsed.value.entries[0].operationId.?);
+    try std.testing.expectEqualStrings(config.local.hash, parsed.value.entries[0].details.?.currentHash.?);
+    try std.testing.expect(!fixture.engine.info.updateReady);
+    try std.testing.expect(!fixture.engine.quit_ready);
+    const again = try testRequest(&fixture.engine, .{ .schemaVersion = 1, .action = "reconcile" });
+    try testState(&fixture.engine, &again, .completed);
+    try std.testing.expectEqual(@as(u64, 1), fixture.engine.sequence);
 }
 
 test "reconciliation maps real success and failure files into public state and statuses" {

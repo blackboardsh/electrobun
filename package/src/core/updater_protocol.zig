@@ -520,6 +520,12 @@ pub fn publishFileReplacingRegular(a: A, io: std.Io, root: []const u8, source: [
 }
 
 pub fn validatePrepared(a: A, io: Io, record: Prepared, info: LocalInfo, root: []const u8, bundle: []const u8) !void {
+    return validatePreparedFor(a, io, record, info, root, bundle, .apply);
+}
+
+const PreparedPurpose = enum { apply, reconcile };
+
+fn validatePreparedFor(a: A, io: Io, record: Prepared, info: LocalInfo, root: []const u8, bundle: []const u8, purpose: PreparedPurpose) !void {
     try validateLocal(info, native_platform);
     if ((record.schema_version != 1 and record.schema_version != 2) or !std.mem.eql(u8, record.identifier, info.identifier) or !std.mem.eql(u8, record.channel, info.channel) or record.platform != native_platform or record.arch != native_arch or !validVersion(record.version) or !validHash(record.hash) or !validArtifact(record.artifact_file)) return error.InvalidPreparedUpdate;
     if (record.schema_version == 1) {
@@ -538,7 +544,17 @@ pub fn validatePrepared(a: A, io: Io, record: Prepared, info: LocalInfo, root: [
         if (!std.mem.eql(u8, record.staging_path, expected_stage) or !std.mem.eql(u8, record.recipe_path, expected_recipe) or !validDigest(record.recipe_sha256)) return error.InvalidPreparedUpdate;
         const recipe = try openManagedFile(a, io, root, record.recipe_path);
         defer recipe.close(io);
-        var stage = try walkDirectory(a, io, record.staging_path, false);
+        var parent = try walkDirectory(a, io, std.fs.path.dirname(record.staging_path).?, false);
+        defer parent.close(io);
+        var stage = parent.openDir(io, std.fs.path.basename(record.staging_path), .{ .follow_symlinks = false, .iterate = true }) catch |err| {
+            // The helper launches the installed app before publishing its
+            // result and may already have removed the consumed stage. Only
+            // reconciliation may use that exact installed target as a hint
+            // to wait for the result; it never authorizes another apply.
+            if (err == error.FileNotFound and purpose == .reconcile and
+                std.mem.eql(u8, record.hash, info.hash) and std.mem.eql(u8, record.version, info.version)) return;
+            return err;
+        };
         defer stage.close(io);
     }
 }
@@ -551,6 +567,14 @@ pub fn recipePath(a: A, root: []const u8, hash: []const u8) ![]u8 {
 }
 
 pub fn loadPrepared(a: A, io: Io, config: Config) !std.json.Parsed(Prepared) {
+    return loadPreparedFor(a, io, config, .apply);
+}
+
+pub fn loadPreparedForReconciliation(a: A, io: Io, config: Config) !std.json.Parsed(Prepared) {
+    return loadPreparedFor(a, io, config, .reconcile);
+}
+
+fn loadPreparedFor(a: A, io: Io, config: Config, purpose: PreparedPurpose) !std.json.Parsed(Prepared) {
     const path = try preparedPath(a, config.channel_root);
     defer a.free(path);
     const bytes = try readBounded(a, io, config.channel_root, path, max_prepared_bytes);
@@ -565,7 +589,7 @@ pub fn loadPrepared(a: A, io: Io, config: Config) !std.json.Parsed(Prepared) {
     if (platform != .string or arch != .string or !std.mem.eql(u8, platform.string, @tagName(native_platform)) or !std.mem.eql(u8, arch.string, @tagName(native_arch))) return error.InvalidPreparedUpdate;
     var parsed = try std.json.parseFromSlice(Prepared, a, bytes, .{ .allocate = .alloc_always, .ignore_unknown_fields = true });
     errdefer parsed.deinit();
-    try validatePrepared(a, io, parsed.value, config.local, config.channel_root, config.app_bundle_path);
+    try validatePreparedFor(a, io, parsed.value, config.local, config.channel_root, config.app_bundle_path, purpose);
     return parsed;
 }
 
@@ -1156,6 +1180,88 @@ test "prepared v2 rejects recipe and digest escapes and missing stage" {
         try Dir.cwd().writeFile(io, .{ .sub_path = outside_recipe, .data = "{}" });
         try Dir.cwd().symLink(io, outside_recipe, recipe, .{});
         try std.testing.expectError(error.UnsafeUpdateFile, validatePrepared(a, io, record, config.local, config.channel_root, config.app_bundle_path));
+    }
+}
+
+test "reconciliation accepts only an installed target with a consumed stage" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const physical = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(physical);
+    var bundle = try TestBundle.init(a, io, physical, fixture);
+    defer bundle.deinit();
+    var config = try loadConfigForRuntime(a, io, bundle.json, &bundle.env, bundle.exe);
+    defer config.deinit();
+    const extraction = try extractionPath(a, config.channel_root);
+    defer a.free(extraction);
+    try ensurePrivateDirectory(a, io, extraction);
+    const stage = try std.fmt.allocPrint(a, "{s}.prepared-{s}", .{ config.app_bundle_path, config.local.hash });
+    defer a.free(stage);
+    const recipe = try recipePath(a, config.channel_root, config.local.hash);
+    defer a.free(recipe);
+    try Dir.cwd().writeFile(io, .{ .sub_path = recipe, .data = "{}" });
+    const record_path = try preparedPath(a, config.channel_root);
+    defer a.free(record_path);
+    const record = Prepared{
+        .schema_version = 2,
+        .identifier = config.local.identifier,
+        .channel = config.local.channel,
+        .version = config.local.version,
+        .hash = config.local.hash,
+        .platform = native_platform,
+        .arch = native_arch,
+        .staging_path = stage,
+        .recipe_path = recipe,
+        .recipe_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        .artifact_file = "canary-macos-arm64-App.app.tar.zst",
+    };
+    try atomicWriteJson(a, io, config.channel_root, record_path, record, 0o600);
+    try std.testing.expectError(error.FileNotFound, loadPrepared(a, io, config));
+    var installed = try loadPreparedForReconciliation(a, io, config);
+    defer installed.deinit();
+    try std.testing.expectEqualStrings(config.local.hash, installed.value.hash);
+
+    // A different version is still a future target even if its hash matches.
+    var changed = record;
+    changed.version = "99.0.0";
+    try atomicWriteJson(a, io, config.channel_root, record_path, changed, 0o600);
+    try std.testing.expectError(error.FileNotFound, loadPreparedForReconciliation(a, io, config));
+    const future_stage = try std.fmt.allocPrint(a, "{s}.prepared-future123", .{config.app_bundle_path});
+    defer a.free(future_stage);
+    const future_recipe = try recipePath(a, config.channel_root, "future123");
+    defer a.free(future_recipe);
+    try Dir.cwd().writeFile(io, .{ .sub_path = future_recipe, .data = "{}" });
+    changed = record;
+    changed.hash = "future123";
+    changed.staging_path = future_stage;
+    changed.recipe_path = future_recipe;
+    try atomicWriteJson(a, io, config.channel_root, record_path, changed, 0o600);
+    try std.testing.expectError(error.FileNotFound, loadPreparedForReconciliation(a, io, config));
+    for (0..5) |index| {
+        changed = record;
+        switch (index) {
+            0 => changed.identifier = "another.app",
+            1 => changed.channel = "stable",
+            2 => changed.staging_path = config.app_bundle_path,
+            3 => changed.recipe_path = record_path,
+            4 => changed.recipe_sha256 = "invalid",
+            else => unreachable,
+        }
+        try atomicWriteJson(a, io, config.channel_root, record_path, changed, 0o600);
+        try std.testing.expectError(error.InvalidPreparedUpdate, loadPreparedForReconciliation(a, io, config));
+    }
+    try atomicWriteJson(a, io, config.channel_root, record_path, record, 0o600);
+    try Dir.cwd().deleteFile(io, recipe);
+    try std.testing.expectError(error.FileNotFound, loadPreparedForReconciliation(a, io, config));
+    try Dir.cwd().writeFile(io, .{ .sub_path = recipe, .data = "{}" });
+    if (native_platform != .win) {
+        try Dir.cwd().symLink(io, config.app_bundle_path, stage, .{ .is_directory = true });
+        if (loadPreparedForReconciliation(a, io, config)) |accepted| {
+            accepted.deinit();
+            return error.TestUnexpectedResult;
+        } else |_| {}
     }
 }
 
