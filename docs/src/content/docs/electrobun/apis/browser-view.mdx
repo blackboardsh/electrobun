@@ -160,6 +160,50 @@ The rest of this page documents the TypeScript class. The native SDKs expose
 the same webview verb set as `Core` calls — see
 [the mapping](#native-sdks) at the end of the page.
 
+## Native WebView2 context-menu contributions
+
+On Windows' native WebView2 renderer, a page can add items to the existing
+WebView2 context menu for selected DOM elements. Put a JSON contribution on the
+element that should receive the items:
+
+```tsx
+<button
+  data-electrobun-context-menu={JSON.stringify({
+    items: [
+      { id: "open", label: "Open", enabled: true },
+      { id: "reveal", label: "Reveal", enabled: false },
+    ],
+    payload: { path: "/path/from/the/page" },
+  })}
+>
+  File row
+</button>
+```
+
+Each item needs a stable `id` and a non-empty `label`; `enabled` defaults to
+`true`, and at most 12 items may be added. `payload` may be any JSON value and
+is returned unchanged when an item is selected. When the user right-clicks the
+element (or opens its context menu from the keyboard), Electrobun appends the
+items after WebView2's built-in entries. It leaves `Handled` false, preserving
+the built-in menu and its normal browser actions. Missing, invalid, or empty
+contributions leave the menu untouched.
+
+Before the native menu opens, Electrobun dispatches
+`electrobun-context-menu-open` on `window` with `CustomEvent.detail` shaped as
+`{ menuId: string, payload: unknown }`. Selection dispatches
+`electrobun-context-menu-action` with detail shaped as
+`{ id: string, menuId: string, payload: unknown }`. Pages should listen only
+while the contributing UI is mounted and validate the payload before acting.
+This hook is specific to the Windows native WebView2 renderer;
+it does not change CEF or other platforms. See Microsoft's
+[WebView2 context-menu API](https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/context-menus)
+for the underlying native behavior.
+
+The WebView2 renderer sets `window.__ELECTROBUN_WEBVIEW2_CONTEXT_MENU__` to
+`true` before page code runs. UI code can use this capability flag to retain
+its own context-menu fallback on renderers that do not provide native menu
+contributions.
+
 ## Constructor options
 
 The constructor accepts `Partial<BrowserViewOptions>`.
