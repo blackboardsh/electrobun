@@ -45,6 +45,9 @@ Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
 - Regression coverage checks the JavaScript API facade, native SDK ownership
   and schema handling, missing-symbol errors, approval/veto, worker shutdown,
   and compatibility with the established release protocol.
+- Startup reconciliation waits for the helper's completion result even when
+  the newly installed app starts after its staging directory has been removed.
+  This fixes a race that could hide a successful update from the SDK's events.
 
 ## Updater manifest compatibility
 
@@ -87,6 +90,14 @@ Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
 - Range sliders now support clicking the track and dragging the thumb, including
   dragging outside the control. Values respect `min`, `max`, and `step`, and
   controlled values stay synchronized with the painted thumb and input events.
+
+## Warren UI fixes
+
+- `Show` retains its current branch when reactive data changes without changing
+  whether the condition is true. Polling no longer recreates forms or resets
+  expanded sections, focus, and selection in that branch.
+- Unchanged reactive text leaves its existing text node untouched, preserving
+  text selection during repeated data refreshes.
 
 ## Validation
 
