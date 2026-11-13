@@ -143,6 +143,11 @@ jobs:
         run: hutch run install
         working-directory: package
 
+      - name: Test cold Windows toolchain ZIP extraction
+        if: matrix.platform == 'win32'
+        run: node --test --test-name-pattern=ZIP scripts/windows-release-validation.test.mjs
+        working-directory: package
+
       - name: Test npm bootstrap and release tooling
         run: hutch test:npm-bootstrap
         working-directory: package

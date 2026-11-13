@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { nativeWindowsArchitecture, zigCompilerHostArchitecture } from "./zig-compiler-host.mjs";
 import { coreTestsCompleted, runSynchronizationProcess, synchronizationTargets } from "./core-synchronization-stress.mjs";
+import { systemTarBinary } from "./windows-tar.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = readFileSync(resolve(packageRoot, "../.github/workflows/release.yml"), "utf8");
@@ -20,6 +23,91 @@ test("Windows Zig compiler uses host architecture and rejects a stale emulated v
   const verify = build.slice(build.indexOf("function verifyVendoredZig()"), build.indexOf("async function vendorZig()"));
   assert.match(verify, /assertWindowsBinaryArchitecture\(PATH\.zig\.BIN, ZIG_HOST_ARCH\)/);
   assert.ok(vendor.indexOf("verifyVendoredZig()") < vendor.indexOf("return;"));
+});
+
+test("all Windows ZIP toolchains use native tar with relative paths and checked exit status", () => {
+  assert.match(build, /import \{ systemTarBinary \} from "\.\/scripts\/windows-tar\.mjs"/);
+  assert.doesNotMatch(build, /Expand-Archive|ExtractToDirectory/);
+  for (const [start, end, extraction] of [
+    ["async function vendorZig()", "function getRustHostTriple()", 'runInherited(systemTarBinary(), ["-xf", "vendors/zig.zip", "-C", "vendors/zig-temp"])'],
+    ["async function vendorGo()", "function getOdinReleaseAssetName()", 'runInherited(systemTarBinary(), ["-xf", tempArchive, "-C", "vendors"])'],
+    ["async function vendorOdin()", "async function ", 'runInherited(systemTarBinary(), ["-xf", tempArchive, "-C", tempExtractDir])'],
+  ]) {
+    const from = build.indexOf(start);
+    assert.ok(from >= 0);
+    const until = build.indexOf(end, from + start.length);
+    const vendor = build.slice(from, until < 0 ? undefined : until);
+    assert.ok(vendor.includes(extraction), `${start} must use the native ZIP extractor`);
+  }
+  const zig = build.slice(build.indexOf("async function vendorZig()"), build.indexOf("function getRustHostTriple()"));
+  const mkdir = zig.indexOf("mkdir -p vendors/zig vendors/zig-temp");
+  assert.ok(mkdir >= 0 && mkdir < zig.indexOf('runInherited(systemTarBinary()'));
+  const run = build.slice(build.indexOf("function runInherited("), build.indexOf("async function runZigBuild("));
+  assert.match(run, /if \(result\.error\) throw result\.error/);
+  assert.match(run, /if \(result\.status !== 0\)\s*\{\s*throw new Error/);
+  const start = workflow.indexOf("      - name: Test cold Windows toolchain ZIP extraction");
+  assert.ok(start >= 0 && start < workflow.indexOf("        run: node scripts/package-release.js"), "cold extraction must be tested before vendoring the compiler");
+  const step = workflow.slice(start, workflow.indexOf("      - name:", start + 12));
+  assert.match(step, /if: matrix\.platform == 'win32'/);
+  assert.match(step, /node --test --test-name-pattern=ZIP scripts\/windows-release-validation\.test\.mjs/);
+  assert.doesNotMatch(step, /continue-on-error/);
+});
+
+// Independently generated deflated ZIP: a compiler-shaped binary and a nested
+// library file. No installed compiler, download, ZIP writer or warm cache is used.
+const coldZip = Buffer.from(
+  "UEsDBBQAAAAIAAAAIVxRKHBuFwAAABUAAAATAAAAemlnLWZpeHR1cmUvemlnLmV4ZfONYkjLrCgpLUrVTc7PLcjMSS3i5QIAUEsDBBQAAAAIAAAAIVyg91GyHQAAABsAAAAdAAAAemlnLWZpeHR1cmUvbGliL3N0ZC9zdGFydC56aWfT11fISy0uSU1RSM7PLcjMSS1SyMlMKkosquQCAFBLAQIUAxQAAAAIAAAAIVxRKHBuFwAAABUAAAATAAAAAAAAAAAAAACAAQAAAAB6aWctZml4dHVyZS96aWcuZXhlUEsBAhQDFAAAAAgAAAAhXKD3UbIdAAAAGwAAAB0AAAAAAAAAAAAAAIABSAAAAHppZy1maXh0dXJlL2xpYi9zdGQvc3RhcnQuemlnUEsFBgAAAAACAAIAjAAAAKAAAAAAAA==",
+  "base64",
+);
+const nativeZipOptions = { skip: !["win32", "darwin"].includes(process.platform) && "ZIP extraction uses the Windows/macOS native bsdtar" };
+
+test("cold ZIP extraction survives inherited PowerShell modules and Unicode checkout paths", nativeZipOptions, t => {
+  const temporary = mkdtempSync(join(tmpdir(), "electrobun-cold-zip-"));
+  t.after(() => rmSync(temporary, { recursive: true, force: true }));
+  const cwd = join(temporary, "用戶 project [cold]");
+  const moduleRoot = join(cwd, "PowerShell 7 modules");
+  mkdirSync(join(moduleRoot, "Microsoft.PowerShell.Archive"), { recursive: true });
+  writeFileSync(join(moduleRoot, "Microsoft.PowerShell.Archive/Microsoft.PowerShell.Archive.psm1"),
+    "throw 'The inherited PowerShell Archive module must not be loaded'\n");
+  // Windows environment keys are case-insensitive; do not pass two spellings.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "psmodulepath"));
+  env.PSModulePath = moduleRoot;
+  const archive = "vendors/cold toolchain [fixture].zip";
+  mkdirSync(join(cwd, "vendors"));
+  writeFileSync(join(cwd, archive), coldZip);
+  if (process.platform === "win32") {
+    assert.equal(systemTarBinary(), join(process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows", "System32", "tar.exe"));
+  }
+  // All three production destination layouts, including Go's existing parent.
+  for (const destination of ["vendors/zig-temp", "vendors", "vendors/odin-extract-temp"]) {
+    mkdirSync(join(cwd, destination), { recursive: true });
+    const executable = join(cwd, destination, "zig-fixture/zig.exe");
+    assert.equal(existsSync(executable), false, "each extraction starts cold");
+    const args = ["-xf", archive, "-C", destination];
+    const extract = () => spawnSync(systemTarBinary(), args, { cwd, env, encoding: "utf8", timeout: 30_000 });
+    const first = extract();
+    assert.equal(first.error, undefined);
+    assert.equal(first.status, 0, first.stderr);
+    assert.deepEqual(readFileSync(executable), Buffer.from("MZ\0fixture-compiler\r\n"));
+    assert.equal(readFileSync(join(cwd, destination, "zig-fixture/lib/std/start.zig"), "utf8"), "// nested compiler library\n");
+    writeFileSync(executable, "partial previous extraction");
+    const overwrite = extract();
+    assert.equal(overwrite.error, undefined);
+    assert.equal(overwrite.status, 0, overwrite.stderr);
+    assert.deepEqual(readFileSync(executable), Buffer.from("MZ\0fixture-compiler\r\n"), "preserve Expand-Archive -Force replacement behavior");
+  }
+});
+
+test("native ZIP extraction rejects a corrupt download instead of reporting success", nativeZipOptions, t => {
+  const cwd = mkdtempSync(join(tmpdir(), "electrobun-corrupt-zip-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  writeFileSync(join(cwd, "toolchain.zip"), "not a ZIP archive");
+  mkdirSync(join(cwd, "extracted"));
+  const result = spawnSync(systemTarBinary(), ["-xf", "toolchain.zip", "-C", "extracted"], { cwd, encoding: "utf8", timeout: 30_000 });
+  assert.equal(result.error, undefined);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /archive|format/i);
+  assert.equal(existsSync(join(cwd, "extracted/zig-fixture/zig.exe")), false);
 });
 
 test("an emulated JS runtime selects the native Windows ARM64 compiler", () => {

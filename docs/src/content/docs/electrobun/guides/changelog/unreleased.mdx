@@ -91,6 +91,12 @@ Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
   dragging outside the control. Values respect `min`, `max`, and `step`, and
   controlled values stay synchronized with the painted thumb and input events.
 
+## Windows builds
+
+- Zig, Go, and Odin toolchain ZIP downloads use Windows' native archive tool.
+  Cold builds no longer depend on compatible PowerShell archive modules being
+  inherited from the calling shell.
+
 ## Warren UI fixes
 
 - `Show` retains its current branch when reactive data changes without changing
