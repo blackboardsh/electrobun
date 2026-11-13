@@ -24,7 +24,7 @@ test("keeps failing child output and exit details after a later stage succeeds",
 	const passing = command(directory, "Later check", "process.stdout.write('later check passed\\n');");
 	const diagnostics = createTestRunDiagnostics("fixture", [failing, passing], {
 		temporaryDirectory: directory,
-		environment: { HUTCH_RUNTIME: "bun", SECRET_TEST_TOKEN: "must-not-be-recorded" },
+		environment: { HUTCH_RUNTIME: "bun", ELECTROBUN_SAMPLE_WINDOW_STALLS: "0", SECRET_TEST_TOKEN: "must-not-be-recorded" },
 	});
 	let failure;
 	try {
@@ -60,6 +60,8 @@ test("keeps failing child output and exit details after a later stage succeeds",
 	assert.equal(summary.runtime.arch, process.arch);
 	assert.equal(summary.runtime.executable, process.execPath);
 	assert.equal(summary.runtime.environment.HUTCH_RUNTIME, "bun");
+	assert.equal(summary.runtime.environment.ELECTROBUN_SAMPLE_WINDOW_STALLS, "0");
+	assert.equal(summary.stages[0].environment.ELECTROBUN_SAMPLE_WINDOW_STALLS, "0");
 	assert.ok(!serialized.includes("SECRET_TEST_TOKEN"));
 	assert.ok(!serialized.includes("must-not-be-recorded"));
 });

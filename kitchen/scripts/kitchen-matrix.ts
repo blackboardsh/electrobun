@@ -367,6 +367,9 @@ function runHutchForVariant(
 				const directory = await captureKitchenHangDiagnostics({
 					pid: child.pid, key, mainProcess: variant.mainProcess, isolatedProcessGroup,
 					captureMode: "phase", includeHostResources,
+					// Keep phase/resource evidence while isolating the observer effect
+					// of a tool that suspends the target to inspect its threads.
+					sampleTarget: process.env["ELECTROBUN_SAMPLE_WINDOW_STALLS"] !== "0",
 				});
 				if (directory) {
 					writeFileSync(join(directory, "phase.json"), JSON.stringify(phase, null, 2) + "\n");

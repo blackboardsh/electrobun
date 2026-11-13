@@ -95,7 +95,7 @@ export function selectMacosHangProcesses(
 
 export async function captureKitchenHangDiagnostics({
 	pid, key, mainProcess, isolatedProcessGroup,
-	captureMode = "watchdog", includeHostResources = false,
+	captureMode = "watchdog", includeHostResources = false, sampleTarget = true,
 	platform = process.platform,
 	temporaryDirectory = process.env["ELECTROBUN_DIAGNOSTICS_TEMP"] || tmpdir(),
 }: {
@@ -105,6 +105,7 @@ export async function captureKitchenHangDiagnostics({
 	isolatedProcessGroup: boolean;
 	captureMode?: "phase" | "watchdog";
 	includeHostResources?: boolean;
+	sampleTarget?: boolean;
 	platform?: string;
 	temporaryDirectory?: string;
 }, run: CommandRunner = runDiagnosticCommand): Promise<string | null> {
@@ -127,17 +128,18 @@ export async function captureKitchenHangDiagnostics({
 	const { stdout: _listing, ...discoveryResult } = listing;
 	writeFileSync(join(directory, "processes.json"), JSON.stringify({
 		key, pid, runtimeName, command: "/bin/ps", args: discoveryArgs, timeoutMs: 2000,
+		captureMode, sampleTarget,
 		...discoveryResult, tree,
 		targets: targets.map((info) => info.pid),
 	}, null, 2) + "\n");
-	if (!targets.length) {
+	if (sampleTarget && !targets.length) {
 		writeFileSync(join(directory, "sample-error.txt"), "No live application runtime found in the launched process tree.\n");
 	}
 	// The short whole-app watchdog retains its existing shutdown allowance.
 	// Phase sampling happens while tests run; allow symbolication to finish
 	// after the one-second capture, even if the app has already failed/exited.
 	const sampleTimeoutMs = captureMode === "phase" ? 45000 : 8000;
-	await Promise.all([hostResources, ...targets.map(async (info) => {
+	await Promise.all([hostResources, ...(sampleTarget ? targets : []).map(async (info) => {
 		const report = join(directory, `sample-${info.pid}.txt`);
 		// Each sample suspends the target to collect every thread's stack. Use a
 		// short, sparse capture to limit its effect on the stalled app. Capture

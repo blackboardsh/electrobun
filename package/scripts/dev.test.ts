@@ -28,6 +28,11 @@ assert(
 	/"test:vm":\s*\["hutch", "scripts\/test-vm\.ts"\]/.test(hutchConfig),
 	"test:vm should use the failure-collecting VM test runner",
 );
+const vmWorkflow = readFileSync(new URL("../../.github/workflows/test-vm.yml", import.meta.url), "utf8");
+assert(/disable_window_phase_sampling:\s*\n\s*description:[^\n]*\n\s*type: boolean\s*\n\s*default: false/.test(vmWorkflow),
+	"The phase sampling comparison should be an explicit opt-out in the existing workflow");
+assert(vmWorkflow.includes("ELECTROBUN_SAMPLE_WINDOW_STALLS: ${{ inputs.disable_window_phase_sampling && '0' || '1' }}"),
+	"The workflow must record whether target-attaching phase sampling is disabled");
 
 const packageDir = join("C:\\work tree", "electrobun", "package");
 const kitchenDir = join("C:\\work tree", "electrobun", "kitchen");

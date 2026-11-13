@@ -470,6 +470,31 @@ describe("Kitchen hang diagnostics", () => {
 		}
 	});
 
+	it("keeps owned-process and host evidence when phase sampling is disabled", async () => {
+		const temporaryDirectory = mkdtempSync(join(tmpdir(), "kitchen-diagnostics-test-"));
+		const commands: string[] = [];
+		try {
+			const directory = await captureKitchenHangDiagnostics({
+				pid: 100, key: "cottontail-native", mainProcess: "cottontail", isolatedProcessGroup: true,
+				platform: "darwin", temporaryDirectory, captureMode: "phase", includeHostResources: true,
+				sampleTarget: false,
+			}, async (file, args) => {
+				commands.push(file);
+				return { ...completed, stdout: args[0] === "-g" ? listing : "host probe", stderr: "", error: null };
+			});
+			expect(commands).toHaveLength(5);
+			expect(commands).not.toContain("/usr/bin/sample");
+			const provenance = JSON.parse(readFileSync(join(directory!, "processes.json"), "utf8"));
+			expect(provenance).toMatchObject({ captureMode: "phase", sampleTarget: false, targets: [102], exitCode: 0 });
+			expect(provenance.tree.map((info: { pid: number }) => info.pid)).toEqual([100, 101, 102, 103, 104]);
+			expect(JSON.parse(readFileSync(join(directory!, "host-resources.json"), "utf8")).commands).toHaveLength(4);
+			expect(existsSync(join(directory!, "sample-102-command.json"))).toBe(false);
+			expect(existsSync(join(directory!, "sample-error.txt"))).toBe(false);
+		} finally {
+			rmSync(temporaryDirectory, { recursive: true, force: true });
+		}
+	});
+
 	it("does not sample unrelated processes if process discovery fails", async () => {
 		const temporaryDirectory = mkdtempSync(join(tmpdir(), "kitchen-diagnostics-test-"));
 		try {
