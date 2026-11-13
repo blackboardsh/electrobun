@@ -35,6 +35,14 @@ assert(vmWorkflow.includes("ELECTROBUN_SAMPLE_WINDOW_STALLS: ${{ inputs.disable_
 	"The workflow must record whether target-attaching phase sampling is disabled");
 assert(vmWorkflow.includes("group: test-vm-${{ github.ref }}${{ inputs.disable_window_phase_sampling && '-no-phase-sampling' || '' }}"),
 	"The no-sampling comparison must run independently without replacing the baseline run's concurrency group");
+for (const workflow of ["test-vm.yml", "release.yml", "source-desktop-smoke.yml"]) {
+	const source = readFileSync(new URL(`../../.github/workflows/${workflow}`, import.meta.url), "utf8");
+	assert(!/\brm\s+[^\n]*\/Library\/Developer\/CoreSimulator\/(?:Caches|Profiles\/Runtimes)(?=["'\s]|$)/.test(source),
+		`${workflow} must preserve system simulator caches: deleting them triggers background cache rebuilds while desktop tests run`);
+	assert(source.includes('sudo rm -rf "$resolved_xcode_root"') &&
+		source.includes('if [[ "$resolved_xcode_root" != "$selected_xcode_root" ]]; then'),
+		`${workflow} should retain guarded cleanup of unused Xcode installations`);
+}
 
 const packageDir = join("C:\\work tree", "electrobun", "package");
 const kitchenDir = join("C:\\work tree", "electrobun", "kitchen");

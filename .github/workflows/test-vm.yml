@@ -165,12 +165,12 @@ jobs:
               sudo rm -rf "$resolved_xcode_root"
             fi
           done
-          # Remove Xcode caches and simulators to free space.
+          # Remove Xcode build artifacts, but preserve system simulator caches.
+          # Deleting those caches leaves mounted runtimes rebuilding them in the
+          # background, consuming CPU and memory during desktop tests.
           rm -rf "$HOME/Library/Developer/Xcode/DerivedData" || true
           rm -rf "$HOME/Library/Developer/Xcode/Archives" || true
           rm -rf "$HOME/Library/Developer/Xcode/iOS DeviceSupport" || true
-          sudo rm -rf /Library/Developer/CoreSimulator/Caches || true
-          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes || true
           # Clear common caches.
           rm -rf "$HOME/Library/Caches" || true
           rm -rf "$HOME/Library/Logs" || true
