@@ -45,7 +45,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: test-vm-${{ github.ref }}
+  group: test-vm-${{ github.ref }}${{ inputs.disable_window_phase_sampling && '-no-phase-sampling' || '' }}
   # Preserve diagnostics from every started matrix while iterating on failures.
   cancel-in-progress: false
 

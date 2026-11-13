@@ -33,6 +33,8 @@ assert(/disable_window_phase_sampling:\s*\n\s*description:[^\n]*\n\s*type: boole
 	"The phase sampling comparison should be an explicit opt-out in the existing workflow");
 assert(vmWorkflow.includes("ELECTROBUN_SAMPLE_WINDOW_STALLS: ${{ inputs.disable_window_phase_sampling && '0' || '1' }}"),
 	"The workflow must record whether target-attaching phase sampling is disabled");
+assert(vmWorkflow.includes("group: test-vm-${{ github.ref }}${{ inputs.disable_window_phase_sampling && '-no-phase-sampling' || '' }}"),
+	"The no-sampling comparison must run independently without replacing the baseline run's concurrency group");
 
 const packageDir = join("C:\\work tree", "electrobun", "package");
 const kitchenDir = join("C:\\work tree", "electrobun", "kitchen");
