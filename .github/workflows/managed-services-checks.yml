@@ -55,6 +55,9 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
+          # Interrupted Windows restores can be saved as partial build caches.
+          # Keep compiler archives cached and rebuild test binaries locally.
+          use-cache: ${{ runner.os != 'Windows' }}
       - name: Install dependencies
         run: hutch run install
       # The packaged-app lifecycle against local Cloud services is exercised
