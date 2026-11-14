@@ -36,13 +36,16 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-This configures the native client but leaves collection disabled until your
-app enables it. Omitting `enabled` has the same default. Omitting the entire
+For an installation without a saved runtime choice, this configures the native
+client but leaves collection disabled until your app enables it. An existing
+saved choice takes precedence. Omitting `enabled` has the same default. Omitting the entire
 `insights` block leaves the reporter unconfigured, so a later `setEnabled(true)`
 has no configured service to enable.
 
-For Bun and Cottontail, enable collection from your app's own consent/settings
-flow, after obtaining any consent your app requires:
+Your app owns its collection policy and any consent or settings UI. The SDK
+provides configuration and runtime controls; it does not require a particular
+prompt, toggle, or choice of build-channel defaults. For Bun and Cottontail,
+your app can change collection at runtime:
 
 ```typescript
 import { Insights } from "electrobun/main";
@@ -56,14 +59,43 @@ Insights.setEnabled(false);
 
 If your app should collect by default, set `insights.enabled: true` explicitly.
 An installation's persisted `setEnabled` choice takes precedence over that build
-default across restarts and updates. Disabling collection clears queued events
-and the active session journal; requests already sent may finish. Server policy
-cannot override local opt-out.
+default across restarts and updates. `setEnabled(false)` stops **all** collection,
+including basic lifecycle events and custom events, and clears queued events
+and the active session journal. Requests already sent may finish. Server policy
+cannot override this local setting.
 
 The same native client is available through the Bun, Cottontail, Zig, Rust, Go,
 and Odin SDKs. Normal bundled SDK startup reads the configuration and normal
 teardown saves session state. See the [Insights API](/electrobun/apis/insights/)
 for the language-specific calls.
+
+### Choose defaults by build channel
+
+Hutch supplies `ELECTROBUN_BUILD_ENV` when evaluating `electrobun.config.ts`.
+For example, an app can collect by default in canary while leaving stable
+collection disabled until its own runtime flow enables it:
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "My App",
+    identifier: "com.example.my-app",
+    version: "2.0.0",
+  },
+  insights: {
+    appId: "YOUR_APP_ID",
+    enabled: process.env.ELECTROBUN_BUILD_ENV === "canary",
+  },
+} satisfies ElectrobunConfig;
+```
+
+This is an app-chosen policy, not the SDK default. A persisted runtime choice
+still overrides the configured default: shipping a later build with
+`enabled: false` does not reset an installation that previously enabled it.
+Use `setEnabled` when your app needs to change the current local setting, and
+keep any settings UI synchronized with the choice your app passes to the SDK.
 
 ## Automatic lifecycle data
 
@@ -169,12 +201,14 @@ duration, OS/architecture, version/build adoption, and custom events. Queued
 delivery and interrupted-session recovery mean these are approximate, eventually
 received observations rather than an exact count of people currently online.
 
-With local consent, basic lifecycle, duration, version, and platform collection
-continues when the developer's custom-event allowance is exhausted or the paid
-subscription expires. Analytics responses carry the custom-collection policy;
-the core persists it and drops disabled custom events without blocking basic
-events. A subsequent ordinary analytics response can reactivate custom events.
-There is no separate policy-polling endpoint or hourly heartbeat.
+While the app has locally enabled collection, basic lifecycle, duration,
+version, and platform collection continues when the developer's custom-event
+allowance is exhausted or the paid subscription expires. Analytics responses
+carry `collection.customEvents`; the core persists that server policy and drops
+disabled custom events without blocking basic events. A subsequent ordinary
+response can reactivate custom events. This policy controls only custom events;
+it cannot start basic or custom collection when the app has disabled Insights
+locally. There is no separate policy-polling endpoint or hourly heartbeat.
 
 Use the app's dashboard for its current service limits and retention.
 

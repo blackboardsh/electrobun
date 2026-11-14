@@ -42,10 +42,17 @@ Insights.setEnabled(false);
 ```
 
 Sets and persists the local collection preference for configured Insights.
-The choice overrides `insights.enabled` in later builds. Disabling clears
-pending events and the active session journal; a request already in flight
-may finish. Enabling Insights does not enable the updater. If the client has
-no Insights configuration, this call does not create one.
+The choice overrides `insights.enabled` in later builds. `false` stops all
+basic and custom collection and clears pending events and the active session
+journal; a request already in flight may finish. The server's separate
+`collection.customEvents` policy can pause custom events, but cannot enable
+anything while this local setting is false. Enabling Insights does not enable
+the updater. If the client has no Insights configuration, this call does not
+create one.
+
+The app decides when to call this method and owns any related settings UI.
+There is no public enabled-state getter; retain the choice in your app's
+settings if the UI needs to display it.
 
 ### `identify(userId)` and `reset()`
 
@@ -85,6 +92,10 @@ native configuration succeeded. The bundled app supplies its version/build,
 channel, platform, and storage location. Prefer declarative build configuration
 so normal SDK startup can initialize lifecycle recording consistently. Never
 include a deploy key. If managed updates are configured too, use the same app ID.
+
+Configuration initializes the native reporter once. Repeated `configure` calls
+do not change an initialized reporter's collection state; use `setEnabled` for
+runtime changes.
 
 ### Installation ID
 

@@ -703,10 +703,14 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-This prepares the client for an explicit runtime opt-in. Omitting the entire
+This prepares the client for an explicit runtime enablement. Omitting the entire
 `insights` block leaves it unconfigured. Setting `enabled: true` explicitly
-opts in by default, subject to the user's persisted choice. Never put a deploy
-API key in app configuration.
+enables collection by default, subject to the persisted runtime choice. The app
+owns that policy and its settings UI, including whether canary and stable use
+different defaults. See the [channel-specific example](/electrobun/guides/insights/#choose-defaults-by-build-channel).
+`enabled: false` is a build default; `setEnabled(false)` changes the effective
+local setting and stops both basic and custom events. Never put a deploy API
+key in app configuration.
 
 `release.managed.apiUrl` does not supply the Insights override: set both
 overrides when testing both services against staging. Dev collection requires
