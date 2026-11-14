@@ -915,6 +915,237 @@ class WindowsDiagnosticTests(unittest.TestCase):
             self.assertFalse(result['ok'])
 
 
+class WindowsCounterForegroundTests(unittest.TestCase):
+    def exercise(self, *, owned=True, visible=True, foreign=True, activation_ok=True,
+                 foreground_changes=True, changed_pid=False, foreground_ok=True,
+                 post_raise_pid=False, post_raise_invalid=False, other_pid=88, check=None):
+        target, other = 0x1234567887654321, 0x1234567887654322
+        foreground = [other if foreign else target]
+        raised = [False]
+        events = []
+
+        def owner(hwnd, pointer):
+            pointer._obj.value = (88 if changed_pid or (raised[0] and post_raise_pid) else 77) if hwnd == target else other_pid
+            return 99
+
+        def title(hwnd, buffer, size):
+            buffer.value = 'WSL update prompt' if hwnd == other else 'Electrobun UI'
+            return len(buffer.value)
+
+        def activate(hwnd):
+            events.append(('foreground', hwnd))
+            raised[0] = True
+            if foreground_changes:
+                foreground[0] = hwnd
+            return activation_ok and foreground_ok
+
+        user = SimpleNamespace(**{name: Mock(side_effect=effect) for name, effect in {
+            'IsWindow': lambda hwnd: not (raised[0] and post_raise_invalid),
+            'IsWindowVisible': lambda hwnd: visible,
+            'GetWindowThreadProcessId': owner,
+            'GetForegroundWindow': lambda: foreground[0],
+            'GetWindowTextW': title,
+            'SetWindowPos': lambda *args: events.append(('position', *args)) or activation_ok,
+            'SetForegroundWindow': activate,
+            'ShowWindow': lambda *args: self.fail('Foreground guard must never show/resize a window'),
+        }.items()})
+        ownership = {'verified': owned, 'windowPid': 77, 'rootPid': 11,
+                     'ownedProcesses': [{'pid': 11}, {'pid': 77}]}
+        error, result = None, {}
+        with tempfile.TemporaryDirectory() as directory:
+            guard = desktop.WindowsCounterForegroundGuard('Electrobun UI', 11, Path(directory), result)
+            with patch.object(ctypes, 'windll', SimpleNamespace(user32=user), create=True), \
+                    patch.object(desktop, 'windows_find_window', return_value=(target, 77)) as find, \
+                    patch.object(desktop, 'windows_process_ancestry', return_value=ownership) as ancestry:
+                try:
+                    (check or (lambda guard, foreground: guard.check('capture:counter')))(guard, foreground)
+                except RuntimeError as caught:
+                    error = caught
+            evidence = [json.loads(line) for line in (Path(directory) / 'counter-foreground.jsonl').read_text().splitlines()]
+        self.assertEqual(result['counterForegroundReadings'], evidence)
+        return SimpleNamespace(user=user, target=target, other=other, error=error, evidence=evidence,
+                               events=events, find=find, ancestry=ancestry)
+
+    def test_foreign_prompt_raises_only_verified_visible_app_and_records_evidence(self):
+        from ctypes import wintypes
+        run = self.exercise()
+        self.assertIsNone(run.error)
+        run.ancestry.assert_called_once_with(77, 11)
+        position, activation = run.events
+        self.assertEqual(position[:2], ('position', run.target))
+        self.assertEqual(position[2].value, wintypes.HWND(-1).value)
+        self.assertEqual(position[3:], (0, 0, 0, 0, 0x0001 | 0x0002))
+        self.assertEqual(activation, ('foreground', run.target))
+        self.assertEqual(run.evidence[0]['foreignForeground'],
+                         {'hwnd': run.other, 'pid': 88, 'title': 'WSL update prompt'})
+        self.assertEqual(run.evidence[0]['activationReturns'], {'SetWindowPos': True, 'SetForegroundWindow': True})
+        self.assertEqual(run.evidence[0]['outcome'], 'restored')
+        self.assertIs(run.user.GetForegroundWindow.restype, wintypes.HWND)
+        self.assertEqual(run.user.SetWindowPos.argtypes[:2], [wintypes.HWND, wintypes.HWND])
+        run.user.ShowWindow.assert_not_called()
+
+    def test_owned_foreground_is_left_unchanged(self):
+        for options in ({'foreign': False}, {'other_pid': 11}):
+            with self.subTest(options=options):
+                run = self.exercise(**options)
+                self.assertIsNone(run.error)
+                self.assertEqual(run.events, [])
+                self.assertEqual(run.evidence[0]['outcome'], 'already-owned')
+                run.user.SetWindowPos.assert_not_called()
+                run.user.SetForegroundWindow.assert_not_called()
+
+    def test_unowned_hidden_or_reused_window_fails_before_activation(self):
+        for options in ({'owned': False}, {'visible': False}, {'changed_pid': True}):
+            with self.subTest(options=options):
+                run = self.exercise(**options)
+                self.assertIsInstance(run.error, RuntimeError)
+                self.assertEqual(run.evidence[0]['outcome'], 'failed')
+                self.assertEqual(run.events, [])
+
+    def test_api_failure_or_unchanged_foreground_cannot_allow_input(self):
+        for options in ({'activation_ok': False}, {'foreground_ok': False}, {'foreground_changes': False}):
+            with self.subTest(options=options):
+                run = self.exercise(**options)
+                self.assertRegex(str(run.error), 'could not establish app foreground')
+                self.assertEqual(run.evidence[0]['outcome'], 'failed')
+                self.assertIn('activationReturns', run.evidence[0])
+                self.assertIn('after', run.evidence[0])
+                if options.get('foreground_ok') is False:
+                    self.assertEqual(run.evidence[0]['activationReturns'],
+                                     {'SetWindowPos': True, 'SetForegroundWindow': False})
+
+    def test_post_raise_identity_change_cannot_establish_foreground(self):
+        for options in ({'post_raise_pid': True}, {'post_raise_invalid': True}):
+            with self.subTest(options=options):
+                run = self.exercise(**options)
+                self.assertRegex(str(run.error), 'could not establish app foreground')
+                self.assertEqual(run.evidence[0]['outcome'], 'failed')
+                self.assertEqual(run.evidence[0]['activationReturns'],
+                                 {'SetWindowPos': True, 'SetForegroundWindow': True})
+
+    def test_verified_identity_is_pinned_across_observations(self):
+        def check(guard, foreground):
+            guard.check('first')
+            with patch.object(desktop, 'windows_find_window', return_value=(123, 88)):
+                guard.check('second')
+        run = self.exercise(foreign=False, check=check)
+        self.assertRegex(str(run.error), 'identity changed')
+        self.assertEqual([item['outcome'] for item in run.evidence], ['already-owned', 'failed'])
+        self.assertEqual(run.events, [])
+
+    def test_guard_is_scoped_to_windows_counter_actions(self):
+        process = SimpleNamespace(pid=11)
+        for platform, actions in (('win32', [{'expectBunnyRotation': True}]),
+                                  ('win32', [{'absentText': 'Portal'}]),
+                                  ('darwin', [{'expectCounter': 'reset'}]),
+                                  ('linux', [{'expectCounter': 'incremented'}])):
+            with self.subTest(platform=platform, actions=actions), \
+                    patch.object(desktop.sys, 'platform', platform), \
+                    patch.object(desktop, 'WindowsCounterForegroundGuard') as constructor:
+                self.assertIsNone(desktop.counter_foreground_guard({'actions': actions}, process, Path('.'), {}))
+                constructor.assert_not_called()
+        with patch.object(desktop.sys, 'platform', 'win32'):
+            self.assertIsInstance(desktop.counter_foreground_guard(
+                {'title': 'Counter', 'actions': [{'expectCounter': 'reset'}]}, process, Path('.'), {}),
+                desktop.WindowsCounterForegroundGuard)
+
+    def exercise_counter_actions(self, *, fail_input=False):
+        from contextlib import ExitStack
+        from PIL import Image
+        fixtures = Path(__file__).parent / 'fixtures'
+        frames = []
+        for name in ('counter-zero.png', 'counter-one.png'):
+            frame = Image.new('RGB', (900, 700), 'black')
+            with Image.open(fixtures / name) as counter:
+                frame.paste(counter.convert('RGB'), (135, 200))
+            frames.append(frame)
+        clock, clicks, foreground, failed = [0.0], [0], [True], [False]
+        events = []
+
+        def guard(label):
+            events.append(('guard', label))
+            if fail_input and label == 'input:click':
+                failed[0] = True
+                raise RuntimeError('Counter foreground guard could not establish app foreground')
+            foreground[0] = True
+
+        def input_event(kind):
+            self.assertTrue(foreground[0], 'Input must follow foreground verification, including after OCR')
+            events.append((kind,))
+
+        def release():
+            input_event('up')
+            clicks[0] += 1
+
+        def screenshot():
+            if not failed[0]:
+                self.assertTrue(foreground[0])
+                self.assertEqual(events[-1][0], 'guard', 'Every active screenshot needs a fresh foreground check')
+                self.assertTrue(events[-1][1].startswith('capture:'))
+            events.append(('screenshot',))
+            return frames[clicks[0] % 2]
+
+        def recognize(*args, **kwargs):
+            events.append(('ocr',))
+            # Model the foreign prompt appearing while OCR was working.
+            foreground[0] = False
+            return {'text': ['Increment', 'Reset'], 'left': [40, 90], 'top': [60, 60],
+                    'width': [40, 40], 'height': [20, 20]}
+
+        gui = SimpleNamespace(size=Mock(return_value=namedtuple('Size', 'width height')(900, 700)),
+                              moveTo=Mock(side_effect=lambda *args, **kwargs: input_event('move')),
+                              mouseDown=Mock(side_effect=lambda: input_event('down')),
+                              mouseUp=Mock(side_effect=release), screenshot=Mock(side_effect=screenshot))
+        ocr = SimpleNamespace(pytesseract=SimpleNamespace(tesseract_cmd='unused'),
+                              Output=SimpleNamespace(DICT='dict'), image_to_data=Mock(side_effect=recognize))
+        process = SimpleNamespace(pid=11, poll=lambda: None)
+        checker = Mock()
+        checker.check.side_effect = guard
+        with tempfile.TemporaryDirectory() as directory:
+            plan = {'name': 'ui-wgpu', 'title': 'Electrobun UI', 'cwd': directory, 'output': directory,
+                    'command': ['unused'], 'actions': [
+                        {'click': 'Increment', 'expectCounter': 'incremented', 'settle': 0},
+                        {'click': 'Reset', 'expectCounter': 'reset', 'settle': 0}]}
+            with ExitStack() as patches:
+                patches.enter_context(patch.dict(sys.modules, {'pyautogui': gui, 'pytesseract': ocr}))
+                patches.enter_context(patch.object(desktop.sys, 'platform', 'win32'))
+                patches.enter_context(patch.object(desktop.subprocess, 'Popen', return_value=process))
+                patches.enter_context(patch.object(desktop, 'stop'))
+                constructor = patches.enter_context(patch.object(desktop, 'WindowsCounterForegroundGuard', return_value=checker))
+                windows = patches.enter_context(patch.object(desktop, 'window', return_value=(0, 0, 900, 700)))
+                patches.enter_context(patch.object(desktop.time, 'monotonic', side_effect=lambda: clock[0]))
+                patches.enter_context(patch.object(desktop.time, 'sleep',
+                    side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)))
+                patches.enter_context(patch.object(desktop, 'ocr_regions',
+                    side_effect=lambda image: [(image, 0, '--psm 11', 1, 0)]))
+                if fail_input:
+                    with self.assertRaisesRegex(RuntimeError, 'could not establish app foreground'):
+                        desktop.inspect_app(plan)
+                else:
+                    desktop.inspect_app(plan)
+            result = json.loads((Path(directory) / 'result.json').read_text())
+        self.assertEqual(constructor.call_count, 1)
+        self.assertEqual(constructor.call_args.args[:2], ('Electrobun UI', 11))
+        self.assertTrue(all(call.kwargs['activate'] is False for call in windows.call_args_list))
+        self.assertEqual(gui.mouseDown.call_count, 0 if fail_input else 2)
+        self.assertEqual(gui.mouseUp.call_count, gui.mouseDown.call_count)
+        return result, events
+
+    def test_counter_flow_guards_after_ocr_and_preserves_real_increment_and_reset_checks(self):
+        result, events = self.exercise_counter_actions()
+        self.assertTrue(result['ok'])
+        self.assertIn('visible-counter:incremented', result['checks'])
+        self.assertIn('visible-counter:reset', result['checks'])
+        self.assertEqual(sum(event == ('guard', 'input:click') for event in events), 2)
+
+    def test_guard_failure_prevents_click_and_leaves_failure_capture_unmodified(self):
+        result, events = self.exercise_counter_actions(fail_input=True)
+        self.assertFalse(result['ok'])
+        self.assertNotIn('visible-counter:incremented', result['checks'])
+        self.assertEqual(events[-2:], [('guard', 'input:click'), ('screenshot',)])
+        self.assertEqual(result['screenshots'][-1], 'failure.png')
+
+
 class NativeOnlyDiagnosticTests(unittest.TestCase):
     def exercise_outcome(self, *, success=False, enabled=True, legacy=True,
                          platform='win32', ownership=True, reused=False, initial_reused=False,

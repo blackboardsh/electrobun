@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { run } from '../accept-published-template.mjs';
 import { validateNativeDevkitManifest } from '../../package/scripts/validate-native-devkit.mjs';
 import { templateScenarios, kitchenScenarios, skipReason } from './scenarios.mjs';
+import { kitchenDesktopPlan, runDesktopDriver } from './driver-plan.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const output = resolve(process.argv[2]);
@@ -56,7 +57,7 @@ for (const scenario of templateScenarios.filter(s => selected.includes(s.id))) {
     writeFileSync(planPath, JSON.stringify(plan));
     // Screenshot tools may create temporary files in cwd; keep them out of
     // the application's watched sources. The app cwd is specified in plan.
-    await run('python', [join(root, 'scripts/desktop-smoke/desktop.py'), planPath], { cwd: scratch, env, log: join(work, 'desktop-driver.log'), timeout: 900_000 });
+    await runDesktopDriver('python', join(root, 'scripts/desktop-smoke/desktop.py'), planPath, { cwd: scratch, env, log: join(work, 'desktop-driver.log') });
     const result = JSON.parse(readFileSync(join(work, 'result.json'), 'utf8'));
     assert.equal(result.ok, true);
     results.push({ name: scenario.id, status: 'passed' });
@@ -85,14 +86,12 @@ for (const scenario of selectedKitchen) {
   mkdirSync(work);
   try {
     if (kitchenBuildError) throw new Error(kitchenBuildError);
-    const plan = { ...scenario, name: scenario.id, output: work, cwd: kitchen,
-      command: [hutch, 'scripts/kitchen-matrix.ts', '--with=cottontail:cef', '--launch-only', '--timeout=300'],
-      env: { AUTO_RUN_TEST_NAME: scenario.test } };
+    const plan = kitchenDesktopPlan(scenario, { hutch, kitchen, output: work });
     const planPath = join(work, 'desktop-plan.json');
     writeFileSync(planPath, JSON.stringify(plan));
     // Screenshot tools may create temporary files in cwd; keep them out of
     // the application's watched sources. The app cwd is specified in plan.
-    await run('python', [join(root, 'scripts/desktop-smoke/desktop.py'), planPath], { cwd: scratch, env, log: join(work, 'desktop-driver.log'), timeout: 330_000 });
+    await runDesktopDriver('python', join(root, 'scripts/desktop-smoke/desktop.py'), planPath, { cwd: scratch, env, log: join(work, 'desktop-driver.log') });
     const result = JSON.parse(readFileSync(join(work, 'result.json'), 'utf8'));
     assert.equal(result.ok, true);
     results.push({ name: scenario.id, status: 'passed' });

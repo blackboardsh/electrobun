@@ -7,10 +7,42 @@ import { dirname, join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { kitchenScenarios, templateScenarios } from "./scenarios.mjs";
+import { DESKTOP_DRIVER_TIMEOUT_MS, kitchenDesktopPlan, runDesktopDriver } from "./driver-plan.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const kitchenSrc = join(root, "kitchen", "src");
 const testsDir = join(kitchenSrc, "tests");
+
+test("Kitchen cleanup fallback cannot interrupt the driver's observation budget", async () => {
+	const scenario = kitchenScenarios.find(({ id }) => id === "kitchen-native-ui");
+	const plan = kitchenDesktopPlan(scenario, { hutch: "/tools/hutch", kitchen: "/source/kitchen", output: "/evidence" });
+	assert.deepEqual(plan.command, ["/tools/hutch", "scripts/kitchen-matrix.ts", "--with=cottontail:cef", "--launch-only", "--timeout=930"]);
+	assert.deepEqual(plan.env, { AUTO_RUN_TEST_NAME: scenario.test });
+	assert.equal(plan.cwd, "/source/kitchen");
+	assert.equal(plan.output, "/evidence");
+	assert.deepEqual(plan.actions, scenario.actions);
+	const options = { cwd: "/scratch", env: { CI: "1" }, log: "/evidence/driver.log" };
+	let invocation;
+	const result = await runDesktopDriver("python", "/driver/desktop.py", "/evidence/plan.json", options,
+		async (...args) => { invocation = args; return "driver result"; });
+	assert.equal(result, "driver result");
+	assert.equal(DESKTOP_DRIVER_TIMEOUT_MS, 900_000);
+	assert.deepEqual(invocation, ["python", ["/driver/desktop.py", "/evidence/plan.json"],
+		{ ...options, timeout: 900_000 }]);
+	const fallbackMs = Number(plan.command.find(arg => arg.startsWith("--timeout=")).split("=")[1]) * 1000;
+	assert.equal(fallbackMs - invocation[2].timeout, 30_000,
+		"the separate POSIX app group needs a bounded cleanup fallback after the driver deadline");
+	assert.equal(options.timeout, undefined, "the caller's options should remain unchanged");
+});
+
+for (const script of ["run.mjs", "source-run.mjs"]) {
+	test(`${script} shares the template and Kitchen driver supervisor`, () => {
+		const source = readFileSync(join(root, "scripts/desktop-smoke", script), "utf8");
+		assert.match(source, /const plan = kitchenDesktopPlan\(scenario,/);
+		assert.equal([...source.matchAll(/await runDesktopDriver\(/g)].length, 2);
+		assert.doesNotMatch(source, /--timeout=300|timeout:\s*330_000/);
+	});
+}
 
 function sources(dir) {
 	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

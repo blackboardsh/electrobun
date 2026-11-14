@@ -35,7 +35,7 @@ def windows_find_window(title):
 
 
 def windows_process_ancestry(pid, root_pid):
-    """Prove ownership from one bounded, read-only snapshot after the outcome."""
+    """Prove ownership from one bounded, read-only process snapshot."""
     from ctypes import wintypes
 
     class ProcessEntry(ctypes.Structure):
@@ -94,6 +94,102 @@ def windows_process_ancestry(pid, root_pid):
         current = parents.get(current)
     ownership['chain'] = chain
     return ownership
+
+
+def windows_counter_window_state(handle):
+    """Read only the identity/visibility and current foreground needed for input."""
+    from ctypes import wintypes
+    user = ctypes.windll.user32
+    signatures = {
+        'IsWindow': ([wintypes.HWND], wintypes.BOOL),
+        'IsWindowVisible': ([wintypes.HWND], wintypes.BOOL),
+        'GetWindowThreadProcessId': ([wintypes.HWND, ctypes.POINTER(wintypes.DWORD)], wintypes.DWORD),
+        'GetForegroundWindow': ([], wintypes.HWND),
+        'GetWindowTextW': ([wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int),
+    }
+    for name, (args, returns) in signatures.items():
+        function = getattr(user, name)
+        function.argtypes, function.restype = args, returns
+    pid, foreground_pid = wintypes.DWORD(), wintypes.DWORD()
+    user.GetWindowThreadProcessId(handle, ctypes.byref(pid))
+    foreground = int(user.GetForegroundWindow() or 0)
+    title = ctypes.create_unicode_buffer(512)
+    if foreground:
+        user.GetWindowThreadProcessId(foreground, ctypes.byref(foreground_pid))
+        user.GetWindowTextW(foreground, title, len(title))
+    return {'hwnd': handle, 'pid': pid.value, 'isWindow': bool(user.IsWindow(handle)),
+            'visible': bool(user.IsWindowVisible(handle)),
+            'foreground': {'hwnd': foreground, 'pid': foreground_pid.value, 'title': title.value}}
+
+
+def windows_raise_counter_window(handle):
+    """Raise an already visible, verified app without showing or resizing it."""
+    from ctypes import wintypes
+    user = ctypes.windll.user32
+    user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                                 ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    user.SetWindowPos.restype = wintypes.BOOL
+    user.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user.SetForegroundWindow.restype = wintypes.BOOL
+    return {'SetWindowPos': bool(user.SetWindowPos(handle, wintypes.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002)),
+            'SetForegroundWindow': bool(user.SetForegroundWindow(handle))}
+
+
+class WindowsCounterForegroundGuard:
+    def __init__(self, title, root_pid, output, result):
+        self.title, self.root_pid, self.output, self.result = title, root_pid, output, result
+        self.identity = None
+
+    def check(self, label):
+        observation = {'label': label, 'time': time.time(), 'rootPid': self.root_pid}
+        self.result.setdefault('counterForegroundReadings', []).append(observation)
+        try:
+            handle, pid = windows_find_window(self.title)
+            observation.update(candidateHwnd=handle, candidatePid=pid)
+            if not handle or not pid:
+                raise RuntimeError('Counter foreground guard could not identify the app window')
+            if self.identity is not None and self.identity != (handle, pid):
+                raise RuntimeError('Counter foreground guard app window identity changed')
+            ownership = windows_process_ancestry(pid, self.root_pid)
+            observation['processOwnership'] = ownership
+            if not ownership['verified']:
+                raise RuntimeError('Counter foreground guard could not verify app process ownership')
+            state = windows_counter_window_state(handle)
+            observation['before'] = state
+            if state['pid'] != pid or not state['isWindow'] or not state['visible']:
+                raise RuntimeError('Counter foreground guard app window identity or visibility changed')
+            self.identity = (handle, pid)
+            foreground = state['foreground']
+            if not foreground['hwnd'] or not foreground['pid']:
+                raise RuntimeError('Counter foreground guard could not identify the foreground window')
+            owned_pids = {self.root_pid, pid, *(item['pid'] for item in ownership['ownedProcesses'])}
+            if foreground['pid'] in owned_pids:
+                observation['outcome'] = 'already-owned'
+                return
+            observation['foreignForeground'] = foreground
+            activation = windows_raise_counter_window(handle)
+            observation['activationReturns'] = activation
+            after = windows_counter_window_state(handle)
+            observation['after'] = after
+            if not all(activation.values()) or after['pid'] != pid or not after['isWindow'] or not after['visible'] \
+                    or after['foreground']['hwnd'] != handle or after['foreground']['pid'] != pid:
+                raise RuntimeError('Counter foreground guard could not establish app foreground')
+            observation['outcome'] = 'restored'
+        except Exception as error:
+            observation.update(outcome='failed', error=str(error))
+            raise
+        finally:
+            try:
+                with (self.output / 'counter-foreground.jsonl').open('a', encoding='utf-8') as log:
+                    log.write(json.dumps(observation) + '\n')
+            except Exception as error:
+                diagnostic_error(self.result, 'counter-foreground-evidence', error)
+
+
+def counter_foreground_guard(plan, process, output, result):
+    if sys.platform == 'win32' and any('expectCounter' in action for action in plan.get('actions', [])):
+        return WindowsCounterForegroundGuard(plan['title'], process.pid, output, result)
+    return None
 
 
 def windows_class_threads(pid, parent, class_name):
@@ -1139,8 +1235,17 @@ def inspect_app(plan):
     result = {'name': plan['name'], 'ok': False, 'screenshots': shots, 'checks': checks}
     rect = None
     process = None
+    counter_guard = None
     active_diagnostics = bool(plan.get('diagnostics')) and not plan.get('nativeOnlyDiagnostics')
     window_diagnostics = WindowsWindowDiagnostics(output, result) if active_diagnostics and sys.platform == 'win32' else None
+
+    def guard_counter_foreground(label):
+        if counter_guard is not None:
+            counter_guard.check(label)
+
+    def input_action(label, function, *args, **kwargs):
+        guard_counter_foreground('input:' + label)
+        return function(*args, **kwargs)
 
     def record_pointer(label, requested=None):
         if active_diagnostics:
@@ -1174,6 +1279,7 @@ def inspect_app(plan):
     def capture(label):
         refresh_bounds()
         record_pointer('capture:' + label)
+        guard_counter_foreground('capture:' + label)
         image = gui.screenshot()
         label = f'{len(shots) + 1:02d}-{label}'
         image.save(output / f'{label}.png')
@@ -1242,6 +1348,7 @@ def inspect_app(plan):
                     first, last = indices[0], indices[-1]
                     x = left + (data['left'][first] + data['left'][last] + data['width'][last]) / (2 * ocr_scale)
                     y = top + (data['top'][first] + data['height'][first] / 2) / ocr_scale
+                    guard_counter_foreground('capture:target-scale')
                     scale = gui.screenshot().width / gui.size().width
                     point = (rect[0] + x / scale, rect[1] + y / scale)
                     if occurrence == "first":
@@ -1255,6 +1362,7 @@ def inspect_app(plan):
         with (output / 'dev.log').open('w', encoding='utf-8') as log:
             process = subprocess.Popen(plan['command'], cwd=plan['cwd'], env={**os.environ, **plan.get('env', {})},
                                        stdout=log, stderr=subprocess.STDOUT, start_new_session=sys.platform != 'win32')
+            counter_guard = counter_foreground_guard(plan, process, output, result)
             sibling_minimized = not plan.get('minimizeWindow')
             deadline = time.monotonic() + plan.get('startupTimeout', 600)
             while time.monotonic() < deadline:
@@ -1265,7 +1373,10 @@ def inspect_app(plan):
                         time.sleep(0.1)
                         continue
                     checks.append('minimized-test-runner')
-                rect = window(plan['title'], diagnostics=window_diagnostics) if window_diagnostics else window(plan['title'])
+                if counter_guard is not None:
+                    rect = window(plan['title'], activate=False, diagnostics=window_diagnostics)
+                else:
+                    rect = window(plan['title'], diagnostics=window_diagnostics) if window_diagnostics else window(plan['title'])
                 if rect:
                     break
                 time.sleep(1)
@@ -1277,13 +1388,13 @@ def inspect_app(plan):
             refresh_bounds()
             if plan.get('initialPointer'):
                 x, y = plan['initialPointer']
-                gui.moveTo(rect[0] + rect[2] * x, rect[1] + rect[3] * y)
+                input_action('initial-pointer', gui.moveTo, rect[0] + rect[2] * x, rect[1] + rect[3] * y)
             else:
-                gui.moveTo(max(2, rect[0] - 20), max(2, rect[1] - 20))
+                input_action('initial-pointer', gui.moveTo, max(2, rect[0] - 20), max(2, rect[1] - 20))
             if plan.get('initialScrollHost'):
                 await_text(plan['scrollReadyText'])
                 # The right-hand host margin stays outside the 600px OOPIF.
-                click_control(gui, (rect[0] + rect[2] * 0.9, rect[1] + rect[3] * 0.4))
+                input_action('host-focus', click_control, gui, (rect[0] + rect[2] * 0.9, rect[1] + rect[3] * 0.4))
                 result['hostViewportPreparation'] = {}
                 def capture_preparation(sample):
                     image = capture('host-viewport-preparation')
@@ -1293,7 +1404,7 @@ def inspect_app(plan):
                 prepare_host_view(plan['scrollReadyText'], plan['readyText'], capture_preparation,
                     lambda image, **kwargs: recognize_text(image, **kwargs,
                         command=pytesseract.pytesseract.tesseract_cmd),
-                    lambda notches: scroll_host(gui, notches), notches=plan['initialScrollHost'],
+                    lambda notches: input_action('host-scroll', scroll_host, gui, notches), notches=plan['initialScrollHost'],
                     require_running=require_running, observation=result['hostViewportPreparation'],
                     recognize_batch=lambda images, **kwargs: recognize_text_batch(images, **kwargs,
                         command=pytesseract.pytesseract.tesseract_cmd))
@@ -1353,11 +1464,11 @@ def inspect_app(plan):
                         except AssertionError:
                             if label == [action['click'], *action.get('aliases', [])][-1]:
                                 raise
-                    click_control(gui, last_click)
+                    input_action('click', click_control, gui, last_click)
                 if action.get('clickAgain'):
                     if last_click is None:
                         raise AssertionError('No previous control to click again')
-                    click_control(gui, last_click)
+                    input_action('click-again', click_control, gui, last_click)
                 if 'doubleClick' in action:
                     point = locate_text(action['doubleClick'])
                     frame = capture('mask-before-selection')
@@ -1369,7 +1480,7 @@ def inspect_app(plan):
                         pixels = list(image.crop(box).convert('RGB').getdata())
                         return sum(b > r + 30 and b > 70 for r, g, b in pixels) / len(pixels)
                     baseline = blue_coverage(frame)
-                    double_click(gui, point)
+                    input_action('double-click', double_click, gui, point)
                     time.sleep(0.5)
                     selected = capture('mask-text-selected')
                     if blue_coverage(selected) - baseline < 0.08:
@@ -1383,8 +1494,8 @@ def inspect_app(plan):
                     frame = capture('before-host-scroll')
                     host_before = locate_text(host, frame)
                     child_before = locate_text(child, frame)
-                    click_control(gui, host_before)
-                    scroll_host(gui, action['scrollHost'])
+                    input_action('host-focus', click_control, gui, host_before)
+                    input_action('host-scroll', scroll_host, gui, action['scrollHost'])
                     time.sleep(2)
                     frame = capture('after-host-scroll')
                     host_after = locate_text(host, frame)
@@ -1398,14 +1509,14 @@ def inspect_app(plan):
                     checks.append(f'oopif-follows-host-scroll:host={host_delta:.1f},child={child_delta:.1f}')
                 if 'clickAt' in action:
                     x, y = action['clickAt']
-                    gui.click(rect[0] + rect[2] * x, rect[1] + rect[3] * y)
+                    input_action('click-at', gui.click, rect[0] + rect[2] * x, rect[1] + rect[3] * y)
                 if 'key' in action:
-                    gui.press(action['key'])
+                    input_action('key', gui.press, action['key'])
                 if 'move' in action:
                     x, y = action['move']
                     target = (rect[0] + rect[2] * x, rect[1] + rect[3] * y)
                     record_pointer('before-move', target)
-                    gui.moveTo(*target, duration=0.3)
+                    input_action('move', gui.moveTo, *target, duration=0.3)
                     record_pointer('after-move', target)
                 if 'expectText' in action:
                     await_text(action['expectText'])

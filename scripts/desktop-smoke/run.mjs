@@ -13,6 +13,7 @@ import { templateScenarios, kitchenScenarios, skipReason } from './scenarios.mjs
 import { verifyMachORelease } from '../../package/scripts/verify-macho-deployment-target.js';
 import { startBunnyDiagnostics } from './bunny-diagnostics.mjs';
 import { applyBunnySourceOverlay } from './bunny-source-overlay.mjs';
+import { kitchenDesktopPlan, runDesktopDriver } from './driver-plan.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publicBase = 'https://electrobun-artifacts.blackboard.sh/electrobun/templates';
@@ -216,7 +217,7 @@ export async function smokeRelease(options) {
           ...(bunnyNativeOnly ? { nativeOnlyDiagnostics: true } : {}) };
         const planPath = join(output, 'desktop-plan.json');
         writeFileSync(planPath, JSON.stringify(plan));
-        await run(python, [join(here, 'desktop.py'), planPath], { env, cwd: scratch, log: join(output, 'desktop-driver.log'), timeout: 900_000 });
+        await runDesktopDriver(python, join(here, 'desktop.py'), planPath, { env, cwd: scratch, log: join(output, 'desktop-driver.log') });
         const verified = verifyBuiltMacOSApp(join(project, 'build'), options.platform);
         if (verified.length) writeFileSync(join(output, 'macho-verification.json'), JSON.stringify(verified, null, 2));
         const result = JSON.parse(readFileSync(join(output, 'result.json'), 'utf8'));
@@ -266,12 +267,10 @@ export async function smokeRelease(options) {
         mkdirSync(output);
         console.log(`[desktop-smoke] ${scenario.id}`);
         try {
-          const plan = { ...scenario, name: scenario.id, output, cwd: kitchen,
-            command: [hutch, 'scripts/kitchen-matrix.ts', '--with=cottontail:cef', '--launch-only', '--timeout=300'],
-            env: { AUTO_RUN_TEST_NAME: scenario.test } };
+          const plan = kitchenDesktopPlan(scenario, { hutch, kitchen, output });
           const planPath = join(output, 'desktop-plan.json');
           writeFileSync(planPath, JSON.stringify(plan));
-          await run(python, [join(here, 'desktop.py'), planPath], { cwd: scratch, env, log: join(output, 'desktop-driver.log'), timeout: 330_000 });
+          await runDesktopDriver(python, join(here, 'desktop.py'), planPath, { cwd: scratch, env, log: join(output, 'desktop-driver.log') });
           const result = JSON.parse(readFileSync(join(output, 'result.json'), 'utf8'));
           assert.equal(result.ok, true);
           results.push({ ...result, status: 'passed' });
