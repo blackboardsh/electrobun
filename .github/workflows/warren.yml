@@ -7,33 +7,6 @@ on:
         description: Exact release tag or commit to test
         type: string
         required: true
-  pull_request:
-    paths:
-      - '.github/workflows/warren.yml'
-      - '.github/actions/install-hutch/**'
-      - 'package/src/shared/warren/**'
-      - 'package/src/browser/ui/**'
-      - 'package/src/sdks/main/ui/**'
-      - 'package/scripts/warren-dom.browser.test.mjs'
-      - 'package/scripts/fixtures/warren-dom.*'
-      - 'package/scripts/run-bun-test.js'
-      - 'package/scripts/run-cottontail-test.js'
-      - 'package/scripts/hutch-launcher.mjs'
-      - 'package/hutch.config.ts'
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/warren.yml'
-      - '.github/actions/install-hutch/**'
-      - 'package/src/shared/warren/**'
-      - 'package/src/browser/ui/**'
-      - 'package/src/sdks/main/ui/**'
-      - 'package/scripts/warren-dom.browser.test.mjs'
-      - 'package/scripts/fixtures/warren-dom.*'
-      - 'package/scripts/run-bun-test.js'
-      - 'package/scripts/run-cottontail-test.js'
-      - 'package/scripts/hutch-launcher.mjs'
-      - 'package/hutch.config.ts'
   workflow_dispatch:
 
 permissions:

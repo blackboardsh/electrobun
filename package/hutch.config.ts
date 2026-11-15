@@ -86,7 +86,7 @@ export default {
 		"test:windows-uninstaller":
 			"node scripts/test-windows-uninstaller.mjs",
 		"test:updater-unit":
-			"node scripts/run-bun-test.js src/sdks/main/core/InstallationConfig.test.ts src/sdks/main/core/InsightsConfig.test.ts src/sdks/main/core/UpdaterFacade.test.ts src/sdks/main/core/UtilsInstalledRoot.test.ts src/sdks/main/core/UtilsQuitApproval.test.ts && node --test scripts/updater-lifecycle-target.test.mjs scripts/updater-lifecycle-fixture.test.mjs && node scripts/test-updater-core.mjs && node scripts/test-updater-bindings.mjs",
+			"node scripts/run-bun-test.js src/sdks/main/core/InstallationConfig.test.ts src/sdks/main/core/InsightsConfig.test.ts src/sdks/main/core/UpdaterFacade.test.ts src/sdks/main/core/UtilsInstalledRoot.test.ts src/sdks/main/core/UtilsQuitApproval.test.ts && node --test scripts/updater-lifecycle-host.test.mjs scripts/updater-lifecycle-target.test.mjs scripts/updater-lifecycle-fixture.test.mjs && node scripts/test-updater-core.mjs && node scripts/test-updater-bindings.mjs",
 		"test:managed-services":
 			"hutch src/preload/build.ts && node scripts/run-bun-test.js src/sdks/main/core/InstallationConfig.test.ts src/sdks/main/core/InsightsConfig.test.ts src/sdks/main/core/UpdaterFacade.test.ts src/shared/naming.test.ts src/shared/devkit-sdk-exports.test.ts && node --test scripts/updater-lifecycle-host.test.mjs scripts/updater-lifecycle-target.test.mjs scripts/updater-lifecycle-fixture.test.mjs && node scripts/test-managed-core.mjs && node scripts/test-updater-core.mjs",
 		"test:managed-core": "node scripts/test-managed-core.mjs",

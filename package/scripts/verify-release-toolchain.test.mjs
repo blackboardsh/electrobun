@@ -374,10 +374,10 @@ test("release CI verifies provenance before all six Kitchen builds", () => {
 	assert.match(installAction, /printf '#!\/bin\/sh\\nexec "%s" "\$@"\\n'/);
 	assert.match(installAction, /"hutch-canary\.exe"[\s\S]*"hutch\.exe"/);
 	assert.equal((installAction.match(/HUTCH_ACTIVE_CHANNEL=/g) ?? []).length, 2);
-	const matrix = workflow.slice(
-		workflow.indexOf("        include:"),
-		workflow.indexOf("    runs-on:", workflow.indexOf("        include:")),
-	);
+	const buildStart = workflow.indexOf("\n  build:\n");
+	assert.notEqual(buildStart, -1, "the release build job must exist");
+	const matrixStart = workflow.indexOf("        include:", buildStart);
+	const matrix = workflow.slice(matrixStart, workflow.indexOf("    runs-on:", matrixStart));
 	assert.equal((matrix.match(/^          - os:/gm) ?? []).length, 6);
 	for (const runner of [
 		"macos-26",
@@ -391,7 +391,7 @@ test("release CI verifies provenance before all six Kitchen builds", () => {
 	}
 	assert.match(
 		workflow,
-		/^  build:\n    strategy:\n      fail-fast: false\n      matrix:/m,
+		/^  build:\n    needs: \[managed-services\]\n    strategy:\n      fail-fast: false\n      matrix:/m,
 		"all release build platforms should finish their test jobs after another platform fails",
 	);
 	assert.match(
@@ -464,9 +464,9 @@ test("release CI verifies provenance before all six Kitchen builds", () => {
 		/^      - name: Install Hutch\n        uses: \.\/\.github\/actions\/install-hutch\n        with:\n          channel: \$\{\{ contains\(env\.EXPECTED_HUTCH_VERSION, '-'\) && 'canary' \|\| 'production' \}\}$/m,
 	);
 	assert.match(workflow, /^      - name: Verify template toolchain compatibility\n        run: node package\/scripts\/verify-release-toolchain\.mjs --template-pairing$/m);
-	const templateCompatibility = workflow.indexOf("      - name: Verify template toolchain compatibility");
-	assert.ok(templateCompatibility > workflow.indexOf("      - name: Install Hutch"));
-	assert.ok(templateCompatibility < workflow.indexOf("      - name: Install dependencies"),
+	const templateCompatibility = workflow.indexOf("      - name: Verify template toolchain compatibility", buildStart);
+	assert.ok(templateCompatibility > workflow.indexOf("      - name: Install Hutch", buildStart));
+	assert.ok(templateCompatibility < workflow.indexOf("      - name: Install dependencies", buildStart),
 		"Hutch init's catalog contract must be verified before dependency installation and native builds");
 	assert.match(
 		workflow,

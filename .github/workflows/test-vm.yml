@@ -33,13 +33,6 @@ on:
         description: Run only Windows ARM when verifying a platform-specific fix
         type: boolean
         default: false
-  push:
-    branches: [ci/test-vm-matrix]
-    paths:
-      - '.github/workflows/test-vm.yml'
-      - '.github/actions/**'
-      - 'package/**'
-      - 'kitchen/**'
 
 permissions:
   contents: read

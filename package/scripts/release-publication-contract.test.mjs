@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 
@@ -51,7 +51,7 @@ function validatePublicationContract(source) {
 		"workflow permissions must default to read-only contents",
 	);
 	const checkoutSteps = stepsUsingPattern(source, /^actions\/checkout@/);
-	assert.equal(checkoutSteps.length, 6, "every release job checkout is audited");
+	assert.equal(checkoutSteps.length, 7, "every release job checkout is audited");
 	for (const checkout of checkoutSteps) {
 		assert.match(checkout, /^      - uses: actions\/checkout@\S+$/m);
 		assert.match(
@@ -554,6 +554,8 @@ test("contract rejects mutable Kitchen publication before the npm gate", () => {
 
 function validateReleaseTestGates(source) {
 	const release = job(source, "release");
+	const managed = job(source, "managed-services");
+	const build = job(source, "build");
 	const vm = job(source, "test-vm");
 	const uiCore = job(source, "ui-core");
 	const warren = job(source, "warren");
@@ -564,6 +566,9 @@ function validateReleaseTestGates(source) {
 		return match[1].split(",").map((item) => item.trim());
 	};
 	assert.ok(dependencies(release).includes("build"));
+	assert.ok(dependencies(release).includes("managed-services"), "publication must wait for managed client contracts");
+	assert.ok(dependencies(build).includes("managed-services"), "SDK builds must wait for the early managed gate");
+	assert.ok(dependencies(vm).includes("managed-services"), "VM tests must wait for the early managed gate");
 	assert.ok(dependencies(release).includes("test-vm"), "publication must wait for VM tests");
 	assert.ok(dependencies(release).includes("ui-core"), "publication must wait for UI engine tests");
 	assert.ok(dependencies(release).includes("warren"), "publication must wait for Warren DOM and browser tests");
@@ -573,8 +578,14 @@ function validateReleaseTestGates(source) {
 	assert.match(uiCore, /uses: \.\/\.github\/workflows\/ui-core\.yml/);
 	assert.match(warren, /uses: \.\/\.github\/workflows\/warren\.yml/);
 	assert.match(smoke, /uses: \.\/\.github\/workflows\/desktop-smoke\.yml/);
-	const buildRef = job(source, "build").match(/^          ref: (.+)$/m)?.[1];
+	const buildRef = build.match(/^          ref: (.+)$/m)?.[1];
 	assert.ok(buildRef, "release build must select an exact source ref");
+	assert.equal(managed.match(/^          ref: (.+)$/m)?.[1], buildRef, "managed contracts must test the exact release ref");
+	assert.match(managed, /run: hutch run test:managed-services\n/);
+	assert.doesNotMatch(managed, /^\s+(?:continue-on-error|if):/m, "the managed gate cannot be optional");
+	for (const platform of ["macos-arm64", "linux-x64", "windows-x64"]) {
+		assert.ok(managed.includes(`platform: ${platform}`), `managed contracts retain ${platform} coverage`);
+	}
 	assert.equal(vm.match(/^      ref: (.+)$/m)?.[1], buildRef, "VM tests must build the same release ref");
 	assert.equal(uiCore.match(/^      ref: (.+)$/m)?.[1], buildRef, "UI engine tests must test the same release ref");
 	assert.equal(warren.match(/^      ref: (.+)$/m)?.[1], buildRef, "Warren tests must test the same release ref");
@@ -583,6 +594,28 @@ function validateReleaseTestGates(source) {
 
 test("release test gates and post-publication desktop smoke use the release being published", () => {
 	validateReleaseTestGates(workflow);
+	const selectedRef = job(workflow, "managed-services").match(/^          ref: .+$/m)?.[0];
+	assert.ok(selectedRef);
+	assert.throws(() => validateReleaseTestGates(workflow.replace(selectedRef,
+		"          ref: main")), { code: "ERR_ASSERTION" }, "managed tests cannot accidentally validate the branch instead of the requested release");
+});
+
+test("release tests have one automatic entry point and local updater checks retain host contracts", () => {
+	const header = workflow.slice(0, workflow.indexOf("jobs:\n"));
+	assert.match(header, /on:\n  push:\n    tags:\n      - 'v\*'/);
+	assert.doesNotMatch(header, /^  pull_request:|^    branches:/m);
+	assert.equal(existsSync(new URL("../../.github/workflows/managed-services-checks.yml", import.meta.url)), false);
+	for (const name of ["warren", "ui-core", "test-vm"]) {
+		const helper = readFileSync(new URL(`../../.github/workflows/${name}.yml`, import.meta.url), "utf8");
+		const events = helper.slice(helper.indexOf("on:\n"), helper.indexOf("permissions:\n"));
+		assert.match(events, /^  workflow_call:/m, `${name} must remain reusable by release`);
+		assert.match(events, /^  workflow_dispatch:/m, `${name} keeps explicit manual diagnostics`);
+		assert.doesNotMatch(events, /^  (?:push|pull_request):/m, `${name} cannot launch a separate automatic test workflow`);
+	}
+	const config = readFileSync(new URL("../hutch.config.ts", import.meta.url), "utf8");
+	const updater = config.match(/"test:updater-unit":\s*"([^"]+)"/)?.[1];
+	assert.ok(updater, "local release checks must retain the updater task");
+	assert.match(updater, /node --test [^&]*scripts\/updater-lifecycle-host\.test\.mjs/);
 });
 
 test("the reusable Warren gate runs DOM and browser regressions on the requested release ref", () => {
@@ -596,9 +629,14 @@ test("the reusable Warren gate runs DOM and browser regressions on the requested
 
 test("test gate contract rejects early publication or premature desktop smoke", () => {
 	for (const [before, after] of [
-		["needs: [build, test-vm, ui-core, warren]", "needs: [build, ui-core, warren]"],
-		["needs: [build, test-vm, ui-core, warren]", "needs: [build, test-vm, warren]"],
-		["needs: [build, test-vm, ui-core, warren]", "needs: [build, test-vm, ui-core]"],
+		["needs: [managed-services, build, test-vm, ui-core, warren]", "needs: [build, test-vm, ui-core, warren]"],
+		["needs: [managed-services, build, test-vm, ui-core, warren]", "needs: [managed-services, build, ui-core, warren]"],
+		["needs: [managed-services, build, test-vm, ui-core, warren]", "needs: [managed-services, build, test-vm, warren]"],
+		["needs: [managed-services, build, test-vm, ui-core, warren]", "needs: [managed-services, build, test-vm, ui-core]"],
+		["  build:\n    needs: [managed-services]", "  build:"],
+		["  test-vm:\n    needs: [managed-services]", "  test-vm:"],
+		["run: hutch run test:managed-services", "run: hutch --version"],
+		["  managed-services:\n", "  managed-services:\n    continue-on-error: true\n"],
 		["needs: [npm-publish, publish-templates]", "needs: [npm-publish]"],
 		["needs: [npm-publish, publish-templates]", "needs: [publish-templates]"],
 	]) {
