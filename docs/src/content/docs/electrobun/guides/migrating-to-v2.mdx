@@ -59,10 +59,12 @@ details and the situational cases.
 The compatibility fix described in the
 [unreleased changelog](/electrobun/guides/changelog/unreleased/) preserves one
 `<channel>-<os>-<arch>-update.json` release manifest with its original
-`artifact: { file }` shape. Its checksum-only sidecar,
-`<channel>-<os>-<arch>-<hash>-checksum.json`, contains the exact uncompressed tar's
-SHA-256 and byte size as `tarSha256` and `tarSize`. New updaters use the sidecar
-when available and retain older hosting behavior when it returns `404`.
+`artifact: { file }` shape. Its sidecar,
+`<channel>-<os>-<arch>-checksum.json`, contains the matching build `hash` and
+the exact uncompressed tar's SHA-256 and byte size as `tarSha256` and `tarSize`.
+Uploading another build replaces this fixed checksum filename. New updaters
+fall back to the older hash-named checksum file if the fixed filename returns
+`404`, and retain older hosting behavior if neither file exists.
 
 An earlier preview put these integrity fields inside `artifact`. Some shipped
 native clients reject unknown fields, so that change prevented them from
@@ -75,6 +77,12 @@ compatible canonical manifests, checksum sidecars, and their artifacts, then
 delete the old v2 objects and purge cached copies. The removed URLs must return
 `404` so existing clients that check v2 first can fall back. See
 [the update-host cleanup instructions](/electrobun/guides/updates/#remove-previously-published-v2-manifests).
+
+Once your self-hosted folder serves the fixed checksum filename, old
+hash-named checksum files can be removed in a one-time cleanup. Earlier betas
+that only request those old names still update after a `404`, without their
+optional tar SHA-256 check. See
+[checksum cleanup and compatibility](/electrobun/guides/updates/#remove-old-hash-named-checksum-files).
 
 ## Upgrading from 2.0.5 to 2.0.6
 

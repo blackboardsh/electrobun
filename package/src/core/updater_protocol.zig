@@ -50,7 +50,9 @@ pub const Manifest = struct {
     arch: Arch,
     artifact: struct { file: []const u8, tarSha256: ?[]const u8 = null, tarSize: ?u64 = null },
 };
-pub const Checksum = struct { tarSha256: []const u8, tarSize: u64 };
+// Legacy sidecars bind their build through the filename; the fixed filename
+// carries that binding in JSON. Inline integrity does not need another hash.
+pub const Checksum = struct { hash: ?[]const u8 = null, tarSha256: []const u8, tarSize: u64 };
 pub const Prepared = struct {
     schema_version: u32 = 1,
     identifier: []const u8,
@@ -146,13 +148,14 @@ pub fn validateManifest(a: A, manifest: Manifest, info: LocalInfo, platform: Pla
     }
 }
 pub fn validateChecksum(checksum: Checksum) !void {
+    if (checksum.hash) |hash| if (!validHash(hash)) return error.InvalidUpdateArchiveIntegrity;
     if (checksum.tarSha256.len != 64) return error.InvalidUpdateArchiveIntegrity;
     for (checksum.tarSha256) |c| if (!std.ascii.isDigit(c) and !(c >= 'a' and c <= 'f')) return error.InvalidUpdateArchiveIntegrity;
     if (checksum.tarSize == 0 or checksum.tarSize > 9007199254740991) return error.InvalidUpdateArchiveIntegrity;
 }
 pub fn checksumFilename(a: A, manifest: Manifest) ![]u8 {
     if (!validChannel(manifest.channel) or !validHash(manifest.hash)) return error.UnsafeUpdateMetadata;
-    return std.fmt.allocPrint(a, "{s}-{s}-{s}-{s}-checksum.json", .{ manifest.channel, @tagName(manifest.platform), @tagName(manifest.arch), manifest.hash });
+    return std.fmt.allocPrint(a, "{s}-{s}-{s}-checksum.json", .{ manifest.channel, @tagName(manifest.platform), @tagName(manifest.arch) });
 }
 pub fn artifactUrl(a: A, base: []const u8, file: []const u8) ![]u8 {
     if (!validArtifact(file)) return error.UnsafeUpdateArtifact;
@@ -844,6 +847,15 @@ test "archive integrity preserves public protocol bounds and optional extensions
     try std.testing.expectError(error.InvalidUpdateArchiveIntegrity, validateChecksum(.{ .tarSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", .tarSize = 0 }));
     try std.testing.expectError(error.InvalidUpdateArchiveIntegrity, validateChecksum(.{ .tarSha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", .tarSize = 512 }));
     try std.testing.expectError(error.InvalidUpdateArchiveIntegrity, validateChecksum(.{ .tarSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", .tarSize = 9007199254740992 }));
+    try std.testing.expectError(error.InvalidUpdateArchiveIntegrity, validateChecksum(.{ .hash = "../other", .tarSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", .tarSize = 512 }));
+    const first = try checksumFilename(a, parsed.value);
+    defer a.free(first);
+    var rebuilt = parsed.value;
+    rebuilt.hash = "rebuilt";
+    const second = try checksumFilename(a, rebuilt);
+    defer a.free(second);
+    try std.testing.expectEqualStrings("canary-macos-arm64-checksum.json", first);
+    try std.testing.expectEqualStrings(first, second);
 }
 
 test "legacy roots and XDG data roots retain installed identity" {

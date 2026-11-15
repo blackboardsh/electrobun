@@ -69,20 +69,43 @@ canary Windows x64 build checks `canary-win-x64-update.json`. Hutch emits one
 release manifest per target, preserving its original `schemaVersion: 1` shape
 with an `artifact` object containing only `file`. Older native updaters reject
 unknown fields, so archive integrity metadata lives in a separate
-`<channel>-<os>-<arch>-<hash>-checksum.json` file.
+`<channel>-<os>-<arch>-checksum.json` file.
 
-The checksum sidecar contains only `tarSha256` and `tarSize`: the SHA-256 and
-size in bytes of the exact uncompressed tar, including its signed/stapled files,
-headers, and padding. Its filename binds it to the manifest's target and build
-hash without repeating the release metadata. The updater validates the release
-manifest before requesting this sidecar. A `404` preserves support for older
-hosts without checksums; other request failures or invalid checksum data fail
-the update check. Previously published manifests with a valid inline
-`artifact.tarSha256` and `artifact.tarSize` pair remain supported by newer clients.
+The sidecar contains `hash`, matching the manifest's build hash, plus
+`tarSha256` and `tarSize`: the SHA-256 and byte size of the exact uncompressed
+tar, including its signed/stapled files, headers, and padding. Its fixed filename
+means another build for the same channel and target replaces the checksum
+alongside the full download and `update.json`; only patch history needs to grow.
+
+The updater validates the release manifest before requesting this sidecar and
+checks that their build hashes match. If publication changes the metadata
+between requests, it retries the metadata check; a persistent mismatch fails
+the check. A `404` at the fixed filename falls back to the older
+`<channel>-<os>-<arch>-<hash>-checksum.json` filename. If both are missing,
+older hosting behavior is preserved. Other request failures or invalid checksum
+data fail the check rather than dropping integrity validation. Previously
+published manifests with a valid inline `artifact.tarSha256` and
+`artifact.tarSize` pair remain supported by newer clients.
 
 Upload all of `artifacts/` without renaming its files, including the checksum
 sidecar. Publish each `*-update.json` after its full bundle, checksum, and patches
 are available.
+
+### Remove old hash-named checksum files
+
+After publishing the fixed checksum filename for each channel and target on a
+self-hosted release folder, you can remove its old
+`<channel>-<os>-<arch>-<hash>-checksum.json` files. This is a one-time cleanup;
+later uploads replace the fixed checksum file. Hutch does not delete those
+remote objects for you. Keep `*-checksum.json` files without a build hash in
+their names, current manifests and full downloads, and retained patches.
+
+Earlier updater betas only request the hash-named checksum. If that URL returns
+`404`, they still update using the existing behavior, without the optional tar
+SHA-256 check. The current updater understands both filenames. Managed Deploys
+also serves the old checksum URL for an eligible retained build, so old clients
+can read its checksum without storing a second file. Retained managed releases
+keep their own checksum alongside their other artifacts.
 
 ### Remove previously published v2 manifests
 

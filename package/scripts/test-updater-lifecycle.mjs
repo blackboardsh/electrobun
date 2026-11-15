@@ -594,8 +594,8 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 }
 
 async function publishRelease(release, options = {}) {
-	// Older source-hash patches and checksum sidecars stay in the same flat
-	// folder while the one canonical update pointer advances.
+	// Source-hash patches stay in the same flat folder while the canonical
+	// update pointer and checksum are replaced for each build.
 	publishLifecycleReleaseFiles(release, serverRoot, options);
 	if (lifecycleHost) await lifecycleHost.publishRelease(release, options);
 }
@@ -922,10 +922,15 @@ async function verifySuccessfulUpdate({
 	const checksumRequests = phaseRequests
 		.map((request, requestIndex) => ({ request, requestIndex }))
 		.filter(({ request }) => request.pathname.endsWith("-checksum.json"));
-	assert.equal(checksumRequests.length, 1, "updater must fetch one checksum for the selected build");
-	assert.equal(checksumRequests[0].request.pathname, checksumName, "updater requested a checksum for another build");
-	assert.equal(checksumRequests[0].request.status, expectedChecksumStatus, "checksum lookup status");
-	assert.equal(checksumRequests[0].requestIndex > metadataRequest, true, "checksum must follow validated update metadata");
+	const expectedChecksumRequests = [{ pathname: checksumName, status: expectedChecksumStatus }];
+	if (expectedChecksumStatus === 404) expectedChecksumRequests.push({
+		pathname: checksumName.replace(/-checksum\.json$/, `-${toRelease.metadata.hash}-checksum.json`), status: 404,
+	});
+	assert.deepEqual(checksumRequests.map(({ request }) => ({ pathname: request.pathname, status: request.status })),
+		expectedChecksumRequests, "updater must use the canonical checksum, probing the legacy build filename only after 404");
+	for (const { requestIndex } of checksumRequests) {
+		assert.equal(requestIndex > metadataRequest, true, "checksum must follow validated update metadata");
+	}
 	assert.equal(
 		phaseRequests.some((request) => request.pathname.endsWith("-update-v2.json")),
 		false,
@@ -968,7 +973,7 @@ async function verifySuccessfulUpdate({
 		);
 		const requestIndex = matchingRequests[0].requestIndex;
 		assert.equal(
-			requestIndex > (patchRequestIndexes.at(-1) ?? checksumRequests[0].requestIndex),
+			requestIndex > (patchRequestIndexes.at(-1) ?? checksumRequests.at(-1).requestIndex),
 			true,
 			`patch request ${index + 1} was out of order: ${patchName}`,
 		);

@@ -48,27 +48,44 @@ pub fn resolve(a: A, io: Io, options: Options) !Resolved {
     else
         null;
     if (identity) |id| if (!validInstallationId(id)) return error.InvalidInstallationId;
-    var nonce: [8]u8 = undefined;
-    io.random(&nonce);
-    const suffix = std.fmt.bytesToHex(nonce, .lower);
     const prefix = try std.fmt.allocPrint(owned, "{s}/{s}-{s}-{s}", .{ base, options.local.channel, @tagName(options.platform), @tagName(options.arch) });
-    const manifest_url = try std.fmt.allocPrint(owned, "{s}-update.json?{s}", .{ prefix, suffix });
-    const response = try fetchDocument(owned, io, manifest_url, .{ .installation_id = identity, .timeout_ms = options.timeout_ms });
-    if (response.status < 200 or response.status >= 300) return error.UpdateHttpStatus;
-    var manifest = try parseManifest(owned, response.body);
-    try protocol.validateManifest(owned, manifest, options.local, options.platform, options.arch);
-    if (!std.mem.eql(u8, manifest.hash, options.local.hash) and manifest.artifact.tarSha256 == null) {
-        const checksum_url = try std.fmt.allocPrint(owned, "{s}-{s}-checksum.json?{s}", .{ prefix, manifest.hash, suffix });
-        const checksum_response = try fetchDocument(owned, io, checksum_url, .{ .installation_id = identity, .timeout_ms = options.timeout_ms });
-        if (checksum_response.status != 404) {
-            if (checksum_response.status < 200 or checksum_response.status >= 300) return error.UpdateHttpStatus;
-            const checksum = try parseChecksum(owned, checksum_response.body);
-            try protocol.validateChecksum(checksum);
-            manifest.artifact.tarSha256 = checksum.tarSha256;
-            manifest.artifact.tarSize = checksum.tarSize;
+    // Publication can replace these two small documents between requests. A
+    // mismatched fixed sidecar refreshes the pair once; it never supplies the
+    // wrong integrity values or silently downgrades to a legacy sidecar.
+    for (0..2) |attempt| {
+        var nonce: [8]u8 = undefined;
+        io.random(&nonce);
+        const suffix = std.fmt.bytesToHex(nonce, .lower);
+        const manifest_url = try std.fmt.allocPrint(owned, "{s}-update.json?{s}", .{ prefix, suffix });
+        const response = try fetchDocument(owned, io, manifest_url, .{ .installation_id = identity, .timeout_ms = options.timeout_ms });
+        if (response.status < 200 or response.status >= 300) return error.UpdateHttpStatus;
+        var manifest = try parseManifest(owned, response.body);
+        try protocol.validateManifest(owned, manifest, options.local, options.platform, options.arch);
+        if (!std.mem.eql(u8, manifest.hash, options.local.hash) and manifest.artifact.tarSha256 == null) {
+            const checksum_url = try std.fmt.allocPrint(owned, "{s}-checksum.json?{s}", .{ prefix, suffix });
+            var checksum_response = try fetchDocument(owned, io, checksum_url, .{ .installation_id = identity, .timeout_ms = options.timeout_ms });
+            const legacy = checksum_response.status == 404;
+            if (legacy) {
+                const legacy_url = try std.fmt.allocPrint(owned, "{s}-{s}-checksum.json?{s}", .{ prefix, manifest.hash, suffix });
+                checksum_response = try fetchDocument(owned, io, legacy_url, .{ .installation_id = identity, .timeout_ms = options.timeout_ms });
+            }
+            if (checksum_response.status != 404) {
+                if (checksum_response.status < 200 or checksum_response.status >= 300) return error.UpdateHttpStatus;
+                const checksum = try parseChecksum(owned, checksum_response.body);
+                try protocol.validateChecksum(checksum);
+                if (checksum.hash) |hash| {
+                    if (!std.mem.eql(u8, hash, manifest.hash)) {
+                        if (!legacy and attempt == 0) continue;
+                        return error.UpdateChecksumBuildMismatch;
+                    }
+                } else if (!legacy) return error.InvalidUpdateArchiveIntegrity;
+                manifest.artifact.tarSha256 = checksum.tarSha256;
+                manifest.artifact.tarSize = checksum.tarSize;
+            }
         }
+        return .{ .arena = arena, .status = .available, .manifest = manifest, .download_base_url = try owned.dupe(u8, base) };
     }
-    return .{ .arena = arena, .status = .available, .manifest = manifest, .download_base_url = try owned.dupe(u8, base) };
+    unreachable;
 }
 
 // Optional integrity means omitted properties, matching the JS public API.
@@ -102,6 +119,9 @@ fn parseChecksum(a: A, bytes: []const u8) !protocol.Checksum {
     defer parsed.deinit();
     if (parsed.value != .object) return error.InvalidUpdateArchiveIntegrity;
     if (!jsonNumber(parsed.value.object.get("tarSize") orelse return error.InvalidUpdateArchiveIntegrity)) return error.InvalidUpdateArchiveIntegrity;
+    if (parsed.value.object.get("hash")) |hash| {
+        if (hash != .string or !protocol.validHash(hash.string)) return error.InvalidUpdateArchiveIntegrity;
+    }
     return std.json.parseFromValueLeaky(protocol.Checksum, a, parsed.value, .{ .ignore_unknown_fields = true });
 }
 
@@ -297,6 +317,7 @@ const TestServer = struct {
     listener: Io.net.Server,
     steps: []const Step = &.{},
     requested: Io.Event = .unset,
+    cache_busters: std.ArrayList([16]u8) = .empty,
     const Step = struct {
         path: []const u8,
         cache_buster: bool = false,
@@ -313,6 +334,7 @@ const TestServer = struct {
     }
     fn deinit(self: *TestServer) void {
         self.listener.deinit(std.testing.io);
+        self.cache_busters.deinit(std.testing.allocator);
     }
     fn url(self: *TestServer, path: []const u8) ![]u8 {
         return std.fmt.allocPrint(std.testing.allocator, "http://127.0.0.1:{d}{s}", .{ self.listener.socket.address.getPort(), path });
@@ -333,6 +355,9 @@ const TestServer = struct {
                 try std.testing.expectEqualStrings(step.path, path[0..query]);
                 try std.testing.expectEqual(@as(usize, 16), path[query + 1 ..].len);
                 for (path[query + 1 ..]) |c| try std.testing.expect(std.ascii.isHex(c));
+                var cache_buster: [16]u8 = undefined;
+                @memcpy(&cache_buster, path[query + 1 ..]);
+                try self.cache_busters.append(std.testing.allocator, cache_buster);
             } else try std.testing.expectEqualStrings(step.path, path);
             var id_seen = false;
             while (true) {
@@ -383,12 +408,12 @@ fn testResolve(server: *TestServer, local: protocol.LocalInfo) !Resolved {
     return resolved;
 }
 
-test "canonical metadata resolves a hash-specific checksum and ignores unknown fields" {
+test "canonical metadata resolves a fixed checksum bound by JSON hash and ignores unknown fields" {
     var server = try TestServer.init();
     defer server.deinit();
     server.steps = &.{
         .{ .path = "/releases/stable-linux-x64-update.json", .cache_buster = true, .body = test_manifest },
-        .{ .path = "/releases/stable-linux-x64-next-checksum.json", .cache_buster = true, .body = "{\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345,\"futureField\":true}" },
+        .{ .path = "/releases/stable-linux-x64-checksum.json", .cache_buster = true, .body = "{\"hash\":\"next\",\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345,\"futureField\":true}" },
     };
     var resolved = try testResolve(&server, testLocal());
     defer resolved.deinit();
@@ -398,27 +423,96 @@ test "canonical metadata resolves a hash-specific checksum and ignores unknown f
     try std.testing.expectEqual(@as(?u64, 12345), resolved.manifest.?.artifact.tarSize);
 }
 
-test "only missing checksum falls back while malformed or failed checksum aborts" {
+test "missing canonical checksum supports existing hash-named hosts and legacy hosts with no sidecar" {
     for ([_]TestServer.Step{
         .{ .path = "/releases/stable-linux-x64-next-checksum.json", .cache_buster = true, .status = 404 },
-        .{ .path = "/releases/stable-linux-x64-next-checksum.json", .cache_buster = true, .status = 500 },
-        .{ .path = "/releases/stable-linux-x64-next-checksum.json", .cache_buster = true, .body = "{}" },
-        .{ .path = "/releases/stable-linux-x64-next-checksum.json", .cache_buster = true, .body = "{\"tarSha256\":\"invalid\",\"tarSize\":12345}" },
-    }) |checksum| {
+        .{ .path = "/releases/stable-linux-x64-next-checksum.json", .cache_buster = true, .body = "{\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345}" },
+        .{ .path = "/releases/stable-linux-x64-next-checksum.json", .cache_buster = true, .body = "{\"hash\":\"next\",\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345}" },
+    }) |legacy| {
         var server = try TestServer.init();
         defer server.deinit();
-        server.steps = &.{ .{ .path = "/releases/stable-linux-x64-update.json", .cache_buster = true, .body = test_manifest }, checksum };
-        const result = testResolve(&server, testLocal());
-        if (checksum.status == 404) {
-            var resolved = try result;
-            defer resolved.deinit();
+        server.steps = &.{
+            .{ .path = "/releases/stable-linux-x64-update.json", .cache_buster = true, .body = test_manifest },
+            .{ .path = "/releases/stable-linux-x64-checksum.json", .cache_buster = true, .status = 404 },
+            legacy,
+        };
+        var resolved = try testResolve(&server, testLocal());
+        defer resolved.deinit();
+        if (legacy.status == 404) {
             try std.testing.expect(resolved.manifest.?.artifact.tarSha256 == null);
-        } else if (result) |value| {
-            var unexpected = value;
-            unexpected.deinit();
-            return error.ExpectedChecksumFailure;
-        } else |_| {}
+        } else try std.testing.expectEqualStrings(test_digest, resolved.manifest.?.artifact.tarSha256.?);
     }
+}
+
+test "failed or invalid fixed checksum cannot fall back to weaker legacy metadata" {
+    const Case = struct { body: []const u8 = "", status: u16 = 200, expected: anyerror = error.InvalidUpdateArchiveIntegrity };
+    for ([_]Case{
+        .{ .status = 500, .expected = error.UpdateHttpStatus },
+        .{ .status = 403, .expected = error.UpdateHttpStatus },
+        .{ .body = "{}" },
+        .{ .body = "{\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345}" },
+        .{ .body = "{\"hash\":null,\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345}" },
+        .{ .body = "{\"hash\":1,\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345}" },
+        .{ .body = "{\"hash\":\"../next\",\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345}" },
+        .{ .body = "{\"hash\":\"next\",\"tarSha256\":\"invalid\",\"tarSize\":12345}" },
+    }) |case| {
+        var server = try TestServer.init();
+        defer server.deinit();
+        server.steps = &.{
+            .{ .path = "/releases/stable-linux-x64-update.json", .cache_buster = true, .body = test_manifest },
+            .{ .path = "/releases/stable-linux-x64-checksum.json", .cache_buster = true, .status = case.status, .body = case.body },
+        };
+        try std.testing.expectError(case.expected, testResolve(&server, testLocal()));
+    }
+}
+
+test "publication between manifest and checksum requests refreshes the pair once" {
+    const a = std.testing.allocator;
+    const newer_manifest = try std.mem.replaceOwned(u8, a, test_manifest, "\"next\"", "\"newer\"");
+    defer a.free(newer_manifest);
+    var server = try TestServer.init();
+    defer server.deinit();
+    server.steps = &.{
+        .{ .path = "/releases/stable-linux-x64-update.json", .cache_buster = true, .body = test_manifest },
+        .{ .path = "/releases/stable-linux-x64-checksum.json", .cache_buster = true, .body = "{\"hash\":\"newer\",\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345}" },
+        .{ .path = "/releases/stable-linux-x64-update.json", .cache_buster = true, .body = newer_manifest },
+        .{ .path = "/releases/stable-linux-x64-checksum.json", .cache_buster = true, .body = "{\"hash\":\"newer\",\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345}" },
+    };
+    var local = testLocal();
+    local.managed = .{ .appId = "test-app" };
+    var managed_steps: [4]TestServer.Step = undefined;
+    @memcpy(&managed_steps, server.steps);
+    for (&managed_steps) |*step| step.installation_id = test_id;
+    server.steps = &managed_steps;
+    var resolved = try testResolve(&server, local);
+    defer resolved.deinit();
+    try std.testing.expectEqualStrings("newer", resolved.manifest.?.hash);
+    try std.testing.expectEqualStrings(test_digest, resolved.manifest.?.artifact.tarSha256.?);
+    try std.testing.expectEqualSlices(u8, &server.cache_busters.items[0], &server.cache_busters.items[1]);
+    try std.testing.expectEqualSlices(u8, &server.cache_busters.items[2], &server.cache_busters.items[3]);
+    try std.testing.expect(!std.mem.eql(u8, &server.cache_busters.items[0], &server.cache_busters.items[2]));
+}
+
+test "persistent fixed checksum build mismatch stops after two metadata pairs" {
+    var server = try TestServer.init();
+    defer server.deinit();
+    const pair = [_]TestServer.Step{
+        .{ .path = "/releases/stable-linux-x64-update.json", .cache_buster = true, .body = test_manifest },
+        .{ .path = "/releases/stable-linux-x64-checksum.json", .cache_buster = true, .body = "{\"hash\":\"other\",\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345}" },
+    };
+    server.steps = &(pair ++ pair);
+    try std.testing.expectError(error.UpdateChecksumBuildMismatch, testResolve(&server, testLocal()));
+}
+
+test "a legacy sidecar with an explicit wrong build hash is rejected" {
+    var server = try TestServer.init();
+    defer server.deinit();
+    server.steps = &.{
+        .{ .path = "/releases/stable-linux-x64-update.json", .cache_buster = true, .body = test_manifest },
+        .{ .path = "/releases/stable-linux-x64-checksum.json", .cache_buster = true, .status = 404 },
+        .{ .path = "/releases/stable-linux-x64-next-checksum.json", .cache_buster = true, .body = "{\"hash\":\"other\",\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345}" },
+    };
+    try std.testing.expectError(error.UpdateChecksumBuildMismatch, testResolve(&server, testLocal()));
 }
 
 test "equal hashes avoid checksum requests and managed manifests carry installation identity" {
@@ -577,7 +671,11 @@ test "stable and canary route manifests and checksums through self-hosted manage
     const Target = struct { platform: protocol.Platform, arch: protocol.Arch };
     for ([_][]const u8{ "stable", "canary" }) |channel| {
         for ([_]Hosting{ .self_hosted, .managed_api_origin, .managed_versioned_api, .managed_custom_origin }) |hosting| {
-            for ([_]Target{ .{ .platform = .linux, .arch = .x64 }, .{ .platform = .macos, .arch = .arm64 }, .{ .platform = .win, .arch = .x64 } }) |target| {
+            for ([_]Target{
+                .{ .platform = .linux, .arch = .x64 }, .{ .platform = .linux, .arch = .arm64 },
+                .{ .platform = .macos, .arch = .x64 }, .{ .platform = .macos, .arch = .arm64 },
+                .{ .platform = .win, .arch = .x64 },   .{ .platform = .win, .arch = .arm64 },
+            }) |target| {
                 var arena: std.heap.ArenaAllocator = .init(a);
                 defer arena.deinit();
                 const owned = arena.allocator();
@@ -602,7 +700,7 @@ test "stable and canary route manifests and checksums through self-hosted manage
                 };
                 const prefix = try std.fmt.allocPrint(owned, "{s}-{s}-{s}", .{ channel, @tagName(target.platform), @tagName(target.arch) });
                 const manifest_path = try std.fmt.allocPrint(owned, "{s}/{s}-update.json", .{ expected_root, prefix });
-                const checksum_path = try std.fmt.allocPrint(owned, "{s}/{s}-next-checksum.json", .{ expected_root, prefix });
+                const checksum_path = try std.fmt.allocPrint(owned, "{s}/{s}-checksum.json", .{ expected_root, prefix });
                 const manifest = try std.json.Stringify.valueAlloc(owned, protocol.Manifest{
                     .schemaVersion = 1,
                     .identifier = local.identifier,
@@ -616,7 +714,7 @@ test "stable and canary route manifests and checksums through self-hosted manage
                 const expected_id: ?[]const u8 = if (hosting == .self_hosted) null else test_id;
                 server.steps = &.{
                     .{ .path = manifest_path, .cache_buster = true, .body = manifest, .installation_id = expected_id },
-                    .{ .path = checksum_path, .cache_buster = true, .body = "{\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345}", .installation_id = expected_id },
+                    .{ .path = checksum_path, .cache_buster = true, .body = "{\"hash\":\"next\",\"tarSha256\":\"" ++ test_digest ++ "\",\"tarSize\":12345}", .installation_id = expected_id },
                 };
                 var serving = try io.concurrent(TestServer.serve, .{&server});
                 defer serving.cancel(io) catch {};
@@ -694,6 +792,7 @@ test "checksum rejection matrix covers missing partial type range digest and mal
         defer server.deinit();
         server.steps = &.{
             .{ .path = "/releases/stable-linux-x64-update.json", .cache_buster = true, .body = test_manifest },
+            .{ .path = "/releases/stable-linux-x64-checksum.json", .cache_buster = true, .status = 404 },
             .{ .path = "/releases/stable-linux-x64-next-checksum.json", .cache_buster = true, .body = case.body },
         };
         const base = try server.url("/releases");

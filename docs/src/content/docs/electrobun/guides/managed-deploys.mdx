@@ -169,7 +169,7 @@ The updater requests ordinary flat filenames beneath it:
 | File | Example |
 | --- | --- |
 | Current update metadata | `stable-macos-arm64-update.json` |
-| Optional checksum for the selected build | `stable-macos-arm64-<hash>-checksum.json` |
+| Optional checksum for the selected build | `stable-macos-arm64-checksum.json` |
 | Next patch from the installed hash | `stable-macos-arm64-<currentHash>.patch` |
 | Full download | The exact archive filename in `update.json` |
 
@@ -180,6 +180,13 @@ service locates that patch among retained releases. Missing or unusable
 patches retain Electrobun's full-download fallback. Hutch generates patches
 using the publicly selected release; the hosting service does not generate
 patches for you.
+
+The checksum file contains the selected build's `hash`, `tarSha256`, and
+`tarSize`. Rebuilding a staged release replaces that target's checksum file;
+each retained release folder keeps its own copy. The public checksum URL uses
+the same platform and prerelease selection as `update.json`. Older updater
+betas can still request a hash-named checksum URL: the service resolves it to
+that eligible retained build without requiring another stored sidecar.
 
 Managed requests send `X-Electrobun-Installation-Id`. Registered prerelease
 installs receive their selected prerelease, and other installs receive the

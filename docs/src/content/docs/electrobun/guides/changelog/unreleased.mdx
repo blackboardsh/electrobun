@@ -39,8 +39,9 @@ Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
   apply approval or veto. The apply helper starts only after approval; `quitReady`
   confirms handoff before ordinary application teardown. Core workers never
   call language-runtime callbacks or force an application exit.
-- Existing static-host filenames, patch chains, checksum sidecars, managed
+- Existing static-host update and patch filenames, patch chains, managed
   installation identity, and direct-update authority rules are preserved.
+  Older hash-named checksum sidecars remain readable.
   Configuration alone does not schedule network checks.
 - Regression coverage checks the JavaScript API facade, native SDK ownership
   and schema handling, missing-symbol errors, approval/veto, worker shutdown,
@@ -57,16 +58,28 @@ Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
   parsers reject unknown fields. Restoring the original shape lets those
   clients discover updates again.
 - Exact archive integrity now lives in
-  `<channel>-<os>-<arch>-<hash>-checksum.json`, containing only `tarSha256` and
-  `tarSize` for the uncompressed tar. The hash in its filename binds the checksum
-  to one target/build without duplicating the manifest. Hutch no longer
-  generates `*-update-v2.json`.
+  `<channel>-<os>-<arch>-checksum.json`, containing the build `hash` plus
+  `tarSha256` and `tarSize` for the uncompressed tar. Hutch generates one
+  fixed-name checksum per channel/target, so rebuilding and uploading to the
+  same release folder replaces it instead of accumulating hash-named files.
+  Patch filenames still use the source build's hash. Hutch no longer generates
+  `*-update-v2.json`.
 - The Updater API validates `*-update.json` before reading the checksum sidecar.
-  A missing sidecar (`404`) preserves older hosting behavior; malformed checksum
-  data or other request failures fail the check. Existing inline integrity
-  fields remain supported by newer clients. Additional manifest fields are
-  ignored while recognized fields remain validated. Streamed downloads,
-  hash-named patch chains, and full-download fallback are unchanged.
+  The sidecar's build hash must match; publication between requests triggers
+  a bounded metadata retry. A `404` at the fixed filename falls back to the
+  older hash-named sidecar. If neither exists, older hosting behavior is
+  preserved; malformed checksum data or other request failures fail the check.
+  Existing inline integrity fields remain supported by newer clients.
+  Additional manifest fields are ignored while recognized fields remain
+  validated. Streamed downloads, hash-named patch chains, and full-download
+  fallback are unchanged.
+- **Checksum cleanup:** After publishing fixed-name sidecars to a self-hosted
+  folder, remove old `<channel>-<os>-<arch>-<hash>-checksum.json` files once.
+  Hutch does not delete remote files automatically. Earlier updater betas
+  requesting the old filename retain their update behavior after a `404`,
+  without the optional tar SHA-256 check. Managed Deploys serves compatible
+  old checksum URLs for eligible retained builds without storing duplicate
+  files. See [checksum cleanup](/electrobun/guides/updates/#remove-old-hash-named-checksum-files).
 - **Update-host cleanup:** If you uploaded `*-update-v2.json` to your servers,
   publish the compatible canonical `*-update.json`, checksum sidecar, full
   archive, and patches. Then delete the old

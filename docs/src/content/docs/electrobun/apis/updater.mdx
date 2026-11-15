@@ -122,13 +122,19 @@ and `error`, and confirm the new version after relaunch.
 
 `checkForUpdate()` requests `<channel>-<os>-<arch>-update.json` from the
 configured release host. After validating an available release, it can request
-`<channel>-<os>-<arch>-<hash>-checksum.json` from the same folder. The sidecar
-contains `tarSha256` and `tarSize` for the exact uncompressed archive; the
+`<channel>-<os>-<arch>-checksum.json` from the same folder. The sidecar contains
+`hash`, which must match the release manifest, plus `tarSha256` and `tarSize`
+for the exact uncompressed archive. Its fixed name lets uploads replace the
+previous checksum for that channel and target. The
 canonical manifest keeps its original `artifact: { file }` shape for older
 clients.
 
-A missing sidecar (`404`) uses the existing update behavior. Other request
-failures, invalid JSON, or an invalid checksum/size pair fail the check.
+If the build hashes differ, the updater retries the metadata check to account
+for publication between requests, then fails if they still disagree. A missing
+fixed-name sidecar (`404`) falls back to
+`<channel>-<os>-<arch>-<hash>-checksum.json` for older hosts. If that is also
+missing, the existing update behavior is used. Other request failures, invalid
+JSON, or an invalid hash/checksum/size fail the check.
 Previously published manifests with inline `artifact.tarSha256` and
 `artifact.tarSize` remain supported; both fields must be valid when present.
 The updater ignores additional manifest fields while validating the fields it
