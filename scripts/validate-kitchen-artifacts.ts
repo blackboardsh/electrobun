@@ -123,14 +123,15 @@ async function main() {
 		!artifact.file.startsWith(`${updatePrefix}-`) || !artifact.file.endsWith(archiveSuffix)) {
 		fail(`${updateName} must retain the original update metadata shape with artifact: { file }`);
 	}
-	const checksumName = `${updatePrefix}-${update.hash}-checksum.json`;
+	const checksumName = `${updatePrefix}-checksum.json`;
 	requireArtifact(files, checksumName, file => file === checksumName);
 	const checksum = JSON.parse(await readFile(join(artifactsDir, checksumName), "utf8"));
 	if (!checksum || Array.isArray(checksum) ||
-		Object.keys(checksum).sort().join(",") !== "tarSha256,tarSize" ||
+		Object.keys(checksum).sort().join(",") !== "hash,tarSha256,tarSize" ||
+		checksum.hash !== update.hash ||
 		typeof checksum.tarSha256 !== "string" || !/^[a-f0-9]{64}$/.test(checksum.tarSha256) ||
 		!Number.isSafeInteger(checksum.tarSize) || checksum.tarSize <= 0) {
-		fail(`${checksumName} must contain the exact tar SHA-256 and byte size`);
+		fail(`${checksumName} must contain the matching build hash, exact tar SHA-256 and byte size`);
 	}
 
 	console.log(`Validated ${files.length} Kitchen artifacts for ${updatePrefix}.`);

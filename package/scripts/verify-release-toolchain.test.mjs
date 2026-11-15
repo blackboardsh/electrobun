@@ -500,6 +500,11 @@ test("release CI verifies provenance before all six Kitchen builds", () => {
 	);
 	const build = workflow.indexOf("      - name: Build Kitchen");
 	const validate = workflow.indexOf("      - name: Validate Kitchen artifacts");
+	const kitchenTests = workflow.indexOf("      - name: Test Kitchen artifact contracts");
+	assert.ok(kitchenTests !== -1 && kitchenTests < build,
+		"Kitchen artifact contracts must run before expensive builds and publication");
+	assert.match(workflow.slice(kitchenTests, workflow.indexOf("\n      - name:", kitchenTests + 1)),
+		/run: hutch test:kitchen-artifacts\n        working-directory: package/);
 	assert.ok(provenance !== -1 && provenance < build);
 	assert.equal(
 		workflow.slice(provenance, build).match(/^      - name:/gm)?.length,

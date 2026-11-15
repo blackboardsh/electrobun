@@ -50,6 +50,7 @@ const expectedReleaseTasks = [
 	"clean:templates",
 	"typecheck",
 	"typecheck:kitchen",
+	"test:kitchen-artifacts",
 	"dev:test",
 	"test:core-host-transport",
 	"test:core-synchronization",

@@ -82,9 +82,15 @@ describe("Kitchen artifact publishing", () => {
 			),
 		).toBe(true);
 		for (const channel of ["canary", "stable"]) {
-			const checksum = `${channel}-win-arm64-new123-checksum.json`;
-			expect(kitchenArtifactKey(`staged/${checksum}`)).toBe(`kitchen/${checksum}`);
-			expect(isKitchenUpdateManifest(`kitchen/${checksum}`)).toBe(false);
+			for (const platform of ["macos", "linux", "win"]) {
+				for (const arch of ["arm64", "x64"]) {
+					for (const suffix of ["checksum.json", "new123-checksum.json"]) {
+						const checksum = `${channel}-${platform}-${arch}-${suffix}`;
+						expect(kitchenArtifactKey(`staged/${checksum}`)).toBe(`kitchen/${checksum}`);
+						expect(isKitchenUpdateManifest(`kitchen/${checksum}`)).toBe(false);
+					}
+				}
+			}
 			expect(
 				isKitchenUpdateManifest(`kitchen/${channel}-win-arm64-update.json`),
 			).toBe(true);
@@ -99,11 +105,11 @@ describe("Kitchen artifact publishing", () => {
 		).toBe(false);
 	});
 
-	test("publishes the canonical manifest after its payloads and hash-named checksum", () => {
+	test("publishes the canonical manifest after its payloads and fixed checksum", () => {
 		const directory = mkdtempSync(join(tmpdir(), "kitchen-publish-order-"));
 		const prefix = "stable-linux-x64";
 		const payload = `${prefix}-zz-payload.tar.zst`;
-		const checksum = `${prefix}-zznew123-checksum.json`;
+		const checksum = `${prefix}-checksum.json`;
 		const manifests = [`${prefix}-update.json`];
 		try {
 			for (const filename of [...manifests, payload, checksum]) {
@@ -169,6 +175,9 @@ describe("Kitchen artifact publishing", () => {
 		).toThrow("Unexpected Kitchen artifact filename");
 		expect(() =>
 			kitchenArtifactKey("stable-win-x64-Example-Setup.exe"),
+		).toThrow("Unexpected Kitchen artifact filename");
+		expect(() =>
+			kitchenArtifactKey("stable-win-x64-extra-new123-checksum.json"),
 		).toThrow("Unexpected Kitchen artifact filename");
 	});
 });

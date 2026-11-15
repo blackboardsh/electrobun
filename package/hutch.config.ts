@@ -25,6 +25,7 @@ export default {
 		typecheck:
 			"hutch src/preload/build.ts && node node_modules/typescript/bin/tsc --noEmit",
 		"typecheck:kitchen": "hutch test scripts/typecheck-kitchen.test.ts ../kitchen/src/tests/rpc-harness-readiness.test.ts && hutch scripts/typecheck-kitchen.ts",
+		"test:kitchen-artifacts": "node scripts/run-bun-test.js ../scripts/validate-kitchen-artifacts.test.ts ../scripts/upload-kitchen-artifacts.test.ts ../scripts/cleanup-kitchen-legacy-manifests.test.ts",
 		"check:release": ["hutch", "scripts/check-release.ts"],
 		"pin:latest":
 			"hutch self update && cd .. && hutch self pin --recursive && hutch cottontail pin --recursive && node package/scripts/sync-release-toolchain-pins.mjs",

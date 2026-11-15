@@ -152,6 +152,10 @@ jobs:
         run: hutch test:npm-bootstrap
         working-directory: package
 
+      - name: Test Kitchen artifact contracts
+        run: hutch test:kitchen-artifacts
+        working-directory: package
+
       - name: Test complete-platform CEF version selection
         run: node --test package/scripts/cef-release-index.test.mjs package/scripts/audit-cef-certificate-revocation.test.mjs
 

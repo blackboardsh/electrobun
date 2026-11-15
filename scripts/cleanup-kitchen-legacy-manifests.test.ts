@@ -26,7 +26,7 @@ function legacyManifest(target: string) {
 	return { ...document, artifact: { file: document.artifact.file } };
 }
 
-function fixture(override?: (url: string, method: string) => Response | undefined, sidecars = false) {
+function fixture(override?: (url: string, method: string) => Response | undefined, sidecars: false | "fixed" | "legacy" = false) {
 	const requests: { url: string; method: string }[] = [];
 	const signed: string[] = [];
 	const client = {
@@ -49,7 +49,12 @@ function fixture(override?: (url: string, method: string) => Response | undefine
 		if (method === "HEAD") {
 			return new Response(null, { headers: { "content-length": "1234" } });
 		}
-		if (sidecars && targets.some((target) => url === `${base}/canary-${target}-${manifest(target).hash}-checksum.json`)) {
+		const fixedTarget = targets.find((target) => url === `${base}/canary-${target}-checksum.json`);
+		if (sidecars && fixedTarget) {
+			return sidecars === "legacy" ? new Response(null, { status: 404 })
+				: Response.json({ hash: manifest(fixedTarget).hash, tarSha256: "a".repeat(64), tarSize: 4096 });
+		}
+		if (sidecars === "legacy" && targets.some((target) => url === `${base}/canary-${target}-${manifest(target).hash}-checksum.json`)) {
 			return Response.json({ tarSha256: "a".repeat(64), tarSize: 4096 });
 		}
 		const target = targets.find((target) => url === `${base}/canary-${target}-update.json`);
@@ -94,47 +99,93 @@ describe("Kitchen canary legacy manifest cleanup", () => {
 		expect(f.signed.every((key) => /^kitchen\/canary-(macos|linux|win)-(arm64|x64)-update-v2\.json$/.test(key))).toBe(true);
 	});
 
-	test("sidecar cleanup validates each target and exact build hash before signing any deletion", async () => {
-		const f = fixture(undefined, true);
+	test("fixed sidecar cleanup validates each target and exact body hash before signing any deletion", async () => {
+		const f = fixture(undefined, "fixed");
 		await cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, f.dependencies);
 		expect(f.requests.slice(0, 18)).toEqual(targets.flatMap((target) => [
 			{ url: `${base}/canary-${target}-update.json`, method: "GET" },
-			{ url: `${base}/canary-${target}-${manifest(target).hash}-checksum.json`, method: "GET" },
+			{ url: `${base}/canary-${target}-checksum.json`, method: "GET" },
 			{ url: `${base}/${manifest(target).artifact.file}`, method: "HEAD" },
 		]));
 		expect(f.requests.slice(18)).toEqual(expectedDeletes.map((key) => ({ url: `https://r2.invalid/${key}`, method: "DELETE" })));
 		expect(f.signed).toEqual(expectedDeletes);
 	});
 
+	test("legacy sidecars are accepted only after a fixed sidecar 404", async () => {
+		const f = fixture(undefined, "legacy");
+		await cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, f.dependencies);
+		expect(f.requests.slice(0, 24)).toEqual(targets.flatMap((target) => [
+			{ url: `${base}/canary-${target}-update.json`, method: "GET" },
+			{ url: `${base}/canary-${target}-checksum.json`, method: "GET" },
+			{ url: `${base}/canary-${target}-${manifest(target).hash}-checksum.json`, method: "GET" },
+			{ url: `${base}/${manifest(target).artifact.file}`, method: "HEAD" },
+		]));
+		expect(f.requests.slice(24)).toEqual(expectedDeletes.map((key) => ({ url: `https://r2.invalid/${key}`, method: "DELETE" })));
+		expect(f.signed).toEqual(expectedDeletes);
+	});
+
 	test("sidecar dry-run validates replacements without signing deletions", async () => {
-		const f = fixture(undefined, true);
+		const f = fixture(undefined, "fixed");
 		await cleanupKitchenLegacyManifests({ expectedVersion: version }, { ...f.dependencies, client: undefined });
 		expect(f.requests.map((r) => r.method)).toEqual(targets.flatMap(() => ["GET", "GET", "HEAD"]));
 		expect(f.signed).toEqual([]);
 	});
 
-	test("missing, invalid, redirected, oversized, or unavailable checksum on the last platform prevents all deletion", async () => {
-		const checksumUrl = `${base}/canary-win-x64-${manifest("win-x64").hash}-checksum.json`;
+	test("invalid, redirected, oversized, or unavailable fixed checksum prevents all deletion without a legacy fallback", async () => {
+		const checksumUrl = `${base}/canary-win-x64-checksum.json`;
+		const hash = manifest("win-x64").hash;
 		for (const response of [
-			() => new Response(null, { status: 404 }),
 			() => new Response(null, { status: 503 }),
 			() => new Response(null, { status: 302, headers: { location: "https://another.app/checksum.json" } }),
 			() => new Response(null),
 			() => new Response("not JSON"),
 			() => new Response(" ".repeat(64 * 1024 + 1)),
 			() => { throw new DOMException("Timed out", "TimeoutError"); },
-			...[null, [], {}, { tarSha256: "a".repeat(64) }, { tarSize: 4096 },
-				{ tarSha256: "invalid", tarSize: 4096 },
-				{ tarSha256: "a".repeat(64), tarSize: 0 },
-				{ tarSha256: "a".repeat(64), tarSize: Number.MAX_SAFE_INTEGER + 1 },
-				{ tarSha256: "a".repeat(64), tarSize: "4096" },
+			...[null, [], {}, { hash, tarSha256: "a".repeat(64) }, { hash, tarSize: 4096 },
+				{ tarSha256: "a".repeat(64), tarSize: 4096 },
+				...[null, 42, "wrong123", "bad_hash"].map((hash) => ({ hash, tarSha256: "a".repeat(64), tarSize: 4096 })),
+				{ hash, tarSha256: "invalid", tarSize: 4096 },
+				{ hash, tarSha256: "a".repeat(64), tarSize: 0 },
+				{ hash, tarSha256: "a".repeat(64), tarSize: Number.MAX_SAFE_INTEGER + 1 },
+				{ hash, tarSha256: "a".repeat(64), tarSize: "4096" },
 			].map((body) => () => Response.json(body)),
 		]) {
-			const f = fixture((url) => url === checksumUrl ? response() : undefined, true);
+			const f = fixture((url) => url === checksumUrl ? response() : undefined, "fixed");
 			await expect(cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, f.dependencies)).rejects.toThrow();
+			expect(f.requests.some((r) => r.url.endsWith(`-${manifest("win-x64").hash}-checksum.json`))).toBe(false);
 			expect(f.signed).toEqual([]);
 			expect(f.requests.filter((r) => r.method === "DELETE")).toEqual([]);
 		}
+	});
+
+	test("missing or invalid legacy sidecar and invalid optional legacy hash prevent every deletion", async () => {
+		const checksumUrl = `${base}/canary-win-x64-${manifest("win-x64").hash}-checksum.json`;
+		for (const response of [
+			() => new Response(null, { status: 404 }),
+			() => new Response(null, { status: 503 }),
+			...[null, 42, "wrong123", "bad_hash"].map((hash) => () =>
+				Response.json({ hash, tarSha256: "a".repeat(64), tarSize: 4096 })),
+			...[{}, { tarSize: 4096 }, { tarSha256: "invalid", tarSize: 4096 },
+				{ tarSha256: "a".repeat(64), tarSize: 0 },
+				{ tarSha256: "a".repeat(64), tarSize: "4096" },
+			].map((body) => () => Response.json(body)),
+		]) {
+			const f = fixture((url) => url === checksumUrl ? response() : undefined, "legacy");
+			await expect(cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, f.dependencies)).rejects.toThrow();
+			expect(f.requests.slice(-2)).toEqual([
+				{ url: `${base}/canary-win-x64-checksum.json`, method: "GET" },
+				{ url: checksumUrl, method: "GET" },
+			]);
+			expect(f.signed).toEqual([]);
+			expect(f.requests.filter((r) => r.method === "DELETE")).toEqual([]);
+		}
+	});
+
+	test("legacy sidecars may include a matching body hash", async () => {
+		const f = fixture((url) => url.endsWith(`-${manifest("win-x64").hash}-checksum.json`)
+			? Response.json({ hash: manifest("win-x64").hash, tarSha256: "a".repeat(64), tarSize: 4096 }) : undefined, "legacy");
+		await cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, f.dependencies);
+		expect(f.signed).toEqual(expectedDeletes);
 	});
 
 	test("a valid sidecar cannot hide partial or invalid inline integrity", async () => {
@@ -146,9 +197,9 @@ describe("Kitchen canary legacy manifest cleanup", () => {
 				if (url !== `${base}/canary-win-x64-update.json`) return;
 				const document = legacyManifest("win-x64");
 				return Response.json({ ...document, artifact: { ...document.artifact, ...integrity } });
-			}, true);
+			}, "fixed");
 			await expect(cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, f.dependencies)).rejects.toThrow("Canonical manifest win-x64");
-			expect(f.requests.some((r) => r.url.endsWith(`canary-win-x64-${manifest("win-x64").hash}-checksum.json`))).toBe(false);
+			expect(f.requests.some((r) => r.url.endsWith("canary-win-x64-checksum.json"))).toBe(false);
 			expect(f.signed).toEqual([]);
 			expect(f.requests.filter((r) => r.method === "DELETE")).toEqual([]);
 		}

@@ -10,6 +10,7 @@ export const releaseCheckTasks = [
 	["Clean template artifacts", "clean:templates"],
 	["Typecheck", "typecheck"],
 	["Kitchen typecheck", "typecheck:kitchen"],
+	["Kitchen artifact contract tests", "test:kitchen-artifacts"],
 	["Development command tests", "dev:test"],
 	["Core host transport tests", "test:core-host-transport"],
 	["Core synchronization stress", "test:core-synchronization"],

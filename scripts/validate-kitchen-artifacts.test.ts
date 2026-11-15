@@ -9,35 +9,54 @@ import {
 
 describe("Kitchen release artifact validation", () => {
 	for (const channel of ["stable", "canary"] as const) {
-		test(`${channel} release validation requires a hash-bound sidecar and legacy-compatible update.json`, () => {
-			const root = mkdtempSync(join(tmpdir(), "kitchen-sidecar-"));
-			const prefix = `${channel}-linux-x64`;
-			const update = { schemaVersion: 1, identifier: "sh.blackboard.electrobun-kitchen", channel,
-				version: "1.2.3", hash: "new123", platform: "linux", arch: "x64",
-				artifact: { file: `${prefix}-Example.tar.zst` } };
-			const checksum = { tarSha256: "a".repeat(64), tarSize: 4096 };
-			const updatePath = join(root, `${prefix}-update.json`);
-			const checksumPath = join(root, `${prefix}-${update.hash}-checksum.json`);
-			const validate = () => Bun.spawnSync([process.execPath, join(import.meta.dir, "validate-kitchen-artifacts.ts"),
-				root, channel, "linux", "x64", update.version]);
-			try {
-				writeFileSync(updatePath, JSON.stringify(update));
-				writeFileSync(join(root, update.artifact.file), "archive");
-				writeFileSync(join(root, `${channel === "stable" ? "linux-x64" : prefix}-Example-Setup.tar.gz`), "installer");
-				expect(validate().exitCode).not.toBe(0);
-				writeFileSync(checksumPath, JSON.stringify(checksum));
-				expect(validate().exitCode).toBe(0);
-				writeFileSync(updatePath, JSON.stringify({ ...update, artifact: { ...update.artifact, ...checksum } }));
-				expect(validate().stderr.toString()).toContain("original update metadata shape");
-				writeFileSync(updatePath, JSON.stringify(update));
-				renameSync(checksumPath, join(root, `${prefix}-other456-checksum.json`));
-				expect(validate().exitCode).not.toBe(0);
-				for (const invalid of [{ tarSize: 4096 }, { ...checksum, tarSha256: "invalid" }, { ...checksum, tarSize: 0 }]) {
-					writeFileSync(checksumPath, JSON.stringify(invalid));
+		for (const [platform, arch] of [
+			["macos", "arm64"], ["macos", "x64"],
+			["linux", "arm64"], ["linux", "x64"],
+			["win", "arm64"], ["win", "x64"],
+		] as const) {
+			test(`${channel}-${platform}-${arch} requires a fixed sidecar bound by JSON hash and legacy-compatible update.json`, () => {
+				const root = mkdtempSync(join(tmpdir(), "kitchen-sidecar-"));
+				const prefix = `${channel}-${platform}-${arch}`;
+				const archiveSuffix = platform === "macos" ? ".app.tar.zst" : ".tar.zst";
+				const installerSuffix = platform === "macos" ? ".dmg" : platform === "win" ? ".zip" : ".tar.gz";
+				const update = { schemaVersion: 1, identifier: "sh.blackboard.electrobun-kitchen", channel,
+					version: "1.2.3", hash: "new123", platform, arch,
+					artifact: { file: `${prefix}-Example${archiveSuffix}` } };
+				const checksum = { hash: update.hash, tarSha256: "a".repeat(64), tarSize: 4096 };
+				const updatePath = join(root, `${prefix}-update.json`);
+				const checksumPath = join(root, `${prefix}-checksum.json`);
+				const legacyChecksumPath = join(root, `${prefix}-${update.hash}-checksum.json`);
+				const validate = () => Bun.spawnSync([process.execPath, join(import.meta.dir, "validate-kitchen-artifacts.ts"),
+					root, channel, platform, arch, update.version]);
+				try {
+					writeFileSync(updatePath, JSON.stringify(update));
+					writeFileSync(join(root, update.artifact.file), "archive");
+					writeFileSync(join(root, `${channel === "stable" ? `${platform}-${arch}` : prefix}-Example-Setup${installerSuffix}`), "installer");
 					expect(validate().exitCode).not.toBe(0);
-				}
-			} finally { rmSync(root, { recursive: true, force: true }); }
-		});
+					writeFileSync(checksumPath, JSON.stringify(checksum));
+					expect(validate().exitCode).toBe(0);
+					writeFileSync(updatePath, JSON.stringify({ ...update, artifact: { ...update.artifact, ...checksum } }));
+					expect(validate().stderr.toString()).toContain("original update metadata shape");
+					writeFileSync(updatePath, JSON.stringify(update));
+					renameSync(checksumPath, legacyChecksumPath);
+					expect(validate().exitCode).not.toBe(0);
+					for (const invalid of [
+						{ tarSha256: checksum.tarSha256, tarSize: checksum.tarSize },
+						{ ...checksum, hash: "other456" }, { ...checksum, hash: null },
+						{ hash: update.hash, tarSize: 4096 },
+						{ ...checksum, tarSha256: "invalid" }, { ...checksum, tarSize: 0 },
+					]) {
+						writeFileSync(checksumPath, JSON.stringify(invalid));
+						expect(validate().exitCode).not.toBe(0);
+					}
+					// Rebuilding the same version replaces one fixed sidecar. Its JSON
+					// must follow the new build hash, while update.json retains its original shape.
+					writeFileSync(updatePath, JSON.stringify({ ...update, hash: "rebuilt456" }));
+					writeFileSync(checksumPath, JSON.stringify({ ...checksum, hash: "rebuilt456" }));
+					expect(validate().exitCode).toBe(0);
+				} finally { rmSync(root, { recursive: true, force: true }); }
+			});
+		}
 	}
 
 	test("stable updates stay channel-prefixed while installers are unsuffixed", () => {

@@ -98,15 +98,24 @@ export async function cleanupKitchenLegacyManifests(
 			// Resolve only the validated target/hash beneath the fixed Kitchen base.
 			// Cleanup needs proof of the replacement's integrity, so unlike normal
 			// update checks a missing sidecar must never permit deletion.
-			const checksum = await request(`${KITCHEN_ARTIFACT_PUBLIC_BASE_URL}/${prefix}-${manifest.hash}-checksum.json`, {
+			let checksum = await request(`${KITCHEN_ARTIFACT_PUBLIC_BASE_URL}/${prefix}-checksum.json`, {
 				redirect: "error", cache: "no-store", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 			});
+			const legacy = checksum.status === 404;
+			if (legacy) {
+				await checksum.body?.cancel();
+				checksum = await request(`${KITCHEN_ARTIFACT_PUBLIC_BASE_URL}/${prefix}-${manifest.hash}-checksum.json`, {
+					redirect: "error", cache: "no-store", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+				});
+			}
 			if (checksum.status !== 200) {
 				await checksum.body?.cancel();
 				throw new Error(`Checksum ${target}: HTTP ${checksum.status}`);
 			}
-			if (!validTarIntegrity(await readDocument(checksum, `Checksum ${target}`))) {
-				throw new Error(`Checksum ${target} must contain valid tar integrity`);
+			const document = await readDocument(checksum, `Checksum ${target}`);
+			if (!validTarIntegrity(document) ||
+				((!legacy || Object.hasOwn(document, "hash")) && document.hash !== manifest.hash)) {
+				throw new Error(`Checksum ${target} must contain valid tar integrity for build ${manifest.hash}`);
 			}
 		} else if (!validTarIntegrity(artifact)) {
 			throw new Error(`Canonical manifest ${target} must identify Kitchen canary ${expectedVersion} with valid tar integrity`);
