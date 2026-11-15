@@ -1809,51 +1809,46 @@ test "missing or invalid response policies preserve custom collection state and 
     }
 }
 
-const RateLimitedTransport = struct {
-    calls: std.atomic.Value(usize) = .init(0),
-    fn send(context: ?*anyopaque, _: A, _: Io, _: []const u8, _: []const u8) !Delivery {
-        const self: *@This() = @ptrCast(@alignCast(context.?));
-        _ = self.calls.fetchAdd(1, .acq_rel);
-        return .{ .acknowledged = false, .retry_after_ms = 60_000 };
-    }
-};
-
-test "Retry-After survives flush and restart while pending basic events remain queued" {
+test "HTTP Retry-After survives flush and restart while pending basic events remain queued" {
     var temp = std.testing.tmpDir(.{});
     defer temp.cleanup();
     const a = std.testing.allocator;
     const path = try temp.dir.realPathFileAlloc(std.testing.io, ".", a);
     defer a.free(path);
-    var first = try Reporter.init(a, std.testing.io, fixtureOptions(path));
-    var transport: RateLimitedTransport = .{};
-    first.send_context = &transport;
-    first.send_fn = RateLimitedTransport.send;
-    try first.start();
-    var ready = false;
-    for (0..200) |_| {
-        first.mutex.lockUncancelable(std.testing.io);
-        ready = first.retry_after_ms > Io.Clock.real.now(std.testing.io).toMilliseconds();
-        first.mutex.unlock(std.testing.io);
-        if (ready) break;
-        try Io.sleep(std.testing.io, .fromMilliseconds(10), .awake);
+    var server = try HttpTestServer.init();
+    defer server.deinit();
+    server.steps = &.{ .{ .status = 429, .headers = "Retry-After: 60\r\n" }, .{} };
+    const base = try server.url("");
+    defer a.free(base);
+    const options = httpFixtureOptions(path, base);
+    var serving = try std.testing.io.concurrent(HttpTestServer.serve, .{&server});
+    defer serving.cancel(std.testing.io) catch {};
+    {
+        var first = try Reporter.init(a, std.testing.io, options);
+        defer first.deinit();
+        try first.start();
+        var ready = false;
+        for (0..200) |_| {
+            first.mutex.lockUncancelable(std.testing.io);
+            ready = first.retry_after_ms > Io.Clock.real.now(std.testing.io).toMilliseconds();
+            first.mutex.unlock(std.testing.io);
+            if (ready) break;
+            try Io.sleep(std.testing.io, .fromMilliseconds(10), .awake);
+        }
+        try std.testing.expect(ready);
+        first.flush();
+        try Io.sleep(std.testing.io, .fromMilliseconds(1200), .awake);
+        try std.testing.expectEqual(@as(usize, 1), server.received.load(.acquire));
     }
-    try std.testing.expect(ready);
-    first.flush();
-    try Io.sleep(std.testing.io, .fromMilliseconds(1200), .awake);
-    try std.testing.expectEqual(@as(usize, 1), transport.calls.load(.acquire));
-    first.deinit();
 
-    var reopened = try Reporter.init(a, std.testing.io, fixtureOptions(path));
+    var reopened = try Reporter.init(a, std.testing.io, options);
     defer reopened.deinit();
     try std.testing.expect(reopened.retry_after_ms > Io.Clock.real.now(std.testing.io).toMilliseconds());
     try std.testing.expect(reopened.queue.items.len > 0);
-    var success: SuccessfulTransport = .{};
-    reopened.send_context = &success;
-    reopened.send_fn = SuccessfulTransport.send;
     try reopened.start();
     reopened.flush();
     try Io.sleep(std.testing.io, .fromMilliseconds(1200), .awake);
-    try std.testing.expectEqual(@as(usize, 0), success.calls.load(.acquire));
+    try std.testing.expectEqual(@as(usize, 1), server.received.load(.acquire));
 }
 
 test "interrupted recovery keeps old timestamps build identity duration and delivery IDs after a long gap" {
@@ -2022,4 +2017,284 @@ test "old journal days do not evict newer custom events on close or recovery" {
     recovered.current_day = @divFloor(recovered.last_real_ms, day_ms);
     recovered.stop();
     for (recovered.queue.items) |entry| try std.testing.expect(entry.timestamp_ms > old + day_ms);
+}
+
+// Exercise the public ingestion contract over a real socket. This deliberately
+// has no Cloud backend dependency and never substitutes Reporter's transport.
+const HttpTestServer = struct {
+    listener: Io.net.Server,
+    steps: []const Step = &.{},
+    bodies: std.ArrayList([]u8) = .empty,
+    received: std.atomic.Value(usize) = .init(0),
+    const path = "/v1/electrobun/apps/app_example/insights";
+    const Step = struct {
+        status: u16 = 202,
+        body: []const u8 = "{\"accepted\":true}",
+        headers: []const u8 = "",
+    };
+    fn init() !HttpTestServer {
+        const address = try Io.net.IpAddress.parse("127.0.0.1", 0);
+        return .{ .listener = try address.listen(std.testing.io, .{}) };
+    }
+    fn deinit(self: *HttpTestServer) void {
+        self.listener.deinit(std.testing.io);
+        for (self.bodies.items) |body| std.testing.allocator.free(body);
+        self.bodies.deinit(std.testing.allocator);
+    }
+    fn url(self: *HttpTestServer, suffix: []const u8) ![]u8 {
+        return std.fmt.allocPrint(std.testing.allocator, "http://127.0.0.1:{d}{s}", .{ self.listener.socket.address.getPort(), suffix });
+    }
+    fn serve(self: *HttpTestServer) !void {
+        const io = std.testing.io;
+        for (self.steps) |step| {
+            const connection = try self.listener.accept(io);
+            defer connection.close(io);
+            // Count any connection before parsing so a redirected GET cannot
+            // hide behind the POST contract assertion below.
+            _ = self.received.fetchAdd(1, .release);
+            var read_buffer: [4096]u8 = undefined;
+            var reader = connection.reader(io, &read_buffer);
+            try std.testing.expectEqualStrings("POST " ++ path ++ " HTTP/1.1\r\n", try reader.interface.takeDelimiterInclusive('\n'));
+            var length: ?usize = null;
+            var content_type = false;
+            var encoding = false;
+            while (true) {
+                const header = try reader.interface.takeDelimiterInclusive('\n');
+                if (eq(header, "\r\n")) break;
+                const colon = std.mem.indexOfScalar(u8, header, ':') orelse return error.InvalidTestHttpHeader;
+                const name = header[0..colon];
+                const value = std.mem.trim(u8, header[colon + 1 ..], " \r\n");
+                if (std.ascii.eqlIgnoreCase(name, "content-length")) {
+                    try std.testing.expect(length == null);
+                    length = try std.fmt.parseInt(usize, value, 10);
+                } else if (std.ascii.eqlIgnoreCase(name, "content-type")) {
+                    try std.testing.expect(!content_type);
+                    content_type = true;
+                    try std.testing.expectEqualStrings("application/json", value);
+                } else if (std.ascii.eqlIgnoreCase(name, "accept-encoding")) {
+                    encoding = true;
+                    try std.testing.expectEqualStrings("identity", value);
+                }
+                // Insights is public ingestion: identity is in the JSON body,
+                // not an account credential or the updater's routing header.
+                for ([_][]const u8{ "authorization", "cookie", "x-electrobun-installation-id", "transfer-encoding" }) |forbidden| {
+                    try std.testing.expect(!std.ascii.eqlIgnoreCase(name, forbidden));
+                }
+            }
+            try std.testing.expect(content_type and encoding);
+            const size = length orelse return error.MissingTestHttpBodyLength;
+            try std.testing.expect(size > 0 and size <= max_batch_bytes);
+            {
+                const bytes = try std.testing.allocator.alloc(u8, size);
+                errdefer std.testing.allocator.free(bytes);
+                try reader.interface.readSliceAll(bytes);
+                try self.bodies.append(std.testing.allocator, bytes);
+            }
+            var write_buffer: [8192]u8 = undefined;
+            var writer = connection.writer(io, &write_buffer);
+            try writer.interface.print("HTTP/1.1 {d} Response\r\nConnection: close\r\n{s}", .{ step.status, step.headers });
+            if (step.status != 204) try writer.interface.print("Content-Length: {d}\r\n", .{step.body.len});
+            try writer.interface.writeAll("\r\n");
+            if (step.status != 204) try writer.interface.writeAll(step.body);
+            try writer.interface.flush();
+        }
+    }
+};
+
+fn httpFixtureOptions(path: []const u8, base: []const u8) Options {
+    var options = fixtureOptions(path);
+    options.appId = "app_example";
+    options.apiUrl = base;
+    return options;
+}
+
+fn testHttpDelivery(server: *HttpTestServer, reporter: *Reporter, body: []const u8) !Delivery {
+    var serving = try std.testing.io.concurrent(HttpTestServer.serve, .{server});
+    defer serving.cancel(std.testing.io) catch {};
+    const delivery = try reporter.sendTimed(body);
+    try serving.await(std.testing.io);
+    return delivery;
+}
+
+fn waitHttpAcknowledgement(reporter: *Reporter, custom_enabled: bool) !void {
+    for (0..400) |_| {
+        reporter.mutex.lockUncancelable(std.testing.io);
+        const ready = reporter.custom_events_enabled == custom_enabled and reporter.queue.items.len == 0;
+        reporter.mutex.unlock(std.testing.io);
+        if (ready) return;
+        try Io.sleep(std.testing.io, .fromMilliseconds(10), .awake);
+    }
+    return error.TestHttpAcknowledgementTimeout;
+}
+
+test "Insights HTTP sends app scoped JSON and preserves installation build and target metadata" {
+    const a = std.testing.allocator;
+    for ([_][]const u8{ "stable", "canary" }) |channel| {
+        for ([_][]const u8{ "macos", "linux", "win" }) |platform| {
+            for ([_][]const u8{ "arm64", "x64" }) |arch| {
+                var temp = std.testing.tmpDir(.{});
+                defer temp.cleanup();
+                const path = try temp.dir.realPathFileAlloc(std.testing.io, ".", a);
+                defer a.free(path);
+                var server = try HttpTestServer.init();
+                defer server.deinit();
+                server.steps = &.{.{}};
+                // Hosted API prefixes and custom origins must resolve the
+                // same scoped ingestion path, without doubling /v1/electrobun.
+                const base = try server.url(if (eq(channel, "stable")) "/v1/electrobun/" else "");
+                defer a.free(base);
+                var options = httpFixtureOptions(path, base);
+                options.channel = channel;
+                options.platform = platform;
+                options.arch = arch;
+                options.version = "1.2.3";
+                options.buildHash = "build-456";
+                var reporter = try Reporter.init(a, std.testing.io, options);
+                defer reporter.deinit();
+                try reporter.track("button.clicked", "{\"label\":\"café\",\"count\":2}");
+                const pending = (try reporter.batch()).?;
+                defer a.free(pending.body);
+                const delivery = try testHttpDelivery(&server, &reporter, pending.body);
+                try std.testing.expect(delivery.acknowledged);
+                try std.testing.expectEqualStrings(pending.body, server.bodies.items[0]);
+                const parsed = try std.json.parseFromSlice(std.json.Value, a, server.bodies.items[0], .{});
+                defer parsed.deinit();
+                const body = parsed.value;
+                try std.testing.expect(onlyFields(body, &.{ "schemaVersion", "installationId", "sessionId", "appVersion", "buildHash", "channel", "os", "arch", "distribution", "events" }));
+                try std.testing.expectEqual(@as(?i64, 1), integerField(body, "schemaVersion"));
+                try std.testing.expectEqualStrings(&reporter.installation_id, stringField(body, "installationId").?);
+                try std.testing.expectEqualStrings(&reporter.session_id, stringField(body, "sessionId").?);
+                for ([_]struct { key: []const u8, value: []const u8 }{
+                    .{ .key = "appVersion", .value = "1.2.3" }, .{ .key = "buildHash", .value = "build-456" },
+                    .{ .key = "channel", .value = channel },    .{ .key = "os", .value = platform },
+                    .{ .key = "arch", .value = arch },          .{ .key = "distribution", .value = "direct" },
+                }) |field| try std.testing.expectEqualStrings(field.value, stringField(body, field.key).?);
+                const events = body.object.get("events").?.array.items;
+                try std.testing.expectEqual(@as(usize, 1), events.len);
+                try std.testing.expectEqualStrings("button.clicked", stringField(events[0], "name").?);
+                try std.testing.expectEqualStrings(&pending.ids[0], stringField(events[0], "id").?);
+            }
+        }
+    }
+}
+
+test "real HTTP worker applies custom collection policy while basic lifecycle delivery continues" {
+    const a = std.testing.allocator;
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    const path = try temp.dir.realPathFileAlloc(std.testing.io, ".", a);
+    defer a.free(path);
+    var server = try HttpTestServer.init();
+    defer server.deinit();
+    server.steps = &.{
+        .{ .body = "{\"accepted\":true,\"collection\":{\"customEvents\":false}}" },
+        .{ .body = "{\"accepted\":true,\"collection\":{\"customEvents\":true}}" },
+        .{},
+    };
+    const base = try server.url("");
+    defer a.free(base);
+    var reporter = try Reporter.init(a, std.testing.io, httpFixtureOptions(path, base));
+    defer reporter.deinit();
+    try reporter.track("before-policy", "{}");
+    var serving = try std.testing.io.concurrent(HttpTestServer.serve, .{&server});
+    defer serving.cancel(std.testing.io) catch {};
+    try reporter.start();
+    try waitHttpAcknowledgement(&reporter, false);
+    try std.testing.expectError(error.InsightsDisabled, reporter.track("disabled-custom", "{}"));
+    reporter.mutex.lockUncancelable(std.testing.io);
+    const consent_preserved = reporter.enabled;
+    reporter.finishSession() catch |err| {
+        reporter.mutex.unlock(std.testing.io);
+        return err;
+    };
+    reporter.mutex.unlock(std.testing.io);
+    try std.testing.expect(consent_preserved);
+    reporter.flush();
+    try waitHttpAcknowledgement(&reporter, true);
+    try reporter.track("after-policy", "{}");
+    reporter.flush();
+    try waitHttpAcknowledgement(&reporter, true);
+    reporter.stop();
+    try serving.await(std.testing.io);
+    try std.testing.expectEqual(@as(usize, 3), server.bodies.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, server.bodies.items[0], "electrobun.app.open") != null);
+    try std.testing.expect(std.mem.indexOf(u8, server.bodies.items[1], "electrobun.app.close") != null);
+    try std.testing.expect(std.mem.indexOf(u8, server.bodies.items[1], "disabled-custom") == null);
+    try std.testing.expect(std.mem.indexOf(u8, server.bodies.items[2], "after-policy") != null);
+}
+
+test "Insights HTTP acknowledgements retry status and Retry-After match ingestion contract" {
+    const Case = struct { status: u16, acknowledged: bool, retry: ?i64 = null, header: []const u8 = "" };
+    for ([_]Case{
+        .{ .status = 202, .acknowledged = true },
+        .{ .status = 200, .acknowledged = false },
+        .{ .status = 204, .acknowledged = false },
+        .{ .status = 400, .acknowledged = true },
+        .{ .status = 404, .acknowledged = true },
+        .{ .status = 413, .acknowledged = true },
+        .{ .status = 415, .acknowledged = true },
+        .{ .status = 408, .acknowledged = false },
+        .{ .status = 425, .acknowledged = false },
+        .{ .status = 429, .acknowledged = false, .retry = 60_000, .header = "Retry-After: 60\r\n" },
+        .{ .status = 429, .acknowledged = false, .retry = 3_600_000, .header = "retry-after: 3600\r\n" },
+        .{ .status = 503, .acknowledged = false, .retry = 60_000, .header = "Retry-After: 60\r\n" },
+        .{ .status = 503, .acknowledged = false, .header = "Retry-After: invalid\r\n" },
+        .{ .status = 500, .acknowledged = false },
+    }) |case| {
+        var server = try HttpTestServer.init();
+        defer server.deinit();
+        server.steps = &.{.{ .status = case.status, .headers = case.header, .body = "{\"collection\":{\"customEvents\":false}}" }};
+        const endpoint = try server.url(HttpTestServer.path);
+        defer std.testing.allocator.free(endpoint);
+        var serving = try std.testing.io.concurrent(HttpTestServer.serve, .{&server});
+        defer serving.cancel(std.testing.io) catch {};
+        const delivery = try sendHttp(null, std.testing.allocator, std.testing.io, endpoint, "{\"schemaVersion\":1}");
+        try serving.await(std.testing.io);
+        try std.testing.expectEqual(case.acknowledged, delivery.acknowledged);
+        try std.testing.expectEqual(case.retry, delivery.retry_after_ms);
+        try std.testing.expectEqual(if (case.status == 202) @as(?bool, false) else null, delivery.custom_events);
+    }
+}
+
+test "Insights HTTP malformed or oversized accepted response cannot toggle collection or retry accepted events" {
+    const oversized = @as([4096]u8, @splat(' ')) ++ "{\"collection\":{\"customEvents\":false}}";
+    for ([_][]const u8{ "", "not-json", "[]", "{\"collection\":{\"customEvents\":\"false\"}}", oversized }) |body| {
+        var server = try HttpTestServer.init();
+        defer server.deinit();
+        server.steps = &.{.{ .body = body }};
+        const endpoint = try server.url(HttpTestServer.path);
+        defer std.testing.allocator.free(endpoint);
+        var serving = try std.testing.io.concurrent(HttpTestServer.serve, .{&server});
+        defer serving.cancel(std.testing.io) catch {};
+        const delivery = try sendHttp(null, std.testing.allocator, std.testing.io, endpoint, "{}");
+        try serving.await(std.testing.io);
+        try std.testing.expect(delivery.acknowledged);
+        try std.testing.expect(delivery.custom_events == null);
+    }
+}
+
+test "Insights HTTP never forwards installation or event data through redirects" {
+    for ([_]u16{ 301, 302, 303, 307, 308 }) |status| {
+        var destination = try HttpTestServer.init();
+        defer destination.deinit();
+        destination.steps = &.{.{}};
+        const redirected = try destination.url(HttpTestServer.path);
+        defer std.testing.allocator.free(redirected);
+        const location = try std.fmt.allocPrint(std.testing.allocator, "Location: {s}\r\n", .{redirected});
+        defer std.testing.allocator.free(location);
+        var server = try HttpTestServer.init();
+        defer server.deinit();
+        server.steps = &.{.{ .status = status, .headers = location }};
+        const endpoint = try server.url(HttpTestServer.path);
+        defer std.testing.allocator.free(endpoint);
+        var watching = try std.testing.io.concurrent(HttpTestServer.serve, .{&destination});
+        defer watching.cancel(std.testing.io) catch {};
+        var serving = try std.testing.io.concurrent(HttpTestServer.serve, .{&server});
+        defer serving.cancel(std.testing.io) catch {};
+        const delivery = try sendHttp(null, std.testing.allocator, std.testing.io, endpoint, "{\"installationId\":\"private-install\",\"events\":[{\"name\":\"private-event\"}]}");
+        try serving.await(std.testing.io);
+        try std.testing.expect(!delivery.acknowledged);
+        try std.testing.expect(delivery.custom_events == null);
+        try std.testing.expectEqual(@as(usize, 0), destination.received.load(.acquire));
+    }
 }
