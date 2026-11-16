@@ -128,6 +128,7 @@ connected Mac, Windows, and Linux machines. Dash itself is built with Electrobun
 - [StoryForge](https://github.com/StoryForgeApp/StoryForge) - desktop app for Vintage Story players to switch between game versions, modpacks, servers, and accounts
 - [tokenpass-desktop](https://github.com/b-open-io/tokenpass-desktop) - desktop app that runs the Sigma Identity stack locally for Bitcoin-backed authentication
 - [Toonflow](https://github.com/HBAI-Ltd/Toonflow-app) - AI video creation app with scriptwriting, storyboarding, and image and video generation on an infinite canvas
+- [Upkeep](https://github.com/lcestou/upkeep) - Linux tray app that keeps the apps your package manager misses up to date: AppImages, release binaries, .deb and .rpm files, source builds and self-updating CLI tools
 - [VibesOS](https://github.com/popmechanic/VibesOS) - A GUI for Claude Code that makes it easy to vibe code simple, un-hackable apps
 - [VoiceVault](https://github.com/PJH720/VoiceVault) - AI-powered voice recorder with transcription, summarization, and RAG search
 - [warren](https://github.com/Loa212/warren) - open-source, peer-to-peer terminal mesh for accessing your machines from any device without SSH keys or config files
