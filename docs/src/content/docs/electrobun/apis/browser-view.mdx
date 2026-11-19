@@ -243,6 +243,17 @@ While Linux CEF creates its browser, it retains the latest `loadURL()` or
 On macOS, WKWebView uses file-URL loading for local files. `getPageZoom()` reads
 on the main thread after pending initialization and zoom changes.
 
+## Embedded frames
+
+On macOS and Linux system webviews, Electrobun's privileged bridge wrappers and
+custom preloads are installed in the main frame. Linux authenticates native
+bridge messages and preserves that authentication when a custom preload changes.
+
+If an embedded iframe needs to communicate with the app, send messages to its
+parent with `postMessage`. The parent should validate the message origin, source,
+and contents before calling the app's RPC handlers. Console forwarding from
+child frames does not grant access to those handlers.
+
 ## Host message queue diagnostics
 
 `getHostMessageQueueStats()` reports the main

@@ -110,6 +110,22 @@ Changes since [v2.0.6](/electrobun/guides/changelog/v2-0-6/).
   Cold builds no longer depend on compatible PowerShell archive modules being
   inherited from the calling shell.
 
+## Build workflow defaults
+
+- The paired [Hutch toolchain](/electrobun/guides/hutch/) uses Bun by default
+  for configuration evaluation, JavaScript/TypeScript scripts, tests, hooks,
+  and build helpers. Default workflows no longer need to download Cottontail.
+  Cottontail remains an explicit experimental option through
+  `HUTCH_RUNTIME=cottontail`; this does not change the application's configured
+  main-process runtime.
+
+## Linux system webviews
+
+- Native bridge messages are authenticated, and privileged bridge wrappers and
+  custom preloads are installed in the main frame. Updating a custom preload
+  preserves bridge authentication. Embedded frames should communicate through
+  validated messages to their parent; see [embedded frames](/electrobun/apis/browser-view/#embedded-frames).
+
 ## Warren UI fixes
 
 - `Show` retains its current branch when reactive data changes without changing

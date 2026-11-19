@@ -156,6 +156,27 @@ hostname, selects the app before installation membership is checked.
 This preview does not provide percentage rollouts or automated smoke tests.
 Use a new version for forward fixes.
 
+## Pause release downloads
+
+Open a public or prerelease release in Dash and choose **Pause release
+downloads** to stop serving every file in that release, across all its
+platforms. This includes update metadata, installers, archives, checksums,
+patches, and direct versioned file URLs. Other releases and channels stay
+available.
+
+Pausing keeps the files and public/prerelease selections in place. Requests
+for the paused release receive HTTP `503` with `Cache-Control: no-store` and
+an advisory `Retry-After` header. A paused prerelease does not fall back to the
+public selection, and no installed app is rolled back. The updater reports a
+failed check; your app can retry at its next normal check. It does not schedule
+a retry from that header automatically.
+
+Choose **Resume release downloads** to serve the files again, or publish a
+new version with a forward fix. Resuming an older release does not republish
+it or move selections back to it. Already cached downloads, transfers in
+progress, and updates already downloaded or prepared on a client cannot be
+recalled.
+
 ## Update URLs and patch chains
 
 The default base URL is supplied by the managed app configuration:
@@ -195,11 +216,13 @@ origin. Self-hosted update requests do not acquire this managed header.
 
 ## Storage and cleanup
 
-Dash groups original artifact filenames by channel and version. The managed
-service keeps the current and previous public release for each platform and
-the selected prerelease. It can retire full downloads and manifests from older
-unreferenced releases while keeping their patches available. A platform omitted
-from a newer release keeps its existing files and selection.
+Dash groups original artifact filenames by channel and version. For each
+platform, the service keeps the files for its current and previous public
+release and its selected prerelease. As that platform advances, older
+unreferenced full downloads and metadata can be retired while patches remain
+available. Another platform still using the same version keeps its own files;
+it does not prevent cleanup of the superseded platform's files. A platform
+omitted from a newer release keeps its existing files and selection.
 
 Patches remain by default. Use **Delete** with confirmation to remove individual
 files, or **Prune** in the app's **Settings → Advanced** to preview patch files
