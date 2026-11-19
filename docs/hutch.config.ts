@@ -1,4 +1,4 @@
-// @hutch cli=0.30.0-canary.5 cottontail=0.7.3
+// @hutch cli=0.30.0 cottontail=0.7.3
 export default {
   packageManager: "npm",
   scripts: {

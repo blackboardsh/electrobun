@@ -3,7 +3,7 @@ title: "Migrate to Electrobun 2.x"
 description: "Upgrade the npm dependency, run your scripts, and fix what the validator reports."
 ---
 
-Electrobun 2.x moves build orchestration to Hutch. Electrobun 2.0.6 uses Bun
+Electrobun 2.x moves build orchestration to Hutch. Electrobun 2.0.7 uses Bun
 as the default JavaScript main process; 2.0.2 defaulted to Cottontail.
 Application code and RPC schemas usually need
 little or no change, and the npm package remains the front door. There is one
@@ -57,7 +57,7 @@ details and the situational cases.
 ## Returning to a single update manifest
 
 The compatibility fix described in the
-[unreleased changelog](/electrobun/guides/changelog/unreleased/) preserves one
+[v2.0.7 changelog](/electrobun/guides/changelog/v2-0-7/) preserves one
 `<channel>-<os>-<arch>-update.json` release manifest with its original
 `artifact: { file }` shape. Its sidecar,
 `<channel>-<os>-<arch>-checksum.json`, contains the matching build `hash` and
@@ -171,7 +171,7 @@ An older config that omits `mainProcess` and supplies only a `cottontail` or
 source directory and runtime-neutral `electrobun/main` imports can stay as they
 are. Existing explicitly selected runtimes remain explicit.
 
-Hutch 0.30.0-canary.4 or later defaults configuration, scripts, tests, shell
+Hutch 0.30.0 or later defaults configuration, scripts, tests, shell
 tasks, build hooks, and build helpers to Bun. App runtime selection does not
 change that choice. Use `HUTCH_RUNTIME=cottontail` for workflows that explicitly
 require Cottontail; putting `cottontail=...` in the version pragma does not
@@ -228,10 +228,10 @@ reproducible builds independent of the npm dependency — create
 `hutch.config.ts`:
 
 ```ts docs=syntax
-// @hutch cli=0.29.0 cottontail=0.7.3
+// @hutch cli=0.30.0 cottontail=0.7.3
 export default {
   electrobun: {
-    version: "2.0.6",
+    version: "2.0.7",
   },
 };
 ```

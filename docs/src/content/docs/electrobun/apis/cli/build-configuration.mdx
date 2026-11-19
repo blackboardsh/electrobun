@@ -4,7 +4,7 @@ description: "Reference for electrobun.config.ts and Hutch's build lifecycle."
 ---
 
 `electrobun.config.ts` is a TypeScript module in the project root. With Hutch
-0.30.0-canary.4 or later, Hutch evaluates its default export with Bun by default
+0.30.0 or later, Hutch evaluates its default export with Bun by default
 and merges it with Electrobun's defaults.
 Use `satisfies ElectrobunConfig` so unsupported fields and values fail during
 development. Electrobun release overrides, tasks, and package-manager selection
