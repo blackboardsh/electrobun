@@ -126,11 +126,11 @@ jobs:
 
     env:
       ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
-      EXPECTED_HUTCH_VERSION: '0.30.0-canary.5'
+      EXPECTED_HUTCH_VERSION: '0.30.0'
       # Track the compiled pair explicitly; the published template catalog must match it.
       EXPECTED_PAIRED_COTTONTAIL_VERSION: '0.7.3'
       EXPECTED_COTTONTAIL_VERSION: '0.7.3'
-      EXPECTED_APP_COTTONTAIL_VERSION: '0.7.4-canary.2'
+      EXPECTED_APP_COTTONTAIL_VERSION: '0.7.4'
 
     steps:
       - uses: actions/checkout@v6
@@ -953,7 +953,7 @@ jobs:
       - name: Install Hutch
         uses: ./.github/actions/install-hutch
         with:
-          channel: canary
+          channel: ${{ steps.release-type.outputs.prerelease == 'true' && 'canary' || 'production' }}
 
       - name: Recheck npm channel before mutable publication
         shell: bash
@@ -974,12 +974,27 @@ jobs:
         working-directory: package
         run: hutch test ../scripts/upload-kitchen-artifacts.test.ts
 
+      - name: Validate Kitchen legacy manifest cleanup
+        working-directory: package
+        run: hutch test ../scripts/cleanup-kitchen-legacy-manifests.test.ts
+
       - name: Publish Kitchen artifacts to R2
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: hutch scripts/upload-kitchen-artifacts.ts kitchen-artifacts
+
+      - name: Remove superseded Kitchen v2 manifests
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: >-
+          hutch scripts/cleanup-kitchen-legacy-manifests.ts
+          --channel=${{ steps.release-type.outputs.env }}
+          --expected-version=${{ steps.release-type.outputs.version }}
+          --apply
 
       - name: Publish latest template channel to R2
         env:

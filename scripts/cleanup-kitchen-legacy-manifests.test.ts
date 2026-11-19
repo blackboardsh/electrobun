@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	cleanupKitchenLegacyManifests,
-	KITCHEN_CANARY_TARGETS,
+	KITCHEN_TARGETS,
 	parseCleanupArguments,
 } from "./cleanup-kitchen-legacy-manifests";
 
@@ -9,26 +9,30 @@ const version = "2.0.7-beta.5";
 const base = "https://electrobun-artifacts.blackboard.sh/kitchen";
 const targets = ["macos-arm64", "macos-x64", "linux-arm64", "linux-x64", "win-arm64", "win-x64"];
 const expectedDeletes = targets.map((target) => `kitchen/canary-${target}-update-v2.json`);
-function manifest(target: string) {
+type Channel = "canary" | "stable";
+const publicChecks = (channel: Channel = "canary") => targets.map(target => ({ url: `${base}/${channel}-${target}-update-v2.json`, method: "GET" }));
+function manifest(target: string, channel: Channel = "canary", expectedVersion = version) {
 	const [platform, arch] = target.split("-");
 	return {
-		schemaVersion: 1, identifier: "sh.blackboard.electrobun-kitchen", channel: "canary",
-		version, hash: "2mk7i5wph5519", platform, arch,
+		schemaVersion: 1, identifier: "sh.blackboard.electrobun-kitchen", channel,
+		version: expectedVersion, hash: "2mk7i5wph5519", platform, arch,
 		artifact: {
-			file: `canary-${target}-ElectrobunKitchenSink-canary${platform === "macos" ? ".app" : ""}.tar.zst`,
+			file: `${channel}-${target}-ElectrobunKitchenSink${channel === "canary" ? "-canary" : ""}${platform === "macos" ? ".app" : ""}.tar.zst`,
 			tarSha256: "a".repeat(64), tarSize: 4096,
 		},
 	};
 }
 
-function legacyManifest(target: string) {
-	const document = manifest(target);
+function legacyManifest(target: string, channel: Channel = "canary", expectedVersion = version) {
+	const document = manifest(target, channel, expectedVersion);
 	return { ...document, artifact: { file: document.artifact.file } };
 }
 
-function fixture(override?: (url: string, method: string) => Response | undefined, sidecars: false | "fixed" | "legacy" = false) {
+function fixture(override?: (url: string, method: string) => Response | undefined, sidecars: false | "fixed" | "legacy" = false,
+	channel: Channel = "canary", expectedVersion = version) {
 	const requests: { url: string; method: string }[] = [];
 	const signed: string[] = [];
+	const deleted = new Set<string>();
 	const client = {
 		presign(key: string, options: unknown) {
 			expect(options).toEqual({ method: "DELETE", expiresIn: 60 });
@@ -44,33 +48,44 @@ function fixture(override?: (url: string, method: string) => Response | undefine
 		expect(options?.redirect).toBe("error");
 		const replacement = override?.(url, method);
 		if (replacement) return replacement;
-		if (method === "DELETE") return new Response(null, { status: 204 });
+		if (method === "DELETE") {
+			deleted.add(url.slice("https://r2.invalid/kitchen/".length));
+			return new Response(null, { status: 204 });
+		}
 		expect(options?.cache).toBe("no-store");
+		if (url.startsWith(`${base}/`) && url.endsWith("-update-v2.json")) {
+			expect(deleted.has(url.slice(base.length + 1))).toBe(true);
+			return new Response(null, { status: 404 });
+		}
 		if (method === "HEAD") {
 			return new Response(null, { headers: { "content-length": "1234" } });
 		}
-		const fixedTarget = targets.find((target) => url === `${base}/canary-${target}-checksum.json`);
+		const fixedTarget = targets.find((target) => url === `${base}/${channel}-${target}-checksum.json`);
 		if (sidecars && fixedTarget) {
 			return sidecars === "legacy" ? new Response(null, { status: 404 })
-				: Response.json({ hash: manifest(fixedTarget).hash, tarSha256: "a".repeat(64), tarSize: 4096 });
+				: Response.json({ hash: manifest(fixedTarget, channel, expectedVersion).hash, tarSha256: "a".repeat(64), tarSize: 4096 });
 		}
-		if (sidecars === "legacy" && targets.some((target) => url === `${base}/canary-${target}-${manifest(target).hash}-checksum.json`)) {
+		if (sidecars === "legacy" && targets.some((target) => url === `${base}/${channel}-${target}-${manifest(target, channel, expectedVersion).hash}-checksum.json`)) {
 			return Response.json({ tarSha256: "a".repeat(64), tarSize: 4096 });
 		}
-		const target = targets.find((target) => url === `${base}/canary-${target}-update.json`);
+		const target = targets.find((target) => url === `${base}/${channel}-${target}-update.json`);
 		if (!target) throw new Error(`Unexpected request ${url}`);
-		return Response.json(sidecars ? legacyManifest(target) : manifest(target));
+		return Response.json(sidecars ? legacyManifest(target, channel, expectedVersion) : manifest(target, channel, expectedVersion));
 	}) as typeof fetch;
 	return { requests, signed, dependencies: { fetch: request, client, log: () => {} } };
 }
 
-describe("Kitchen canary legacy manifest cleanup", () => {
+describe("Kitchen legacy manifest cleanup", () => {
 	test("requires an exact version, defaults to dry-run, and rejects scope/ambiguous arguments", () => {
-		expect(parseCleanupArguments([`--expected-version=${version}`])).toEqual({ expectedVersion: version, apply: false });
+		expect(parseCleanupArguments([`--expected-version=${version}`])).toEqual({ expectedVersion: version, channel: "canary", apply: false });
+		expect(parseCleanupArguments(["--expected-version=2.0.7", "--channel=stable", "--apply"])).toEqual({ expectedVersion: "2.0.7", channel: "stable", apply: true });
+		expect(parseCleanupArguments([`--expected-version=${version}`, "--channel=canary"])).toEqual({ expectedVersion: version, channel: "canary", apply: false });
 		expect(parseCleanupArguments([`--expected-version=${version}`, "--apply"]).apply).toBe(true);
 		expect(parseCleanupArguments([`--expected-version=${version}`, "--dry-run"]).apply).toBe(false);
 		for (const args of [[], ["--expected-version=latest"], ["--expected-version=../version"],
-			[`--expected-version=${version}`, "--channel=stable"],
+			...["", "dev", "production", "../stable", "stable/canary", "STABLE"].map(channel => [`--expected-version=${version}`, `--channel=${channel}`]),
+			[`--expected-version=${version}`, "--channel=stable", "--channel=stable"],
+			[`--expected-version=${version}`, "--channel=stable", "--channel=canary"],
 			[`--expected-version=${version}`, "--bucket=another-app"],
 			[`--expected-version=${version}`, "--target=win-x64"],
 			[`--expected-version=${version}`, "--apply", "--dry-run"],
@@ -82,7 +97,7 @@ describe("Kitchen canary legacy manifest cleanup", () => {
 	test("dry-run checks every replacement without credentials or deletion", async () => {
 		const f = fixture();
 		const result = await cleanupKitchenLegacyManifests({ expectedVersion: version }, { ...f.dependencies, client: undefined });
-		expect(KITCHEN_CANARY_TARGETS).toEqual(targets);
+		expect(KITCHEN_TARGETS).toEqual(targets);
 		expect(result).toEqual(expectedDeletes);
 		expect(f.requests.map((r) => r.method)).toEqual(targets.flatMap(() => ["GET", "HEAD"]));
 		expect(f.signed).toEqual([]);
@@ -92,7 +107,8 @@ describe("Kitchen canary legacy manifest cleanup", () => {
 		const f = fixture();
 		await cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, f.dependencies);
 		expect(f.requests.slice(0, 12).map((r) => r.method)).toEqual(targets.flatMap(() => ["GET", "HEAD"]));
-		expect(f.requests.slice(12)).toEqual(expectedDeletes.map((key) => ({ url: `https://r2.invalid/${key}`, method: "DELETE" })));
+		expect(f.requests.slice(12, 18)).toEqual(expectedDeletes.map((key) => ({ url: `https://r2.invalid/${key}`, method: "DELETE" })));
+		expect(f.requests.slice(18)).toEqual(publicChecks());
 		expect(f.signed).toEqual(expectedDeletes);
 		// HEAD length is compressed (1234); the uncompressed tarSize is 4096.
 		// Neither canonical manifests, payloads, patches nor stable objects are deleted.
@@ -107,8 +123,80 @@ describe("Kitchen canary legacy manifest cleanup", () => {
 			{ url: `${base}/canary-${target}-checksum.json`, method: "GET" },
 			{ url: `${base}/${manifest(target).artifact.file}`, method: "HEAD" },
 		]));
-		expect(f.requests.slice(18)).toEqual(expectedDeletes.map((key) => ({ url: `https://r2.invalid/${key}`, method: "DELETE" })));
+		expect(f.requests.slice(18, 24)).toEqual(expectedDeletes.map((key) => ({ url: `https://r2.invalid/${key}`, method: "DELETE" })));
+		expect(f.requests.slice(24)).toEqual(publicChecks());
 		expect(f.signed).toEqual(expectedDeletes);
+	});
+
+	test("stable cleanup verifies the six channel-prefixed archives before deleting only stable v2 manifests", async () => {
+		const stableVersion = "2.0.7";
+		const f = fixture(undefined, "fixed", "stable", stableVersion);
+		const stableDeletes = targets.map(target => `kitchen/stable-${target}-update-v2.json`);
+		const result = await cleanupKitchenLegacyManifests({ expectedVersion: stableVersion, channel: "stable", apply: true }, f.dependencies);
+		expect(f.requests.slice(0, 18)).toEqual(targets.flatMap(target => [
+			{ url: `${base}/stable-${target}-update.json`, method: "GET" },
+			{ url: `${base}/stable-${target}-checksum.json`, method: "GET" },
+			{ url: `${base}/stable-${target}-ElectrobunKitchenSink${target.startsWith("macos-") ? ".app" : ""}.tar.zst`, method: "HEAD" },
+		]));
+		expect(f.requests.slice(18, 24)).toEqual(stableDeletes.map(key => ({ url: `https://r2.invalid/${key}`, method: "DELETE" })));
+		expect(f.requests.slice(24)).toEqual(publicChecks("stable"));
+		expect(f.signed).toEqual(stableDeletes);
+		expect(result).toEqual(stableDeletes);
+		expect(f.requests.every(({ url }) => !url.includes("canary"))).toBe(true);
+	});
+
+	test("neither channel can use another channel's metadata or archive to authorize deletion", async () => {
+		for (const channel of ["stable", "canary"] as const) {
+			const other = channel === "stable" ? "canary" : "stable";
+			for (const field of ["channel", "archive"] as const) {
+				const f = fixture(url => {
+					if (url !== `${base}/${channel}-win-x64-update.json`) return;
+					const document = manifest("win-x64", channel);
+					if (field === "channel") document.channel = other;
+					else document.artifact.file = manifest("win-x64", other).artifact.file;
+					return Response.json(document);
+				}, false, channel);
+				await expect(cleanupKitchenLegacyManifests({ expectedVersion: version, channel, apply: true }, f.dependencies)).rejects.toThrow("Canonical manifest win-x64");
+				expect(f.signed).toEqual([]);
+				expect(f.requests.some(({ method }) => method === "DELETE")).toBe(false);
+			}
+		}
+	});
+
+	test("the last stable target must have a matching checksum and an available archive before any deletion", async () => {
+		for (const failure of ["checksum", "archive"] as const) {
+			const f = fixture((url, method) => {
+				if (failure === "checksum" && url === `${base}/stable-win-x64-checksum.json`) {
+					return Response.json({ hash: "wrong123", tarSha256: "a".repeat(64), tarSize: 4096 });
+				}
+				if (failure === "archive" && method === "HEAD" && url.includes("stable-win-x64-")) return new Response(null, { status: 404 });
+			}, "fixed", "stable", "2.0.7");
+			await expect(cleanupKitchenLegacyManifests({ expectedVersion: "2.0.7", channel: "stable", apply: true }, f.dependencies)).rejects.toThrow();
+			expect(f.signed).toEqual([]);
+			expect(f.requests.some(({ method }) => method === "DELETE")).toBe(false);
+		}
+	});
+
+	test("a successful origin deletion does not complete migration while any public legacy URL is not 404", async () => {
+		for (const status of [200, 302, 403, 503]) {
+			const logs: string[] = [];
+			const f = fixture((url, method) => method === "GET" && url === `${base}/stable-win-x64-update-v2.json`
+				? new Response(null, { status }) : undefined, "fixed", "stable", "2.0.7");
+			await expect(cleanupKitchenLegacyManifests({ expectedVersion: "2.0.7", channel: "stable", apply: true },
+				{ ...f.dependencies, log: message => logs.push(message) })).rejects.toThrow(`must return public HTTP 404 after deletion; received HTTP ${status}`);
+			expect(f.signed).toEqual(targets.map(target => `kitchen/stable-${target}-update-v2.json`));
+			expect(f.requests.slice(-6)).toEqual(publicChecks("stable"));
+			expect(logs.some(message => message.startsWith("Verified all six"))).toBe(false);
+		}
+	});
+
+	test("unsupported channels passed directly fail before any storage or network operation", async () => {
+		for (const channel of ["", "production", "../stable", "stable/canary", null, 1]) {
+			const f = fixture();
+			await expect(cleanupKitchenLegacyManifests({ expectedVersion: version, channel: channel as any, apply: true }, f.dependencies)).rejects.toThrow("channel");
+			expect(f.signed).toEqual([]);
+			expect(f.requests).toEqual([]);
+		}
 	});
 
 	test("legacy sidecars are accepted only after a fixed sidecar 404", async () => {
@@ -120,7 +208,8 @@ describe("Kitchen canary legacy manifest cleanup", () => {
 			{ url: `${base}/canary-${target}-${manifest(target).hash}-checksum.json`, method: "GET" },
 			{ url: `${base}/${manifest(target).artifact.file}`, method: "HEAD" },
 		]));
-		expect(f.requests.slice(24)).toEqual(expectedDeletes.map((key) => ({ url: `https://r2.invalid/${key}`, method: "DELETE" })));
+		expect(f.requests.slice(24, 30)).toEqual(expectedDeletes.map((key) => ({ url: `https://r2.invalid/${key}`, method: "DELETE" })));
+		expect(f.requests.slice(30)).toEqual(publicChecks());
 		expect(f.signed).toEqual(expectedDeletes);
 	});
 
@@ -272,6 +361,15 @@ describe("Kitchen canary legacy manifest cleanup", () => {
 		await expect(cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, { ...f.dependencies, client: undefined })).rejects.toThrow("credentials");
 		expect(f.requests).toHaveLength(0);
 		await expect(cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, f.dependencies)).rejects.toThrow("HTTP 403");
+		expect(f.signed).toEqual(expectedDeletes.slice(0, 1));
+	});
+
+	test("failed signed deletion never surfaces provider errors containing credentials", async () => {
+		const f = fixture((_url, method) => {
+			if (method === "DELETE") throw new Error("https://r2.invalid/?X-Amz-Credential=private-credential");
+		});
+		await expect(cleanupKitchenLegacyManifests({ expectedVersion: version, apply: true }, f.dependencies))
+			.rejects.toThrow(`R2 deletion request failed for ${expectedDeletes[0]}`);
 		expect(f.signed).toEqual(expectedDeletes.slice(0, 1));
 	});
 });

@@ -137,6 +137,8 @@ function validatePublicationContract(source) {
 		mutablePublication,
 		"Publish Kitchen artifacts to R2",
 	);
+	const kitchenCleanup = namedStep(mutablePublication, "Remove superseded Kitchen v2 manifests");
+	const kitchenCleanupValidation = namedStep(mutablePublication, "Validate Kitchen legacy manifest cleanup");
 	const mutableNpmGate = namedStep(
 		mutablePublication,
 		"Recheck npm channel before mutable publication",
@@ -423,6 +425,23 @@ function validatePublicationContract(source) {
 		/node --test scripts\/publish-templates\.test\.mjs/,
 	);
 	assert.match(kitchenPublication, /upload-kitchen-artifacts\.ts kitchen-artifacts/);
+	assert.match(kitchenCleanupValidation, /hutch test \.\.\/scripts\/cleanup-kitchen-legacy-manifests\.test\.ts/);
+	assert.match(kitchenCleanup, /hutch scripts\/cleanup-kitchen-legacy-manifests\.ts/);
+	assert.match(kitchenCleanup, /--channel=\$\{\{ steps\.release-type\.outputs\.env \}\}/);
+	assert.match(kitchenCleanup, /--expected-version=\$\{\{ steps\.release-type\.outputs\.version \}\}/);
+	assert.match(kitchenCleanup, /--apply/);
+	assert.ok(
+		mutablePublication.indexOf("- name: Validate Kitchen legacy manifest cleanup") <
+			mutablePublication.indexOf("- name: Publish Kitchen artifacts to R2"),
+		"cleanup guards must pass before publishing replacement artifacts",
+	);
+	assert.ok(
+		mutablePublication.indexOf("- name: Publish Kitchen artifacts to R2") <
+			mutablePublication.indexOf("- name: Remove superseded Kitchen v2 manifests") &&
+		mutablePublication.indexOf("- name: Remove superseded Kitchen v2 manifests") <
+			mutablePublication.indexOf("- name: Publish latest template channel to R2"),
+		"legacy manifests may only be removed after all replacement artifacts are uploaded",
+	);
 	assert.ok(
 		mutablePublication.indexOf(
 			"- name: Recheck npm channel before mutable publication",
@@ -444,6 +463,19 @@ function validatePublicationContract(source) {
 
 test("serializes releases, verifies drafts, and gates mutable channels", () => {
 	validatePublicationContract(workflow);
+});
+
+test("Kitchen cleanup cannot move before uploads or select a different release channel", () => {
+	const publication = job(workflow, "publish-templates");
+	const cleanup = namedStep(publication, "Remove superseded Kitchen v2 manifests");
+	assert.throws(() => validatePublicationContract(workflow.replace(cleanup,
+		cleanup.replace("--channel=${{ steps.release-type.outputs.env }}", "--channel=canary"))), { code: "ERR_ASSERTION" });
+	const cleanupBlock = `      - name: Remove superseded Kitchen v2 manifests\n${cleanup}`;
+	assert.ok(workflow.includes(cleanupBlock));
+	const uploadMarker = "      - name: Publish Kitchen artifacts to R2\n";
+	const moved = workflow.replace(cleanupBlock, "").replace(uploadMarker, `${cleanupBlock}${uploadMarker}`);
+	assert.notEqual(moved, workflow);
+	assert.throws(() => validatePublicationContract(moved), { code: "ERR_ASSERTION" });
 });
 
 test("contract keeps Intel build and CLI acceptance on 26 and app acceptance on 15", () => {
