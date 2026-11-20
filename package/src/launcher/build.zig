@@ -33,6 +33,23 @@ pub fn build(b: *std.Build) void {
         exe.headerpad_size = 0x1000;
     }
 
+    // App Sandbox denies mach-lookup of com.apple.coreservices.launchservicesd,
+    // so an app has to be checked in with LaunchServices during dyld
+    // initialization, while it still holds its launch context. AppKit does that
+    // check-in when it loads, and the runtime only meets AppKit later through
+    // dlopen, which is too late. Linking Cocoa into the bundle's main
+    // executable moves the check-in back into the launch window; the launcher
+    // itself never calls into Cocoa, hence `needed` to keep the load command.
+    if (target.result.os.tag == .macos) {
+        const sdk = std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result) orelse
+            std.process.fatal("unable to locate the macOS SDK; install the Xcode command line tools", .{});
+        exe.root_module.addSystemFrameworkPath(.{
+            .cwd_relative = b.pathJoin(&.{ sdk, "System", "Library", "Frameworks" }),
+        });
+        exe.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr", "lib" }) });
+        exe.root_module.linkFramework("Cocoa", .{ .needed = true });
+    }
+
     // For production Windows builds, use GUI subsystem to hide console window
     // For dev builds (Debug mode), use default console subsystem for CLI interaction
     const is_windows = target.result.os.tag == .windows;
