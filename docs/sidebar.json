@@ -120,6 +120,10 @@
             "link": "/electrobun/guides/managed-deploys/"
           },
           {
+            "label": "Move to Managed Deploys",
+            "link": "/electrobun/guides/migrate-to-managed-deploys/"
+          },
+          {
             "label": "Insights (Preview)",
             "link": "/electrobun/guides/insights/"
           }

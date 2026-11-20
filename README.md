@@ -7,6 +7,12 @@
 Build fast, compact, cross-platform desktop apps with TypeScript, Zig, Rust, Go,
 or Odin.
 
+Host your app's releases on [any static HTTPS host](https://docs.electrobun.dev/electrobun/guides/updates/#static-release-hosting),
+or use [Electrobun's managed hosting and analytics platform](https://electrobun.dev/electrobun/hosting/).
+See the [hosting](https://docs.electrobun.dev/electrobun/guides/managed-deploys/),
+[Insights](https://docs.electrobun.dev/electrobun/guides/insights/), and
+[migration](https://docs.electrobun.dev/electrobun/guides/migrate-to-managed-deploys/) guides.
+
 ## Get started
 
 Install Hutch on **macOS or Linux**:

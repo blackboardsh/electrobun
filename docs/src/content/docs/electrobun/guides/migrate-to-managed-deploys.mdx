@@ -1,0 +1,211 @@
+---
+title: "Move an existing app to Managed Deploys"
+description: "Test managed releases, then move existing installations from a static update host with a bridge release."
+---
+
+An installed Electrobun app checks the update URL embedded in its current
+build. Changing your project's configuration only changes future builds; it
+cannot redirect installations that are already on users' machines.
+
+To migrate, first test releases on Managed Deploys. Then publish the exact
+tested build to your old host as a **bridge release**. Existing installations
+download it from the old URL, and the updated app uses managed hosting for its
+next update.
+
+This guide uses stable builds and example app versions. Choose new versions
+for your own app; these are not Electrobun SDK version numbers.
+
+| Stage | Old static host serves | Managed hosting serves | What you test |
+| --- | --- | --- | --- |
+| Before migration | Existing release | Nothing yet | Keep a copy of the old installation |
+| First managed release | Existing release | `2.1.0` | Install from managed hosting |
+| Managed update | Existing release | `2.1.1` | Update `2.1.0` → `2.1.1` |
+| Bridge | The same `2.1.1` build | `2.1.1` | Old installation → bridge |
+| After migration | Keep the bridge available | `2.1.2` | Bridge → managed-only update |
+
+## 1. Prepare your account and test machines
+
+1. Sign in to [Dash](https://dash.electrobun.dev/?electrobun=apps) and subscribe
+   to [Dash Pro](https://electrobun.dev/dash/pricing/) if needed. Pro includes
+   one app with managed hosting and Insights. Additional paid apps are enabled
+   from that app's settings; check the current pricing and allowance there.
+2. Open **Electrobun Apps**, create an app, and enable **Managed Deploys**.
+   Assign the included Pro allowance, or activate an additional app if that
+   allowance is already in use.
+3. Copy the app ID and create an app-scoped deploy key. Store the key in your
+   CI secret store or local environment as `ELECTROBUN_API_KEY`. It must never
+   be included in your app configuration or packaged application.
+4. Keep an installation of the currently shipped app on a separate machine,
+   VM, or snapshot for the bridge test. Use another installation to test
+   managed releases: a new stable installer can replace the existing app and
+   reuse its profile.
+
+Use Electrobun 2.0.7 or later and its compatible Hutch release. Keep your
+existing app name, identifier, signing configuration, and application data
+locations. If you are also upgrading from an older Electrobun SDK, review the
+[updater compatibility notes](/electrobun/guides/updates/#upgrading-to-the-206-updater)
+and test with the actual version your users have installed.
+
+Hosting, Insights, and the App Directory are independent choices. You can
+complete this migration without enabling analytics or publishing a listing.
+
+## 2. Configure the managed release destination
+
+In your existing `electrobun.config.ts`, keep the app's identity and build
+settings. Replace the old static `release.baseUrl` with `release.managed.appId`:
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "My App",
+    identifier: "com.example.my-app",
+    version: "2.1.0",
+  },
+  // Keep your existing build, signing, and other settings here.
+  release: {
+    managed: { appId: "YOUR_APP_ID" },
+  },
+} satisfies ElectrobunConfig;
+```
+
+Remove the old `baseUrl` for this example. With managed hosting, `baseUrl`
+means a [verified managed custom domain](/electrobun/guides/managed-deploys/#custom-domains),
+not a second upload destination. A static URL containing a folder cannot be
+used as a managed custom origin. The default managed URL needs no domain or
+DNS setup.
+
+The app's updater still needs to call the [Updater API](/electrobun/apis/updater/)
+on your chosen schedule or user action. Managed hosting does not add automatic
+update checks to an app that has none. Native main processes use the
+[Zig, Rust, Go, and Odin updater APIs](/electrobun/apis/updater-native/).
+
+## 3. Publish and install the first managed release
+
+Run on each OS/architecture you intend to migrate, with the same app version
+and deploy key available to upload:
+
+```sh
+hutch electrobun build --env=stable
+hutch electrobun upload --dry-run
+hutch electrobun upload
+```
+
+Review the accumulated `stable-2.1.0` release in Dash. Once every intended
+runner succeeds, publish from Dash or a final CI job:
+
+```sh
+hutch electrobun publish --app=YOUR_APP_ID --release=stable-2.1.0 --audience=public
+```
+
+Copy the installer URL for each target from the release view and install it
+on your managed test machines. Check that the app opens normally, its version
+is correct, and its update check succeeds with no newer build available.
+
+Publishing publicly here does not change the old host or move existing
+installations: those installations still use their original URL. Managed
+installer and artifact URLs are public, so do not treat them as private test
+downloads.
+
+## 4. Test a managed update
+
+Change your app version to `2.1.1`, build and upload all intended targets, then
+publish `stable-2.1.1` using the same commands. Keep the resulting artifacts
+from every runner; you will use these exact files for the bridge.
+
+On each test machine, use the installed `2.1.0` app's updater to download and
+apply `2.1.1`. Verify the app relaunches, retains its data, and reports the new
+version. Check both patch updates when a patch is available and full-download
+fallback as part of your normal release testing.
+
+The first managed build may have no patch because there is no previous
+managed release. Subsequent builds generate patches against the public
+managed release for that target. The hosting service does not generate them.
+
+## 5. Publish the tested build to the old host
+
+Publish the **exact artifacts from the tested `2.1.1` build** to your original
+static release folder, using your existing upload workflow. Merge the ordinary
+files from every runner into that flat folder without renaming them:
+
+- Upload the full archives, installers, checksum sidecars, and any generated
+  patches first.
+- Publish each target's `*-update.json` last, after its referenced files are
+  available. Keep older hash-named patches already at the old host.
+- `managed-deploy.json` is Hutch's upload configuration sidecar; the updater
+  does not need it on the static host.
+- Follow your host's existing cache-invalidation process so the new metadata
+  and its matching files become available together.
+
+`hutch electrobun upload` uploads to Managed Deploys. It does not upload to
+your old static host. Copy the retained runner artifacts there with the same
+storage upload tools you used before migration. If you no longer have those
+artifacts, retrieve the exact release files through Dash; do not rebuild the
+same version just to recreate them.
+
+Do not change the embedded managed configuration back to the old URL for
+this upload. The bridge is downloaded from the old host but contains the
+managed URL for its next check.
+
+Both hosts should select the same build hash for each migrated target at the
+handoff. Electrobun detects updates by build hash, not by requiring a larger
+semantic version. A separately rebuilt bridge can have a different hash and
+then see the earlier managed build as another update. If you need to change
+the bridge, use a new app version, publish and test it on managed hosting
+first, then copy those exact files to the old host.
+
+If you previously published `*-update-v2.json`, follow the
+[legacy manifest cleanup instructions](/electrobun/guides/updates/#remove-previously-published-v2-manifests):
+after the compatible bridge files are available, remove the old v2 objects
+and cached copies so those URLs return `404`. Otherwise older clients that
+check v2 first can remain stuck on stale metadata.
+
+## 6. Verify the handoff and the next update
+
+On the machine with your untouched old installation:
+
+1. Check for updates through the app and install the bridge from the old
+   host. Confirm the app relaunches and retains its existing data.
+2. Check again. With both hosts serving the same build, the bridge should
+   find no newer update at managed hosting.
+3. Build and publish `2.1.2` to managed hosting only. Confirm the bridge
+   downloads and applies this update. Leave the old host on the bridge.
+
+The old-to-bridge update may use a full download: the managed build's patch
+can start at a managed-only hash that the old installation never had. This
+is normal fallback behavior. Keep the bridge's full archive and canonical
+manifest available at the old URL.
+
+Keep serving the bridge for as long as you support installations that have
+not opened since migration. There is no fixed date after which every dormant
+installation will have moved. Deleting the old bucket or folder too early
+strands those clients. New users can install from managed hosting directly;
+update your website's download links when the migration is ready.
+
+## Channels and platforms
+
+Repeat the process for every target you support. Publishing three platforms
+does not migrate or replace the other three. Dash's release view shows which
+version each target currently serves.
+
+Stable and canary are separate builds, never interchangeable artifacts.
+For an existing canary app, check its packaged identity before planning an
+in-place migration: Hutch derives a `.canary` identifier for managed builds,
+while an older self-hosted canary may have used the base identifier. If they
+differ, use a fresh canary installation and handle any app-data migration
+explicitly rather than assuming it updates in place. Keep your base app name
+and identifier in configuration; do not add a second canary identity yourself.
+
+For subsequent releases, you can use
+[prerelease installs](/electrobun/guides/managed-deploys/#publish-to-prerelease-installs-first)
+before public publication. A prerelease group selects updates; it is not
+download authorization.
+
+## Add Insights independently
+
+Follow the [Insights setup and testing guide](/electrobun/guides/insights/)
+when you want app lifecycle data or custom events. Adding managed hosting
+does not enable any analytics. Your app decides when to start collection and
+owns its consent and settings flow; you can also use Insights while keeping
+all releases on your static host.

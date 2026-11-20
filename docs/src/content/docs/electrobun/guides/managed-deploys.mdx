@@ -23,10 +23,18 @@ You can continue hosting Electrobun releases on any static HTTPS host. The
 [self-hosted update workflow](/electrobun/guides/updates/#static-release-hosting),
 artifact names, and patch-chain behavior are unchanged.
 
+Already shipping from a static host? Follow
+[Move an existing app to Managed Deploys](/electrobun/guides/migrate-to-managed-deploys/)
+to test the new destination and migrate installed apps with a bridge release.
+
 ## Configure an app
 
-Open **Electrobun Apps** from Dash's Quick Access, create an app, and enable
-Managed Deploys. Copy its app ID into your existing `electrobun.config.ts`:
+Sign in to [Dash](https://dash.electrobun.dev/?electrobun=apps) and subscribe to
+[Dash Pro](https://electrobun.dev/dash/pricing/) if needed. Open **Electrobun
+Apps** from Quick Access, create an app, and enable Managed Deploys. Assign
+your included Pro app allowance, or activate an additional app from its
+settings if that allowance is already in use. Copy the app ID into your
+existing `electrobun.config.ts`:
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
@@ -116,6 +124,20 @@ through the same core-owned [Updater API](/electrobun/apis/updater/).
 operations and explicitly approve application shutdown before apply handoff.
 The core supplies metadata, shared installation identity, paths, and helper
 integration. Enabling hosting does not schedule update checks inside the app.
+
+### Verify your first release and update
+
+Copy each platform's installer URL from the release view in Dash and install
+it on a test machine. Confirm the packaged app opens and its update check
+succeeds. Then increment your app version, build and upload every intended
+target, and publish again. Use the installed app's updater to apply that
+second release and check that it relaunches with the new version and existing
+app data. A first release may have no patch; later builds can generate one
+from the previously published managed build.
+
+Test each OS/architecture you ship. For a step-by-step example that also
+covers an existing static-hosted installation, see the
+[migration guide](/electrobun/guides/migrate-to-managed-deploys/).
 
 ## Publish to prerelease installs first
 
@@ -283,7 +305,5 @@ or `"none"` disables Electrobun's direct updater without disabling Insights.
 An app-store update check or action that opens a store must be implemented
 separately; this setting does not add store submission or distribution support.
 
-Keep a self-hosted endpoint available for existing clients when moving an app
-to managed hosting: those clients still know the URL embedded in their current
-build. Publish a bridge release at that endpoint with the managed configuration
-in the new app, then test a subsequent update from the upgraded installation.
+For existing direct-update installations, see
+[Move an existing app to Managed Deploys](/electrobun/guides/migrate-to-managed-deploys/).

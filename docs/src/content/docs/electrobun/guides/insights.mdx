@@ -15,10 +15,25 @@ and directory registration are independent choices. Hosting and Insights
 require Dash Pro during the preview; directory publishing is free with a Dash
 account and does not use a paid app allowance.
 
+## Set up the service in Dash
+
+1. Sign in to [Electrobun Apps in Dash](https://dash.electrobun.dev/?electrobun=apps).
+   If you do not have Dash Pro, subscribe through **Account and billing**.
+2. Create an app, or open the app you already use for Managed Deploys. Pro
+   includes one app with hosting and Insights; enabling both for that app
+   uses the same allowance. Additional apps have their own subscriptions.
+3. Open the app's **Insights** section and enable the service. You can leave
+   hosting and the directory listing off.
+4. Copy the app ID for the configuration below. A deploy key is not needed to
+   send analytics and must never be included in the packaged app.
+
+Enabling the service in Dash does not start collection in installed apps.
+Your app must also configure the client and explicitly enable collection.
+See [app subscriptions](https://docs.electrobun.dev/dash/electrobun-apps/#app-subscriptions)
+for managing the included app and additional apps.
+
 ## Configure Insights without starting collection
 
-Create an app in [Electrobun Apps in Dash](https://docs.electrobun.dev/dash/electrobun-apps/)
-and enable its Insights service.
 Add its app ID to your existing `electrobun.config.ts`:
 
 ```typescript
@@ -162,6 +177,42 @@ application needs them.
 
 See [event limits](/electrobun/apis/insights/#event-limits) for supported names,
 flat scalar properties, and payload size limits.
+
+## Verify your integration
+
+Test a packaged app before shipping the integration to your users. The hosted
+service accepts canary and stable builds, not ordinary dev-build traffic.
+You can install the build locally; publishing it through Managed Deploys is
+not required to test Insights.
+
+1. Build a canary with `hutch electrobun build --env=canary` and install it on
+   a test machine. Keep `insights.enabled: false` for this opt-in test.
+2. On an installation without a saved collection choice, open the app and
+   confirm collection stays off until your consent/settings flow calls
+   `Insights.setEnabled(true)`, or the equivalent call in your main-process
+   [SDK](/electrobun/apis/insights/#native-sdks).
+3. Enable collection, use the app for a few minutes, and trigger your custom
+   event, such as the `export_completed` example above. Check that `track`
+   accepts it into the queue. Do not send your own copies of the built-in
+   open/close events; the core records those automatically.
+4. Quit normally, then reopen while online and allow queued events to be
+   delivered. Normal shutdown records the close event locally; the next
+   launch delivers it along with its original session times.
+5. In Dash, open the same app's **Insights**, choose **Canary** and **7 days**,
+   then **Refresh**. Check the installation's platform and version, approximate
+   open duration, and your event's line in the custom-event chart. Delivery is
+   asynchronous, so refresh again if it has not arrived yet. The view also
+   refreshes every 15 minutes while visible.
+6. Turn collection off through your app's setting and restart it. Confirm the
+   saved choice remains off and `track` returns `false`. This disables both
+   basic and custom collection. Previously received history remains in Dash,
+   and requests sent before opting out may still finish.
+
+If data is missing, check the app ID, that Insights is enabled in Dash, the
+local collection choice, network access, and the dashboard's channel/date
+filters. For custom events, also check the return value, payload limits, and
+available custom-event allowance. An accepted event is queued locally; it is
+not a delivery acknowledgement.
 
 ## Installation identity
 
