@@ -4,4 +4,4 @@
 // It is deliberately distinct from the build-time Cottontail (the
 // `// @hutch` pragma pairing) available for explicitly selected experimental
 // scripts. Build scripts and config loading default to Bun.
-export const COTTONTAIL_VERSION = "0.7.6";
+export const COTTONTAIL_VERSION = "0.7.8";
