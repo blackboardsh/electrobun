@@ -9,6 +9,7 @@ const style_mod = @import("style.zig");
 const layout = @import("layout.zig");
 const paint = @import("paint.zig");
 const font = @import("text/font.zig");
+const external_text = @import("text/external.zig");
 const events = @import("events.zig");
 const anim = @import("anim.zig");
 const images = @import("images.zig");
@@ -60,6 +61,10 @@ pub const Ui = struct {
     reduced_motion: bool = false,
     /// set when the display list changed since the last `takeFrame`
     frame_dirty: bool = true,
+    /// Skip presenting frames until an async text backend is installed.
+    frames_held: bool = false,
+    text_hook: ?external_text.Hook = null,
+    text_wrap: ?*external_text.Wrap = null,
 
     pub fn create(gpa: Allocator, opts: Options) !*Ui {
         const ui = try gpa.create(Ui);
@@ -164,8 +169,51 @@ pub const Ui = struct {
         layout.finalizeNode(doc, n);
     }
 
+    pub fn textDrawHook(ui: *const Ui) external_text.DrawHook {
+        const hook = ui.text_hook orelse return .{};
+        return .{ .ctx = hook.ctx, .prepare = hook.prepare, .draw = hook.draw };
+    }
+
+    fn invalidateTextLayout(ui: *Ui) void {
+        ui.layout.shape_cache.clearRetainingCapacity();
+        _ = ui.layout.shape_arena.reset(.retain_capacity);
+        ui.layout.shape_count = 0;
+        ui.doc.needs_paint = true;
+        const root = ui.doc.documentElement();
+        if (root != dom.null_id) ui.doc.markLayoutDirty(root);
+    }
+
+    /// Replace glyph atlas text with `hook`. The previous backend is disposed.
+    pub fn setTextRenderer(ui: *Ui, hook: external_text.Hook) !void {
+        ui.clearTextRenderer();
+        const wrap = try ui.gpa.create(external_text.Wrap);
+        wrap.* = external_text.Wrap.init(ui.gpa, ui.fonts, hook);
+        ui.text_wrap = wrap;
+        ui.fonts = wrap.backend();
+        ui.layout.fonts = ui.fonts;
+        ui.text_hook = hook;
+        ui.paint_hooks.external_text = true;
+        ui.invalidateTextLayout();
+    }
+
+    pub fn clearTextRenderer(ui: *Ui) void {
+        const wrap = ui.text_wrap orelse return;
+        const hook = ui.text_hook;
+        const inner = wrap.inner;
+        ui.text_wrap = null;
+        ui.text_hook = null;
+        ui.fonts = inner;
+        ui.layout.fonts = inner;
+        ui.paint_hooks.external_text = false;
+        wrap.deinit();
+        ui.gpa.destroy(wrap);
+        if (hook) |h| h.dispose(h.ctx);
+        ui.invalidateTextLayout();
+    }
+
     pub fn destroy(ui: *Ui) void {
         const gpa = ui.gpa;
+        ui.clearTextRenderer();
         ui.doc.deinit();
         ui.styles.deinit();
         ui.layout.deinit();
@@ -794,4 +842,115 @@ test "nowrap shrink-to-fit boxes fit their text" {
     const w = try style_mod.querySelector(ui.doc, ui.doc.root, "#w");
     const wl = layout.boxOfNode(ui.doc.node(w)).?.inline_layout.?;
     try std.testing.expect(wl.lines.len > 1);
+}
+
+const FixedText = struct {
+    w: f32 = 47,
+    h: f32 = 23,
+    fn measure(ctx: ?*anyopaque, text: [*]const u8, len: usize, size: f32, w: *f32, h: *f32) callconv(.c) u8 {
+        _ = text;
+        _ = len;
+        _ = size;
+        const self: *FixedText = @ptrCast(@alignCast(ctx.?));
+        w.* = self.w;
+        h.* = self.h;
+        return 1;
+    }
+    fn prepare(_: ?*anyopaque, _: [*]const external_text.CRun, _: usize, _: *const external_text.Viewport) callconv(.c) u8 {
+        return 0;
+    }
+    fn draw(_: ?*anyopaque, _: ?*anyopaque, _: *const external_text.CRun) callconv(.c) u8 {
+        return 0;
+    }
+    fn dispose(_: ?*anyopaque) callconv(.c) void {}
+    fn hook(self: *FixedText) external_text.Hook {
+        return .{ .ctx = self, .measure = measure, .prepare = prepare, .draw = draw, .dispose = dispose };
+    }
+};
+
+fn textFragmentWidth(ui: *Ui, id: dom.NodeId) ?f32 {
+    const b = layout.boxOfNode(ui.doc.node(id)) orelse return null;
+    const il = b.inline_layout orelse return null;
+    for (il.frags) |f| if (f.kind == .text) return f.w;
+    return null;
+}
+
+fn externalRuns(ui: *Ui) usize {
+    var n: usize = 0;
+    for (ui.dl.cmds.items) |c| {
+        if (c == .external_text) n += 1;
+    }
+    return n;
+}
+
+test "custom text metrics size the run and keep it between quads" {
+    const ui = try Ui.create(std.testing.allocator, .{ .fonts = try font.MockBackend.create(std.testing.allocator) });
+    ui.owns_fonts = true;
+    defer ui.destroy();
+    var fixed = FixedText{};
+    try ui.setTextRenderer(fixed.hook());
+    try ui.setHtml(
+        \\<style>body { margin: 0 } #p { background: #111 } #a { width: 10px; height: 10px; background: #222 }</style>
+        \\<div id="p">AV fi</div><div id="a"></div>
+    );
+    ui.resize(300, 100, 1);
+    _ = try ui.update();
+    const p = try style_mod.querySelector(ui.doc, ui.doc.root, "#p");
+    try std.testing.expectApproxEqAbs(@as(f32, 47), textFragmentWidth(ui, p).?, 0.01);
+    var saw_text = false;
+    var rect_before = false;
+    var rect_after = false;
+    for (ui.dl.cmds.items) |c| switch (c) {
+        .external_text => |t| {
+            try std.testing.expectEqualStrings("AV fi", t.text);
+            saw_text = true;
+        },
+        .rect => {
+            if (!saw_text) rect_before = true else rect_after = true;
+        },
+        else => {},
+    };
+    try std.testing.expect(saw_text and rect_before and rect_after);
+    // built-in text does not record external runs
+    ui.clearTextRenderer();
+    _ = try ui.update();
+    try std.testing.expectEqual(@as(usize, 0), externalRuns(ui));
+}
+
+test "custom text keeps offscreen overflow and drops empty or clipped runs" {
+    const ui = try Ui.create(std.testing.allocator, .{ .fonts = try font.MockBackend.create(std.testing.allocator) });
+    ui.owns_fonts = true;
+    defer ui.destroy();
+    var fixed = FixedText{ .w = 200, .h = 20 };
+    try ui.setTextRenderer(fixed.hook());
+    try ui.setHtml(
+        \\<style>body { margin: 0 } #s { width: 100px; height: 30px; overflow: hidden }</style>
+        \\<div id="s">intrinsic text extends into the viewport</div>
+    );
+    ui.resize(100, 30, 1);
+    const s = try style_mod.querySelector(ui.doc, ui.doc.root, "#s");
+    ui.doc.node(s).scroll_x = 10;
+    ui.doc.markLayoutDirty(s);
+    ui.doc.needs_paint = true;
+    _ = try ui.update();
+    var run: ?paint.ExternalText = null;
+    for (ui.dl.cmds.items) |c| switch (c) {
+        .external_text => |t| run = t,
+        else => {},
+    };
+    const recorded = run.?;
+    try std.testing.expectApproxEqAbs(@as(f32, -10), recorded.x, 0.01);
+    try std.testing.expect(recorded.clip.w > 0 and recorded.clip.h > 0);
+
+    try ui.setHtml("<style>body{margin:0} #e{height:0;overflow:hidden;color:#fff}</style><div id=\"e\">clipped</div>");
+    _ = try ui.update();
+    try std.testing.expectEqual(@as(usize, 0), externalRuns(ui));
+
+    try ui.setHtml("<style>body{margin:0} #t{color:transparent}</style><div id=\"t\">transparent</div>");
+    _ = try ui.update();
+    try std.testing.expectEqual(@as(usize, 0), externalRuns(ui));
+
+    try ui.setHtml("<style>body{margin:0}</style><div id=\"z\"></div>");
+    _ = try ui.update();
+    try std.testing.expectEqual(@as(usize, 0), externalRuns(ui));
 }

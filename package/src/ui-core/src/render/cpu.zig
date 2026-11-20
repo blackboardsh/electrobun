@@ -141,6 +141,7 @@ const Ctx = struct {
             .shadow => |s| c.drawShadow(s),
             .gradient => |g| c.drawGradient(g.rect, g.radii, g.clip, g.gradient),
             .glyphs => |g| c.drawGlyphs(g.glyphs, g.color, g.shadow),
+            .external_text => {},
             .image => |im| c.drawImage(im.rect, im.radii, im.image, im.src, im.opacity),
             .surface => {},
             .push_clip => |pc| {

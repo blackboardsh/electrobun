@@ -546,6 +546,7 @@ fn onFrame(ctx: ?*anyopaque, t: f64) callconv(.c) void {
     defer capi.unlock();
     const hv = liveView(ctx) orelse return;
     const ui = uiOf(hv) orelse return;
+    if (ui.frames_held) return;
     const n = native orelse return;
     hv.in_frame = true;
     defer hv.in_frame = false;
@@ -642,6 +643,7 @@ fn configurePresent(hv: *View, ui: *ui_mod.Ui, n: Native) void {
 
 fn render(hv: *View, ui: *ui_mod.Ui) !void {
     const api = dawn_api.?;
+    hv.renderer.text_hook = ui.textDrawHook();
     try hv.renderer.render(&ui.dl, hv.px_w, hv.px_h, hv.scale);
     if (hv.present_path == .composition) return renderComposited(hv);
     var st = wgpu.SurfaceTexture{};
@@ -693,6 +695,14 @@ export fn ebui_host_frames(ui_id: u32) u64 {
 
 /// Force a present without a GPU readback. Frame synchronization and synthetic
 /// input use this path; only callers actually inspecting pixels need a capture.
+export fn ebui_wgpu_device(ui_id: u32) u64 {
+    capi.lock();
+    defer capi.unlock();
+    if (viewFor(ui_id) == null) return 0;
+    const ctx = dawn_ctx orelse return 0;
+    return @intFromPtr(ctx.device);
+}
+
 export fn ebui_request_frame(ui_id: u32) void {
     capi.lock();
     defer capi.unlock();
