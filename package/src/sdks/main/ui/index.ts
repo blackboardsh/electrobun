@@ -6,6 +6,7 @@
 //   createUIWindow({ title: "App", width: 800, height: 600, css }, () => <App />);
 import { JSCallback, ptr, toArrayBuffer } from "bun:ffi";
 import { render as domRender } from "../../../browser/ui/dom";
+import { GPUDevice } from "../webgpuAdapter";
 import { native as wgpuNative } from "../webGPU";
 import { GpuWindow } from "../core/GpuWindow";
 import { WGPUView } from "../core/WGPUView";
@@ -14,6 +15,9 @@ import { ffi } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { uiLib, isNativeUIAvailable as isUIAvailable } from "./ffi";
 import { NativeDocument, NativeElement } from "./document";
+import { TextRendererBinding, type UiTextRendererFactory } from "./textRenderer";
+
+export type { UiTextRenderer, UiTextRendererFactory, UiTextRun, UiTextViewport } from "./textRenderer";
 
 export { isUIAvailable, NativeDocument as UIDocument, NativeElement as UINode };
 export type { NativeEvent as UIEvent, UIRect } from "./document";
@@ -63,6 +67,8 @@ export interface UIOptions {
 	transparent?: boolean;
 	/** add the built-in eb-* component stylesheet */
 	components?: boolean;
+	/** Supply text measurement and GPU drawing. The engine keeps layout, clipping and the pass. */
+	createTextRenderer?: UiTextRendererFactory;
 }
 
 export interface Modifiers {
@@ -83,9 +89,13 @@ function sleep(ms: number) {
 export class UI {
 	readonly id: number;
 	readonly document: NativeDocument;
+	/** Resolves once an async text backend is installed, or immediately when there is none. */
+	readonly ready: Promise<void>;
 	private wakeup: JSCallback | null = null;
 	private poll: ReturnType<typeof setInterval> | null = null;
 	private sheets: number[] = [];
+	private textBinding: TextRendererBinding | null = null;
+	private borrowedDevice: GPUDevice | null = null;
 
 	constructor(target: ViewLike, options: UIOptions = {}) {
 		const lib = uiLib();
@@ -93,6 +103,7 @@ export class UI {
 		if (!this.id) throw new Error("electrobun UI: failed to create instance");
 		// before attaching: the host picks how to present from it at the first frame
 		if (options.transparent) lib.ebui_set_transparent(this.id, true);
+		if (options.createTextRenderer) lib.ebui_set_frames_held(this.id, true);
 		this.document = new NativeDocument(this.id);
 		const view = viewPointer(target);
 		if (!view) throw new Error("electrobun UI: target has no WGPU view");
@@ -102,11 +113,46 @@ export class UI {
 		if (options.components) lib.ebui_use_components(this.id);
 		for (const css of ([] as string[]).concat(options.css ?? [])) this.addStylesheet(css);
 		if (options.dark !== undefined) lib.ebui_set_dark(this.id, options.dark);
+		this.ready = this.mountText(options.createTextRenderer);
+		// Keep the rejection on `ready` without an unhandled-rejection when the caller does not await it.
+		void this.ready.catch(() => {});
 		this.startEventPump();
 		// Dispose app-side state when the close event arrives. Native removal
 		// already detaches the renderer synchronously before freeing its view.
 		const owner = target as { on?: (name: string, fn: () => void) => unknown };
 		if (typeof owner.on === "function") owner.on("close", () => this.destroy());
+	}
+
+	private async mountText(factory?: UiTextRendererFactory): Promise<void> {
+		if (!factory) return;
+		const lib = uiLib();
+		try {
+			const devicePtr = Number(lib.ebui_wgpu_device(this.id));
+			if (!devicePtr) throw new Error("electrobun UI: no GPU device for a text renderer");
+			const device = new GPUDevice(devicePtr);
+			this.borrowedDevice = device;
+			const renderer = await factory({ device, format: "bgra8unorm" });
+			if (this.destroyed) {
+				try { renderer.dispose(); } catch { /* already tearing down */ }
+				return;
+			}
+			this.textBinding = new TextRendererBinding(this.id, renderer);
+			lib.ebui_set_frames_held(this.id, false);
+			lib.ebui_request_frame(this.id);
+		} catch (error) {
+			if (!this.destroyed) {
+				try { lib.ebui_set_frames_held(this.id, false); } catch { /* instance already gone */ }
+			}
+			throw error;
+		}
+	}
+
+	private releaseBorrowedDevice(): void {
+		const device = this.borrowedDevice;
+		if (!device) return;
+		this.borrowedDevice = null;
+		try { device.queue._releaseReference(false); } catch { /* queue already released */ }
+		device.ptr = 0;
 	}
 
 	private startEventPump() {
@@ -281,6 +327,9 @@ export class UI {
 		const lib = uiLib();
 		lib.ebui_detach_view(this.id);
 		lib.ebui_destroy(this.id);
+		this.textBinding?.close();
+		this.textBinding = null;
+		this.releaseBorrowedDevice();
 		this.wakeup?.close();
 	}
 }
