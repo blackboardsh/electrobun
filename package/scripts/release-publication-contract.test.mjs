@@ -333,7 +333,7 @@ function validatePublicationContract(source) {
 	assert.match(npmVerification, /check-published-bootstrap\.mjs/);
 	assert.match(npmVerification, /grep -Fxq 'exists=true'/);
 	assert.match(npmVerification, /^        timeout-minutes: 10$/m);
-	assert.match(npmVerification, /^          max_attempts=19$/m);
+	assert.match(npmVerification, /^          max_attempts=49$/m);
 	assert.match(
 		npmVerification,
 		/for \(\(attempt = 1; attempt <= max_attempts; attempt \+= 1\)\); do/,
@@ -557,7 +557,7 @@ test("contract rejects single-shot or unbounded post-publish verification", () =
 	assert.throws(
 		() =>
 			validatePublicationContract(
-				workflow.replace("          max_attempts=19", "          max_attempts=1"),
+				workflow.replace("          max_attempts=49", "          max_attempts=1"),
 			),
 		{ code: "ERR_ASSERTION" },
 	);

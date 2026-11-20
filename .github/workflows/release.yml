@@ -851,7 +851,8 @@ jobs:
           set -euo pipefail
           published_state="$(mktemp)"
           trap 'rm -f -- "$published_state"' EXIT
-          max_attempts=19
+          # Allow eight minutes of propagation waits within the ten-minute step.
+          max_attempts=49
           for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
             : > "$published_state"
             if node npm/scripts/check-published-bootstrap.mjs \
