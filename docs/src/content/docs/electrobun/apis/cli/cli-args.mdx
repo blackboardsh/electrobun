@@ -70,6 +70,7 @@ is useful for validating a dynamically constructed config without building.
 ```bash
 hutch electrobun config --env=dev
 hutch electrobun config --env=stable
+hutch electrobun config --env=canary --arch=x64
 ```
 
 ## `hutch electrobun prepare`
@@ -85,6 +86,7 @@ consults the active release channel:
 ```bash
 hutch electrobun prepare
 hutch electrobun prepare --env=stable
+hutch electrobun prepare --arch=x64
 ```
 
 `build`, `run`, and `dev` perform the same non-advancing preparation implicitly.
@@ -122,6 +124,7 @@ remain authoritative:
 ```bash
 hutch electrobun sync
 hutch electrobun sync --env=stable
+hutch electrobun sync --arch=x64
 ```
 
 Use `sync` when you intend to change the selected floating release. `init`
@@ -130,12 +133,14 @@ defaults apply only to an unpinned template.
 
 ## `hutch electrobun build`
 
-Build the application for the current host platform and architecture.
+Build the application for the host operating system. The architecture defaults
+to the host; `--arch=arm64` or `--arch=x64` selects a different build target.
 
 ```bash
 hutch electrobun build --env=dev
 hutch electrobun build --env=canary
 hutch electrobun build --env=stable
+hutch electrobun build --env=canary --arch=x64
 ```
 
 | Environment | Result |
@@ -151,8 +156,15 @@ notarization, patch generation, CEF, WGPU, and installer behavior come from
 `stable` is the canonical main release environment. Canary remains a separate
 release channel.
 
-Hutch does not cross-compile an Electrobun release. Run the command on native
-macOS, Windows, and Linux CI workers for a complete matrix.
+Use Hutch **0.31.0-canary.2** for cross-architecture builds with Zig, Bun, or
+devkit-pinned Cottontail main processes.
+`config`, `prepare`, and `sync` accept the same flag; `--arch x64` also works.
+Build tools run on the host architecture while the SDK and packaged app target
+the selected architecture. There is no cross-OS build option. `run`, `dev`,
+and `init` require the native architecture.
+
+See [Cross-Platform Development](/electrobun/guides/cross-platform-development/#build-both-architectures-on-one-os)
+for the build workflow, custom-hook requirements, and target-native testing.
 
 ## `hutch electrobun upload`
 

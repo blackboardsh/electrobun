@@ -210,8 +210,13 @@ Native build descriptions remain project-owned:
 Hutch invokes the normal project build tool. It does not generate `build.zig`,
 Cargo manifests, Go modules, or a temporary GOPATH.
 
-Hutch builds for the current host platform and architecture. Use native CI
-runners when producing the macOS, Windows, and Linux release matrix.
+Hutch defaults to the host operating system and architecture. With Hutch
+0.31.0-canary.2, Zig, Bun, and devkit-pinned Cottontail apps can select another
+architecture on the same OS with `hutch electrobun build --arch=x64` or
+`--arch=arm64`. Zig apps must use `b.standardTargetOptions(.{})` in `build.zig`
+and propagate its target to every compiled module and native dependency.
+Rust, Go, and Odin still require builds on their target architecture. See
+[Cross-Platform Development](/electrobun/guides/cross-platform-development/#build-both-architectures-on-one-os).
 
 ## `build.cottontail`
 
@@ -606,7 +611,8 @@ All hooks inherit the process environment and receive:
 
 - `ELECTROBUN_BUILD_ENV`: `dev`, `canary`, or `stable`
 - `ELECTROBUN_OS`: `macos`, `linux`, or `win`
-- `ELECTROBUN_ARCH`: `x64` or `arm64`
+- `ELECTROBUN_ARCH`: target architecture, `x64` or `arm64`
+- `ELECTROBUN_HOST_ARCH`: host architecture, `x64` or `arm64` (Hutch 0.31.0-canary.2)
 - `ELECTROBUN_BUILD_DIR`
 - `ELECTROBUN_ARTIFACT_DIR`
 - `ELECTROBUN_APP_NAME`

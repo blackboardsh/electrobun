@@ -162,9 +162,10 @@ update metadata included — and signs it when signing is configured. Canary and
 channels, so you can ship prerelease builds to testers without touching your
 stable release line.
 
-Hutch builds for the operating system and architecture it's running on, so a
-complete cross-platform release means running the build on native CI runners
-for each target.
+Hutch defaults to the host operating system and architecture. See
+[Cross-Platform Development](/electrobun/guides/cross-platform-development/)
+for supported same-OS `--arch` builds and the runtime test matrix for a complete
+cross-platform release.
 
 ## Next steps
 

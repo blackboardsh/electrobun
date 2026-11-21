@@ -4,8 +4,10 @@ description: "Build and test Electrobun applications on macOS, Windows, and Linu
 ---
 
 Electrobun applications share configuration and application source across
-platforms, but Hutch builds for the operating system and architecture on which
-it is running. Produce and test each release on a native runner.
+platforms. Hutch builds for the host operating system and defaults to its
+architecture. Supported cross-architecture builds can produce both ARM64 and
+x64 artifacts on one machine per operating system; test the resulting apps on
+their target architectures.
 
 ## Supported Release Targets
 
@@ -19,7 +21,7 @@ Windows ARM64 builds use a native ARM64 Zig `0.17.0` host compiler and produce
 native ARM64 applications. Test both WebView2 and CEF on ARM64 hardware.
 Existing x64 applications remain emulated until the ARM64 build is explicitly installed.
 macOS releases include separate Intel x64 and Apple Silicon ARM64 artifacts,
-both targeting macOS 14 or later. Build and test each on its native architecture.
+both targeting macOS 14 or later. Test each on its native architecture.
 
 On each runner, install Hutch and execute the same stable-release command:
 
@@ -36,6 +38,67 @@ Bun, pnpm, Yarn, or a custom executable instead.
 
 macOS signing and notarization must run on macOS. Native main-process builds
 also require that language's host toolchain and platform linker.
+
+## Build Both Architectures on One OS
+
+Hutch **0.31.0-canary.2** supports `--arch=arm64` and `--arch=x64` for
+`config`, `prepare`, `sync`, and `build`, with **Zig, Bun, or pinned Cottontail
+main processes**. Cottontail cross builds require an exact runtime pin in the
+selected Electrobun devkit; local runtime overrides and legacy host-runtime
+fallbacks are supported only for native builds. Cross-architecture Rust, Go,
+Odin, and Flatpak builds are not supported.
+
+An ARM64 macOS host can build macOS ARM64 and macOS x64; Windows and Linux
+hosts likewise build targets for their own OS. The flag does not select a
+different operating system. `--arch x64` is equivalent to `--arch=x64`, and
+omitting the flag selects the host architecture.
+
+For an existing supported app, check the installed Hutch version and inspect
+the target configuration, then build both architectures:
+
+```bash
+hutch --version
+hutch electrobun config --env=canary --arch=x64
+hutch electrobun build --env=canary --arch=arm64
+hutch electrobun build --env=canary --arch=x64
+```
+
+Pin `electrobun.version` in `hutch.config.ts` so both builds use the same
+Electrobun release. Each build prepares the requested target's SDK and writes
+its own architecture-specific output. Run these commands sequentially in one
+checkout: the generated `.hutch/devkit` directory holds one target projection
+at a time. Use separate checkouts for concurrent builds.
+
+Hutch keeps **build tools on the host architecture**: configuration, JavaScript
+bundling, the Zig compiler, compression, and patch generation run natively.
+The projected SDK and packaged launcher, core, and native libraries come from
+the **target architecture**. Bun and Cottontail apps package the selected
+target runtime while configuration and bundling use the host runtime. This
+does not require running the target app under Rosetta or another emulator.
+The selected Electrobun release must provide the necessary host tools and
+target SDK.
+
+For Zig apps, `build.zig` must use `b.standardTargetOptions(.{})` and pass that
+target to its executable, modules, and native dependencies. Hutch supplies the
+selected Zig `-Dtarget`. Custom build hooks must also select target binaries
+and libraries explicitly: `ELECTROBUN_ARCH` is the requested target and
+`ELECTROBUN_HOST_ARCH` is the machine running the build. A hook's
+`process.arch` describes the host. Keep code generators and other tools that
+run during the build native to the host, and run tests of packaged executables
+on matching target runners.
+
+`build` produces the app without launching it. `run`, `dev`, and `init` require
+the native architecture; cross-target launch requests are rejected. Return to
+the normal local development loop with:
+
+```bash
+hutch electrobun dev --watch
+```
+
+Signing still uses the platform's native tools. For example, an Apple Silicon
+Mac can sign and notarize its Intel artifact, but validation of that artifact
+still belongs on an Intel Mac. Cross compilation reduces the build matrix; it
+does not replace the six-target runtime test matrix.
 
 ## Platform Configuration
 
