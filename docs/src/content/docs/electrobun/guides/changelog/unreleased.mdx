@@ -4,4 +4,16 @@ title: "Unreleased"
 
 Changes since [v2.0.7](/electrobun/guides/changelog/v2-0-7/).
 
-No changes recorded yet.
+## Cross-architecture app builds
+
+The paired Hutch CLI now supports `--arch=arm64` and `--arch=x64` for builds on
+the same operating system. Zig, Bun, and devkit-pinned Cottontail apps use native
+build tools while packaging the selected architecture's SDK and runtime.
+
+Config and build hooks receive `ELECTROBUN_ARCH` for the target and
+`ELECTROBUN_HOST_ARCH` for the build host. Cross builds use separate compiler
+caches and generate target-specific update artifacts. Run and test the resulting
+apps on the intended architecture before publishing them.
+
+See [Cross-platform development](/electrobun/guides/cross-platform-development/)
+for configuration and current limits.
