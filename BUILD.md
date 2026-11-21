@@ -122,7 +122,7 @@ using this experiment as a release gate.
 ## Hutch and Cottontail
 
 Canonical Hutch and Cottontail releases are published independently of
-Electrobun. The Electrobun release workflow downloads and verifies the four
+Electrobun. The Electrobun release workflow downloads and verifies the six
 archives from its exact paired upstream Hutch release, then mirrors those same
 bytes into the Electrobun GitHub Release under `electrobun-hutch-*` names. Its
 `hutch-artifacts.json` binds each mirror's immutable URL, byte size, and SHA-256
@@ -140,16 +140,21 @@ changing the published version pins.
 
 ## Architecture Support
 
-- **macOS**: ARM64 (Apple Silicon)
-- **Windows**: x64 only (ARM Windows users run via automatic emulation)
-- **Linux**: x64, ARM64
+Electrobun publishes native SDKs and runtime binaries for all six targets:
 
-### Windows Architecture Notes
+- **macOS**: ARM64 (Apple Silicon), x64 (Intel)
+- **Windows**: ARM64, x64
+- **Linux**: ARM64, x64
 
-Windows builds are created on ARM VMs but target x64 architecture. Both x64 and ARM Windows users use the same x64 binary:
-- **x64 Windows**: Runs natively
-- **ARM Windows**: Runs via automatic Windows emulation layer
+Windows ARM64 and x64 have separate native builds. Dependency setup selects
+build tools for the host architecture and runtime dependencies for the selected
+target.
 
-This approach simplifies distribution while maintaining compatibility across Windows architectures.
+Hutch `0.31.0-canary.2` supports same-OS app builds with `--arch=arm64` or
+`--arch=x64` for Zig, Bun, and devkit-pinned Cottontail main processes. Build
+tools run on the host while the app packages the target SDK and runtime. `run`
+and `dev` use the native architecture; validate cross-built artifacts on their
+intended target before publishing them.
 
-The build system automatically detects the host architecture and downloads appropriate dependencies.
+See [cross-platform development](docs/src/content/docs/electrobun/guides/cross-platform-development.mdx)
+for commands and current cross-build limits.
