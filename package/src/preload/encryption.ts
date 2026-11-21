@@ -5,23 +5,24 @@ import "./globals.d.ts";
 
 function base64ToUint8Array(base64: string): Uint8Array {
 	const binary = atob(base64);
-	if (window.__electrobunPlatform === "linux") {
-		// WebKitGTK becomes allocation-bound on large RPC bursts if every byte
-		// is first expanded into a split/map array.
-		const bytes = new Uint8Array(binary.length);
-		for (let i = 0; i < binary.length; i++) {
-			bytes[i] = binary.charCodeAt(i);
-		}
-		return bytes;
+	// Typed-array loop on every platform: expanding each byte into a
+	// split/map array makes large RPC bursts allocation-bound.
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) {
+		bytes[i] = binary.charCodeAt(i);
 	}
-
-	return new Uint8Array(binary.split("").map((char) => char.charCodeAt(0)));
+	return bytes;
 }
 
 function uint8ArrayToBase64(uint8Array: Uint8Array): string {
+	// One string append per 32 KB block instead of one per byte.
+	const CHUNK = 0x8000;
 	let binary = "";
-	for (let i = 0; i < uint8Array.length; i++) {
-		binary += String.fromCharCode(uint8Array[i]!);
+	for (let i = 0; i < uint8Array.length; i += CHUNK) {
+		binary += String.fromCharCode.apply(
+			null,
+			uint8Array.subarray(i, i + CHUNK) as unknown as number[],
+		);
 	}
 	return btoa(binary);
 }
