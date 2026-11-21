@@ -155,8 +155,11 @@ so the release can select its paired toolchain. Direct Hutch users can run
 `hutch upgrade` to update their global installation.
 
 Electrobun 2.0.5 includes native Intel Mac support on macOS 14 or later.
-Build Intel apps on an Intel Mac or native Intel CI runner; cross-compiling
-from Apple Silicon is not supported.
+Current Hutch releases can also build Intel artifacts on Apple Silicon for
+Zig, Bun, and devkit-pinned Cottontail apps. Update an older CLI pragma before
+using `--arch=x64`; see [same-OS cross builds](/electrobun/guides/cross-platform-development/#build-both-architectures-on-one-os)
+for the required Hutch version and configuration. Validate Intel artifacts on
+an Intel Mac.
 
 Choose the app runtime explicitly when migrating:
 

@@ -17,9 +17,12 @@ description: "Supported operating systems, architectures, runtimes, and webview 
 Windows ARM64 builds run natively. Existing x64 installations continue to run
 under emulation; install the ARM64 build explicitly to switch architectures.
 
-Hutch builds for the current host operating system and architecture. Produce a
-cross-platform release with native CI runners; native main-process compilers do
-not currently cross-compile Electrobun apps.
+Hutch builds for the current host operating system and defaults to its
+architecture. Zig, Bun, and devkit-pinned Cottontail apps can select ARM64 or
+x64 with `--arch=arm64` or `--arch=x64`. See [same-OS cross builds](/electrobun/guides/cross-platform-development/#build-both-architectures-on-one-os)
+for the required Hutch version and configuration. Builds for another operating
+system still require a runner on that OS, and every app must be validated on
+its target architecture.
 
 ## Main process runtimes
 

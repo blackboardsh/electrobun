@@ -259,9 +259,10 @@ otherwise it downloads the selected toolchain into
 `~/.hutch/toolchains/zig/<version>/<platform>` and reuses it across projects. The
 compiler is not bundled into the finished app.
 
-Native main processes build for the host OS/arch only — there is no
-cross-compilation, so use native CI runners for a release matrix. Windows
-targets include x64 and ARM64.
+Zig apps can build ARM64 or x64 artifacts for the host operating system with
+`--arch=arm64` or `--arch=x64`. See [same-OS cross builds](/electrobun/guides/cross-platform-development/#build-both-architectures-on-one-os)
+for the required Hutch version and target-aware `build.zig` configuration.
+Run and validate each artifact on its target architecture.
 
 Next: [Native main process](/electrobun/guides/native-main-process/) for the
 runtime comparison and deeper build details, and the
