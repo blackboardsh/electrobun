@@ -169,10 +169,26 @@ static void ensureXlibThreadSupport() {
     }
 }
 
+// First error code of the server's GLX extension, or 0 when it has none.
+// Read once in initializeGTK(): an error handler must not ask the server.
+static std::atomic<int> g_glxErrorBase{0};
+
+// Whether an X error only says that a window or drawable was already gone.
+// GLX reports that with its own codes, GLXBadDrawable (2) and GLXBadWindow
+// (12) counted from the extension's error base, so the core codes alone miss
+// GTK freeing the GL drawable of a destroyed window.
+static bool isDestroyedDrawableError(int errorCode, int glxErrorBase) {
+    if (errorCode == BadWindow || errorCode == BadDrawable) {
+        return true;
+    }
+    return glxErrorBase != 0 &&
+        (errorCode == glxErrorBase + 2 || errorCode == glxErrorBase + 12);
+}
+
 // X11 Error Handler (non-fatal errors are common in WebKit/GTK)
 static int x11_error_handler(Display* display, XErrorEvent* error) {
     // Only log severe errors, ignore common ones like BadWindow for destroyed widgets
-    if (error->error_code != BadWindow && error->error_code != BadDrawable) {
+    if (!isDestroyedDrawableError(error->error_code, g_glxErrorBase.load())) {
         char error_text[256];
         XGetErrorText(display, error->error_code, error_text, sizeof(error_text));
         fprintf(stderr, "X11 Error: %s (code %d)\n", error_text, error->error_code);
@@ -6646,6 +6662,14 @@ void initializeGTK() {
             gtk_init(nullptr, nullptr);
             
             // Install X11 error handler for debugging
+            GdkDisplay* defaultDisplay = gdk_display_get_default();
+            if (defaultDisplay && GDK_IS_X11_DISPLAY(defaultDisplay)) {
+                int glxOpcode = 0, glxEventBase = 0, glxErrorBase = 0;
+                if (XQueryExtension(gdk_x11_display_get_xdisplay(defaultDisplay), "GLX",
+                                    &glxOpcode, &glxEventBase, &glxErrorBase)) {
+                    g_glxErrorBase.store(glxErrorBase);
+                }
+            }
             XSetErrorHandler(x11_error_handler);
             
             g_gtkInitialized = true;
