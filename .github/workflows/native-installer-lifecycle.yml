@@ -110,3 +110,10 @@ jobs:
           $env:ELECTROBUN_TEST_EXTRACTOR = (Resolve-Path zig-out/bin/extractor.exe).Path
           node --test normal-installer.integration.test.mjs
           if ($LASTEXITCODE -ne 0) { throw "Normal installer integration failed" }
+      - name: Upload normal installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: normal-installer-diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/normal-installer-diagnostics-*/report.json
+          if-no-files-found: ignore

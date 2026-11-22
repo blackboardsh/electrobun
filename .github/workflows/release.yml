@@ -378,6 +378,14 @@ jobs:
           node --test src/extractor/normal-installer.integration.test.mjs
           if ($LASTEXITCODE -ne 0) { throw "Normal installer lifecycle failed" }
 
+      - name: Upload normal installer diagnostics
+        if: always() && (matrix.platform == 'linux' || matrix.platform == 'win32')
+        uses: actions/upload-artifact@v6
+        with:
+          name: normal-installer-diagnostics-${{ matrix.platform_name }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/normal-installer-diagnostics-*/report.json
+          if-no-files-found: ignore
+
       - name: Test unattended installation with native release artifacts
         timeout-minutes: 10
         working-directory: package
