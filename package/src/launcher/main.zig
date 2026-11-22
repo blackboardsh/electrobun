@@ -5,6 +5,7 @@ const automation = @import("automation.zig");
 const linux_dependencies = @import("linux_dependencies.zig");
 const uninstall = @import("uninstall.zig");
 const windows_spawn = @import("windows_spawn.zig");
+const windows_stdio = @import("windows_stdio.zig");
 const windows_process_identity = @import("windows_process_identity.zig");
 const launcher_pid_environment_variable = "ELECTROBUN_LAUNCHER_PID";
 // Signal handlers use the POSIX libc ABI and Zig's target-specific signal values.
@@ -44,26 +45,7 @@ const windows_imports = if (builtin.os.tag == .windows) struct {
         dwThreadId: DWORD,
     };
 
-    const STARTUPINFOW = extern struct {
-        cb: DWORD,
-        lpReserved: ?LPWSTR,
-        lpDesktop: ?LPWSTR,
-        lpTitle: ?LPWSTR,
-        dwX: DWORD,
-        dwY: DWORD,
-        dwXSize: DWORD,
-        dwYSize: DWORD,
-        dwXCountChars: DWORD,
-        dwYCountChars: DWORD,
-        dwFillAttribute: DWORD,
-        dwFlags: DWORD,
-        wShowWindow: win.WORD,
-        cbReserved2: win.WORD,
-        lpReserved2: ?*u8,
-        hStdInput: ?HANDLE,
-        hStdOutput: ?HANDLE,
-        hStdError: ?HANDLE,
-    };
+    const STARTUPINFOW = win.STARTUPINFOW;
 
     extern "kernel32" fn CreateProcessW(
         lpApplicationName: ?LPWSTR,
@@ -578,13 +560,13 @@ pub fn main(init: std.process.Init) !void {
         );
     };
 
-    // Windows non-dev builds: Use CreateProcessW with CREATE_NO_WINDOW (no console)
-    // Dev builds and other platforms: Use standard spawn with inherited I/O
+    // Windows uses a strict stdio handle allowlist for both dev and packaged
+    // launches. Packaged apps additionally suppress console creation.
     const use_gui_mode = builtin.os.tag == .windows and !is_dev_build;
 
-    if (use_gui_mode) {
-        // Windows non-dev build - use CreateProcessW with CREATE_NO_WINDOW
+    if (builtin.os.tag == .windows) {
         const win = windows_imports;
+        const original_stdio = windows_stdio.capture();
 
         // Build command line (needs to be mutable for CreateProcessW)
         const cmd_line = try windows_spawn.commandLine(arena_alloc, argv);
@@ -593,29 +575,35 @@ pub fn main(init: std.process.Init) !void {
         // Convert current directory to UTF-16
         const cwd_w = try std.unicode.wtf8ToWtf16LeAllocZ(arena_alloc, exe_dir);
 
-        var si: win.STARTUPINFOW = std.mem.zeroes(win.STARTUPINFOW);
-        si.cb = @sizeOf(win.STARTUPINFOW);
-
-        var pi: win.PROCESS_INFORMATION = undefined;
         const environment_block = try env_map.createWindowsBlock(arena_alloc, .{});
-
-        const success = win.CreateProcessW(
-            null,
-            @constCast(cmd_line_w.ptr),
-            null,
-            null,
-            .FALSE, // Don't inherit handles
-            win.CREATE_NO_WINDOW | win.CREATE_UNICODE_ENVIRONMENT,
-            @ptrCast(@constCast(environment_block.slice.ptr)),
-            @constCast(cwd_w.ptr),
-            &si,
-            &pi,
-        );
-
-        if (!success.toBool()) {
-            std.debug.print("Failed to create process\n", .{});
-            return error.SpawnFailed;
-        }
+        const pi = blk: {
+            var stdio = try windows_stdio.Context.init(arena_alloc, original_stdio);
+            defer stdio.deinit();
+            if (is_dev_build and win.AttachConsole(win.ATTACH_PARENT_PROCESS).toBool()) {
+                try stdio.adoptAttachedConsole(original_stdio, windows_stdio.capture());
+                std.debug.print("Attached to parent console\n", .{});
+            }
+            var si = try stdio.startupInfo();
+            var process: win.PROCESS_INFORMATION = undefined;
+            const flags = win.CREATE_UNICODE_ENVIRONMENT | windows_stdio.extended_startupinfo_present |
+                @as(u32, if (use_gui_mode) win.CREATE_NO_WINDOW else 0);
+            if (!win.CreateProcessW(
+                null,
+                @constCast(cmd_line_w.ptr),
+                null,
+                null,
+                .TRUE, // Restricted by PROC_THREAD_ATTRIBUTE_HANDLE_LIST.
+                flags,
+                @ptrCast(@constCast(environment_block.slice.ptr)),
+                @constCast(cwd_w.ptr),
+                &si.startup,
+                &process,
+            ).toBool()) {
+                std.debug.print("Failed to create process\n", .{});
+                return error.SpawnFailed;
+            }
+            break :blk process;
+        };
 
         const identity = windows_process_identity.logSpawn(pi.hProcess);
 
@@ -639,63 +627,24 @@ pub fn main(init: std.process.Init) !void {
             windows_process_identity.exit(exit_code);
         }
     } else {
-        // Dev build or non-Windows: Use standard spawn with inherited I/O
-
-        // On Windows dev builds, attach to parent console for output
-        if (builtin.os.tag == .windows) {
-            const win = windows_imports;
-            if (win.AttachConsole(win.ATTACH_PARENT_PROCESS).toBool()) {
-                std.debug.print("Attached to parent console\n", .{});
-            }
-        }
-
+        // POSIX child processes inherit their caller's streams directly.
         var child_process = try std.process.spawn(io, .{
             .argv = argv,
             .cwd = .{ .path = exe_dir },
             .environ_map = env_map,
+            .stdin = .inherit,
             .stdout = .inherit,
             .stderr = .inherit,
         });
         child_pid = child_process.id.?;
 
-        const identity = if (builtin.os.tag == .windows)
-            windows_process_identity.logSpawn(child_pid)
-        else
-            null;
-        if (builtin.os.tag != .windows) std.debug.print("Child process spawned with PID {d}\n", .{child_pid});
-
-        // Zig's Windows Child.wait returns only u8 and closes its HANDLE. Retain
-        // the exact child object so crash statuses cannot become misleading 9
-        // (0xC0000409) or even success (a nonzero status ending in 00).
-        const retained_handle: ?std.os.windows.HANDLE = if (builtin.os.tag == .windows)
-            windows_process_identity.retain(child_pid) catch |err| {
-                windows_process_identity.logWaitError(identity);
-                _ = child_process.wait(io) catch {};
-                return err;
-            }
-        else
-            null;
-        defer if (builtin.os.tag == .windows) if (retained_handle) |handle| windows_process_identity.close(handle);
+        std.debug.print("Child process spawned with PID {d}\n", .{child_pid});
 
         // Wait for the subprocess to complete
         const result = child_process.wait(io) catch |err| {
-            if (builtin.os.tag == .windows) windows_process_identity.logWaitError(identity);
             std.debug.print("Failed to wait for child process: {}\n", .{err});
-            if (builtin.os.tag == .windows) return err;
             return;
         };
-
-        if (builtin.os.tag == .windows) {
-            const code = windows_process_identity.exitCode(retained_handle.?) catch |err| {
-                windows_process_identity.logWaitError(identity);
-                return err;
-            };
-            windows_process_identity.logExit(identity, code);
-            std.debug.print("Child process exited with code: {d}\n", .{code});
-            // ExitProcess does not run Zig defers; close our duplicate first.
-            windows_process_identity.close(retained_handle.?);
-            windows_process_identity.exit(code);
-        }
 
         switch (result) {
             .exited => |code| {
