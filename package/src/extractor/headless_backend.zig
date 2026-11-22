@@ -330,7 +330,14 @@ pub fn install(init: std.process.Init, request: Request, integrate: Integrate, p
     errdefer init.gpa.free(result_root);
     const result_app = try init.gpa.dupe(u8, app_path);
     errdefer init.gpa.free(result_app);
-    const launcher = try std.fs.path.join(init.gpa, &.{ app_path, launcherRelative() });
+    // Archive entry names are POSIX paths, but the public result must use the
+    // host's native separators throughout (join preserves inner separators).
+    const launcher = try std.fs.path.join(init.gpa, switch (builtin.os.tag) {
+        .macos => &.{ app_path, "Contents", "MacOS", "launcher" },
+        .linux => &.{ app_path, "bin", "launcher" },
+        .windows => &.{ app_path, "bin", "launcher.exe" },
+        else => unreachable,
+    });
     errdefer init.gpa.free(launcher);
     const settings_path = try std.fs.path.join(init.gpa, &.{ root_path, "install.json" });
     errdefer init.gpa.free(settings_path);

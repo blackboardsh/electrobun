@@ -1,4 +1,4 @@
-name: Native launcher stdio
+name: Native installer and launcher
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   windows:
-    name: Windows launcher (${{ matrix.arch }})
+    name: Windows installer and launcher (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
@@ -67,3 +67,19 @@ jobs:
           $env:ZIG_BINARY = (Get-Command zig).Source
           node --test arguments.integration.test.mjs windows_process_identity.integration.test.mjs
           if ($LASTEXITCODE -ne 0) { throw "Launcher process integration failed" }
+      - name: Build native extractor and unattended installer
+        working-directory: package/src/extractor
+        run: |
+          # Match the extractor target settings shipped by package/build.ts.
+          zig build -Dtarget=${{ matrix.target }} -Dcpu=baseline -Doptimize=ReleaseFast -j2 --summary all
+          if ($LASTEXITCODE -ne 0) { throw "Extractor and unattended installer build failed" }
+      - name: Verify unattended installation with native binaries
+        working-directory: package/src/extractor
+        env:
+          ELECTROBUN_REQUIRE_HEADLESS_INSTALLER: '1'
+          ELECTROBUN_TEST_DISPOSABLE_WINDOWS_USER: '1'
+        run: |
+          $env:ELECTROBUN_TEST_HEADLESS_INSTALLER = (Resolve-Path zig-out/bin/headless-installer.exe).Path
+          $env:ELECTROBUN_TEST_EXTRACTOR = (Resolve-Path zig-out/bin/extractor.exe).Path
+          node --test headless-installer.integration.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw "Unattended installer integration failed" }
