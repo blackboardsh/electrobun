@@ -300,7 +300,8 @@ jobs:
             libpipewire-0.3-dev \
             build-essential \
             cmake \
-            pkg-config
+            pkg-config \
+            xvfb xauth dbus-x11 openbox zenity x11-utils desktop-file-utils
 
       - name: Test portable CEF find behavior
         run: node scripts/run-bun-test.js src/shared/cef-find-session.test.ts
@@ -346,6 +347,36 @@ jobs:
       - name: Build for ${{ matrix.platform_name }}-${{ matrix.arch }}
         run: node scripts/package-release.js
         working-directory: package
+
+      - name: Test normal installer lifecycle on Linux
+        if: matrix.platform == 'linux'
+        timeout-minutes: 10
+        working-directory: package
+        shell: bash
+        env:
+          ELECTROBUN_REQUIRE_NORMAL_INSTALLER: '1'
+          ELECTROBUN_TEST_EXTRACTOR: dist/extractor
+        run: |
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' bash -e -c '
+            openbox > "$RUNNER_TEMP/installer-openbox.log" 2>&1 &
+            openbox_pid=$!
+            trap "kill $openbox_pid 2>/dev/null || true" EXIT
+            node --test src/extractor/normal-installer.integration.test.mjs
+          '
+
+      - name: Test normal installer lifecycle on Windows
+        if: matrix.platform == 'win32'
+        timeout-minutes: 10
+        working-directory: package
+        shell: pwsh
+        env:
+          ELECTROBUN_REQUIRE_NORMAL_INSTALLER: '1'
+          ELECTROBUN_TEST_EXTRACTOR: dist/extractor.exe
+          # The fixture installs and removes its unique known-folder/HKCU entry.
+          ELECTROBUN_TEST_DISPOSABLE_WINDOWS_USER: '1'
+        run: |
+          node --test src/extractor/normal-installer.integration.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw "Normal installer lifecycle failed" }
 
       - name: Test unattended installation with native release artifacts
         timeout-minutes: 10

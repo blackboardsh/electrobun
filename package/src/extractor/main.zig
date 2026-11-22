@@ -1638,6 +1638,12 @@ const InstallArchiveSource = union(enum) {
     file: []const u8,
 };
 
+fn prepareNormalInstallChannel(allocator: std.mem.Allocator, app_dir: []const u8) !std.Io.Dir {
+    if (!std.fs.path.isAbsolute(app_dir) or !std.mem.eql(u8, std.fs.path.basename(app_dir), "app")) return error.InvalidInstallLocation;
+    const channel_root = std.fs.path.dirname(app_dir) orelse return error.InvalidInstallLocation;
+    return headless_backend.ensureInstallRoot(allocator, g_io, channel_root);
+}
+
 fn extractAndInstall(
     allocator: std.mem.Allocator,
     archive_source: InstallArchiveSource,
@@ -1648,7 +1654,10 @@ fn extractAndInstall(
 ) !bool {
     errdefer progress.update(.failed, null, null);
 
-    var channel_dir = try std.Io.Dir.openDirAbsolute(g_io, std.fs.path.dirname(app_dir) orelse return error.InvalidInstallLocation, .{ .follow_symlinks = false });
+    // Fresh Linux/Windows installs may have no profile/data/channel folders.
+    // Create and pin that hierarchy before opening its lifecycle lock; do not
+    // defer creation until extraction or follow a substituted parent symlink.
+    var channel_dir = try prepareNormalInstallChannel(allocator, app_dir);
     defer channel_dir.close(g_io);
     const lifecycle_lock = try headless_backend.acquireLifecycleLock(g_io, channel_dir);
     defer lifecycle_lock.close(g_io);
@@ -1796,6 +1805,48 @@ fn extractAndInstall(
     std.debug.print(" Done!\n", .{});
     std.debug.print("Installation completed successfully!\n", .{});
     return true;
+}
+
+test "normal installer creates an absent profile hierarchy before lifecycle locking" {
+    g_io = std.testing.io;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(g_io, ".", allocator);
+    defer allocator.free(root);
+    const app = try std.fs.path.join(allocator, &.{ root, "missing-profile", "data", "org.example.normal", "canary", "app" });
+    defer allocator.free(app);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(g_io, "missing-profile", .{}));
+    var channel = try prepareNormalInstallChannel(allocator, app);
+    defer channel.close(g_io);
+    const lifecycle_lock = try headless_backend.acquireLifecycleLock(g_io, channel);
+    defer lifecycle_lock.close(g_io);
+    try channel.access(g_io, ".electrobun-prepare.lock", .{});
+    try std.testing.expectError(error.FileNotFound, channel.access(g_io, "app", .{}));
+    try std.testing.expectError(error.InstallationBusy, headless_backend.acquireLifecycleLock(g_io, channel));
+}
+
+test "normal installer channel preflight preserves file and symlink collisions" {
+    g_io = std.testing.io;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(g_io, ".", allocator);
+    defer allocator.free(root);
+    try tmp.dir.writeFile(g_io, .{ .sub_path = "profile-file", .data = "preserved" });
+    const blocked_app = try std.fs.path.join(allocator, &.{ root, "profile-file", "org.example.normal", "canary", "app" });
+    defer allocator.free(blocked_app);
+    try std.testing.expectError(error.InvalidInstallPath, prepareNormalInstallChannel(allocator, blocked_app));
+    const unchanged = try tmp.dir.readFileAlloc(g_io, "profile-file", allocator, .limited(1024));
+    defer allocator.free(unchanged);
+    try std.testing.expectEqualStrings("preserved", unchanged);
+    if (builtin.os.tag == .windows) return;
+    try tmp.dir.createDir(g_io, "unrelated", .default_dir);
+    try tmp.dir.symLink(g_io, "unrelated", "profile-link", .{ .is_directory = true });
+    const redirected_app = try std.fs.path.join(allocator, &.{ root, "profile-link", "org.example.normal", "canary", "app" });
+    defer allocator.free(redirected_app);
+    try std.testing.expectError(error.InvalidInstallPath, prepareNormalInstallChannel(allocator, redirected_app));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(g_io, "unrelated/org.example.normal", .{}));
 }
 
 fn retainedRecipePath(

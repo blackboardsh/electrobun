@@ -71,7 +71,9 @@ pub fn userData(a: A, env: *const std.process.Environ.Map, identifier: []const u
 
 /// Open/create one component at a time. Never recurse through a symlink or
 /// junction supplied in the installation hierarchy, including stale stages.
-fn ensureRoot(a: A, io: Io, path: []const u8) !Io.Dir {
+/// Graphical installers use the same preflight before taking a channel lock:
+/// a fresh profile does not have an installation hierarchy to open yet.
+pub fn ensureInstallRoot(a: A, io: Io, path: []const u8) !Io.Dir {
     if (!std.fs.path.isAbsolute(path)) return error.InvalidInstallPath;
     const normalized = try std.fs.path.resolve(a, &.{path});
     defer a.free(normalized);
@@ -257,7 +259,7 @@ pub fn install(init: std.process.Init, request: Request, integrate: Integrate, p
     try component(request.hash);
     if (request.tar_size == 0 or request.tar_size > max_archive_bytes or !archive.isDigest(request.tar_sha256)) return error.InvalidInstallIntegrity;
     const root_path = try userData(a, init.environ_map, request.identifier, request.channel);
-    var root = try ensureRoot(a, io, root_path);
+    var root = try ensureInstallRoot(a, io, root_path);
     defer root.close(io);
     if (builtin.os.tag != .windows) try root.setPermissions(io, permissions(0o700));
     const install_lock = try acquireLifecycleLock(io, root);
@@ -291,7 +293,7 @@ pub fn install(init: std.process.Init, request: Request, integrate: Integrate, p
     // sharing one updater state. Fresh unattended installs stay in userData.
     const app_path = try resolve_app_path(a, root_path, default_app_path, request);
     const app_parent_path = std.fs.path.dirname(app_path) orelse return error.InvalidInstallPath;
-    var app_parent = try ensureRoot(a, io, app_parent_path);
+    var app_parent = try ensureInstallRoot(a, io, app_parent_path);
     defer app_parent.close(io);
     const app_name = std.fs.path.basename(app_path);
     const previous_name = try std.fmt.allocPrint(a, "{s}.previous", .{app_name});
@@ -469,6 +471,6 @@ test "installation hierarchy rejects symlink parents without touching target" {
     defer std.testing.allocator.free(physical);
     const path = try std.fs.path.join(std.testing.allocator, &.{ physical, "redirect", "new-install" });
     defer std.testing.allocator.free(path);
-    try std.testing.expectError(error.InvalidInstallPath, ensureRoot(std.testing.allocator, std.testing.io, path));
+    try std.testing.expectError(error.InvalidInstallPath, ensureInstallRoot(std.testing.allocator, std.testing.io, path));
     try std.testing.expectError(error.FileNotFound, tmp.dir.access(std.testing.io, "actual/new-install", .{}));
 }

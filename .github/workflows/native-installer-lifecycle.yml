@@ -1,0 +1,112 @@
+name: Native installer lifecycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact source commit or ref to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-installer-lifecycle-${{ inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native:
+    name: Native installer (${{ matrix.platform }}-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+            target: x86_64-linux-gnu
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            target: aarch64-linux-gnu
+          - runner: windows-2025
+            platform: windows
+            arch: x64
+            target: x86_64-windows-gnu
+          - runner: windows-11-arm
+            platform: windows
+            arch: arm64
+            target: aarch64-windows-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: package/src/extractor
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.22.1'
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+          use-cache: false
+      - name: Verify native runner and pinned compiler
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          node -e 'const { execFileSync } = require("node:child_process"); if (process.arch !== process.env.EXPECTED_ARCH) throw new Error(`Expected ${process.env.EXPECTED_ARCH}, got ${process.arch}`); if (execFileSync("zig", ["version"], { encoding: "utf8" }).trim() !== "0.17.0") throw new Error("Unexpected Zig version")'
+      - name: Install Linux desktop fixture dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth dbus-x11 openbox zenity x11-utils desktop-file-utils
+      - name: Verify Windows interactive desktop session
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $session = (Get-Process -Id $PID).SessionId
+          Write-Host "Runner session: $session"
+          if ($session -eq 0 -or -not [Environment]::UserInteractive) {
+            throw "The normal installer fixture requires an interactive disposable Windows desktop"
+          }
+      - name: Build native Linux installer
+        if: runner.os == 'Linux'
+        shell: bash
+        run: zig build -Dtarget=${{ matrix.target }} -Dcpu=baseline -Doptimize=ReleaseFast -j2 --summary all
+      - name: Build native Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          zig build -Dtarget=${{ matrix.target }} -Dcpu=baseline -Doptimize=ReleaseFast -j2 --summary all
+          if ($LASTEXITCODE -ne 0) { throw "Native installer build failed" }
+      - name: Verify normal Linux installer lifecycle
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        shell: bash
+        env:
+          ELECTROBUN_REQUIRE_NORMAL_INSTALLER: '1'
+        run: |
+          export ELECTROBUN_TEST_EXTRACTOR="$PWD/zig-out/bin/extractor"
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' bash -eo pipefail -c '
+            openbox > "$RUNNER_TEMP/openbox-normal-installer.log" 2>&1 &
+            openbox_pid=$!
+            trap "kill $openbox_pid 2>/dev/null || true" EXIT
+            node --test normal-installer.integration.test.mjs
+          '
+      - name: Verify normal Windows installer lifecycle
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        env:
+          ELECTROBUN_REQUIRE_NORMAL_INSTALLER: '1'
+          ELECTROBUN_TEST_DISPOSABLE_WINDOWS_USER: '1'
+        run: |
+          $env:ELECTROBUN_TEST_EXTRACTOR = (Resolve-Path zig-out/bin/extractor.exe).Path
+          node --test normal-installer.integration.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw "Normal installer integration failed" }
