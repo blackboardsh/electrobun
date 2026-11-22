@@ -107,17 +107,25 @@ pub const Context = struct {
 
 test "missing GUI standard handles produce valid inheritable NUL handles" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var context = try Context.init(std.testing.allocator, .{ null, win.INVALID_HANDLE_VALUE, null });
+    var context = Context.init(std.testing.allocator, .{ null, win.INVALID_HANDLE_VALUE, null }) catch |err| {
+        std.debug.print("NUL stdio setup failed: {s}\n", .{@errorName(err)});
+        return err;
+    };
     defer context.deinit();
-    const startup = try context.startupInfo();
+    const startup = context.startupInfo() catch |err| {
+        std.debug.print("Stdio handle allowlist setup failed: {s}\n", .{@errorName(err)});
+        return err;
+    };
     try std.testing.expectEqual(@as(u32, @sizeOf(StartupInfoEx)), startup.startup.cb);
     for (context.handles) |handle| {
         var flags: win.OBJECT.HANDLE_FLAG = undefined;
         const status = win.ntdll.NtQueryObject(handle, .HandleFlag, &flags, @sizeOf(@TypeOf(flags)), null);
         try std.testing.expectEqual(win.NTSTATUS.SUCCESS, status);
-        try std.testing.expect(flags.INHERIT);
+        try std.testing.expectEqual(true, flags.INHERIT);
     }
     const input: std.Io.File = .{ .handle = context.handles[0], .flags = .{ .nonblocking = false } };
     var buffer: [16]u8 = undefined;
-    try std.testing.expectEqual(@as(usize, 0), try input.readStreaming(std.testing.io, &.{&buffer}));
+    // Zig's streaming file API reports EOF as EndOfStream, including the
+    // Windows NUL device; it does not return a successful zero-byte read.
+    try std.testing.expectError(error.EndOfStream, input.readStreaming(std.testing.io, &.{&buffer}));
 }
