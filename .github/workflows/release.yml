@@ -347,6 +347,25 @@ jobs:
         run: node scripts/package-release.js
         working-directory: package
 
+      - name: Test unattended installation with native release artifacts
+        timeout-minutes: 10
+        working-directory: package
+        env:
+          ELECTROBUN_REQUIRE_HEADLESS_INSTALLER: '1'
+          ELECTROBUN_TEST_HEADLESS_INSTALLER: dist/headless-installer${{ matrix.platform == 'win32' && '.exe' || '' }}
+          ELECTROBUN_TEST_EXTRACTOR: dist/extractor${{ matrix.platform == 'win32' && '.exe' || '' }}
+          # This matrix uses disposable hosted users. The Windows fixture
+          # explicitly cleans its unique known-folder/HKCU registration.
+          ELECTROBUN_TEST_DISPOSABLE_WINDOWS_USER: '1'
+        run: node --test src/extractor/headless-installer.integration.test.mjs
+
+      - name: Test launcher application argument forwarding
+        timeout-minutes: 5
+        working-directory: package
+        env:
+          ELECTROBUN_TEST_LAUNCHER: dist/launcher${{ matrix.platform == 'win32' && '.exe' || '' }}
+        run: node --test src/launcher/arguments.integration.test.mjs
+
       - name: Test host WebView delivery and RPC backpressure
         run: node scripts/run-bun-test.js src/shared/rpc.test.ts src/shared/windows-unicode-ui.test.ts src/sdks/main/core/BrowserViewHostMessageQueue.test.ts
         working-directory: package

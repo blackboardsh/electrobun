@@ -73,7 +73,7 @@ const targets: Array<{
 function manifestPaths(manifest: NativeDevkitManifest): string[] {
 	const { wgpuAuxiliaryLibraries, ...runtime } = manifest.layout.runtime;
 	const runtimePaths = [
-		...Object.values(runtime),
+		...Object.values(runtime).filter((path): path is string => path !== undefined),
 		...wgpuAuxiliaryLibraries,
 	];
 	const sdk = manifest.layout.sdks;
@@ -198,6 +198,19 @@ describe("native devkit manifest", () => {
 	it("marks Odin unsupported on Windows ARM64", () => {
 		const manifest = createNativeDevkitManifest({ productVersion: "2.0.3-beta.0", target: { os: "win", arch: "arm64" } });
 		expect(manifest.layout.sdks.odin.supported).toBe(false);
+	});
+	it.each([
+		{ os: "macos", arch: "arm64" },
+		{ os: "macos", arch: "x64" },
+		{ os: "linux", arch: "arm64" },
+		{ os: "linux", arch: "x64" },
+		{ os: "win", arch: "arm64" },
+		{ os: "win", arch: "x64" },
+	] as const)("declares the unattended installer for $os-$arch", (target) => {
+		const manifest = createNativeDevkitManifest({ productVersion: "2.0.8-beta.0", target });
+		expect(manifest.layout.runtime.headlessInstaller).toBe(
+			target.os === "win" ? "headless-installer.exe" : "headless-installer",
+		);
 	});
 
 	for (const { target, expected } of targets) {

@@ -88,6 +88,41 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // The unattended installer shares the archive reader and platform install
+    // registration with the graphical extractor, but never enters its UI or
+    // launch dispatch. Hutch embeds release configuration in this engine.
+    const headless = b.addExecutable(.{
+        .name = "headless-installer",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("headless_installer.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+        .win32_manifest = windows_manifest,
+    });
+    const updater_protocol = b.createModule(.{
+        .root_source_file = b.path("../core/updater_protocol.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    headless.root_module.addImport("updater_protocol", updater_protocol);
+    if (target.result.os.tag == .macos) {
+        headless.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ macos_sdk.?, "usr", "lib" }) });
+        headless.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ macos_sdk.?, "usr", "include" }) });
+        headless.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ macos_sdk.?, "System", "Library", "Frameworks" }) });
+        headless.root_module.addCSourceFile(.{ .file = b.path("macos_uninstall_prompt.m"), .flags = &.{"-fobjc-arc"} });
+        headless.root_module.linkFramework("AppKit", .{});
+        if (target.result.cpu.arch == .x86_64) headless.headerpad_size = 0x1000;
+    }
+    if (target.result.os.tag == .windows) {
+        headless.subsystem = .console;
+        headless.entry = .{ .symbol_name = "mainCRTStartup" };
+        headless.root_module.addCSourceFile(.{ .file = b.path("windows_uninstall_prompt.c"), .flags = &.{} });
+        headless.root_module.linkSystemLibrary("comctl32", .{});
+    }
+    b.installArtifact(headless);
+
     // Manual previews exercise the platform installer renderer without an
     // application payload. The extractor handles this environment variable
     // before installer/uninstaller dispatch and returns success after the
@@ -175,6 +210,17 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_subsystem_parser_tests.step);
     test_step.dependOn(&run_linux_uninstall_prompt_tests.step);
+
+    const headless_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("headless_installer.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    headless_tests.root_module.addImport("updater_protocol", updater_protocol);
+    // Tests cover frontend/transaction helpers without invoking GUI bridges.
+    const run_headless_tests = b.addRunArtifact(headless_tests);
+    test_step.dependOn(&run_headless_tests.step);
 
     if (target.result.os.tag == .windows) {
         const subsystem_checker = b.addExecutable(.{

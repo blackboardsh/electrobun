@@ -239,6 +239,11 @@ export function validateNativeDevkitManifest(options) {
 	const declaredPaths = runtimePathKeys.map((key) =>
 		relativePath(runtime[key], `layout.runtime.${key}`),
 	);
+	// Added within schema v1: old devkits still build ordinary installers.
+	// Once declared, the unattended installer must ship with the devkit.
+	if (runtime.headlessInstaller !== undefined) {
+		declaredPaths.push(relativePath(runtime.headlessInstaller, "layout.runtime.headlessInstaller"));
+	}
 	const wgpuAuxiliaryLibraries =
 		runtime.wgpuAuxiliaryLibraries === undefined
 			? []

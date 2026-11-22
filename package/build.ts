@@ -796,6 +796,7 @@ async function copyToDist() {
 	// Zig launcher for all platforms
 	cpSync(`src/launcher/zig-out/bin/launcher${binExt}`, `dist/launcher${binExt}`, { force: true });
 	cpSync(`src/extractor/zig-out/bin/extractor${binExt}`, `dist/extractor${binExt}`, { force: true });
+	cpSync(`src/extractor/zig-out/bin/headless-installer${binExt}`, `dist/headless-installer${binExt}`, { force: true });
 	const coreLibName =
 		OS === "win"
 			? "ElectrobunCore.dll"
@@ -1041,6 +1042,7 @@ function normalizeDistExecutableModes(directory: string) {
 	for (const filename of [
 		"launcher",
 		"extractor",
+		"headless-installer",
 		"bsdiff",
 		"bspatch",
 		"zig-asar",

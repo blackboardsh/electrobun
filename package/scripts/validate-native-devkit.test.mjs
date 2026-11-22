@@ -104,6 +104,35 @@ test("validates an exact devkit contract and every declared path", () => {
 	}
 });
 
+test("accepts older devkits without the optional unattended installer", (t) => {
+	const manifest = fixture();
+	delete manifest.layout.runtime.headlessInstaller;
+	const coreRoot = makeCore(manifest);
+	t.after(() => rmSync(coreRoot, { recursive: true, force: true }));
+	assert.equal(validateNativeDevkitManifest({ coreRoot, ...expected }).layout.runtime.headlessInstaller, undefined);
+});
+
+test("requires a declared unattended installer to exist", (t) => {
+	const coreRoot = makeCore();
+	t.after(() => rmSync(coreRoot, { recursive: true, force: true }));
+	rmSync(join(coreRoot, "headless-installer"));
+	assert.throws(
+		() => validateNativeDevkitManifest({ coreRoot, ...expected }),
+		/declared path does not exist: "headless-installer"/,
+	);
+});
+
+test("rejects unattended installer paths outside the devkit", (t) => {
+	const manifest = fixture();
+	manifest.layout.runtime.headlessInstaller = "../headless-installer";
+	const coreRoot = makeCore(manifest);
+	t.after(() => rmSync(coreRoot, { recursive: true, force: true }));
+	assert.throws(
+		() => validateNativeDevkitManifest({ coreRoot, ...expected }),
+		/layout\.runtime\.headlessInstaller must be a normalized POSIX path/,
+	);
+});
+
 test("rejects a stale emitted app runtime before packaging", (t) => {
 	const manifest = fixture();
 	manifest.toolchains.cottontail.defaultVersion = "0.7.0-canary.6";

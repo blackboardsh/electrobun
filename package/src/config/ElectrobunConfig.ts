@@ -5,6 +5,15 @@
 
 import type { WindowsWebView2Permission } from "./windowsPermissions";
 
+/** Values that can be embedded in an installer or supplied in install.json. */
+export type InstallerJSONValue =
+	| null
+	| boolean
+	| number
+	| string
+	| InstallerJSONValue[]
+	| { [key: string]: InstallerJSONValue };
+
 type BundlerOptions = {
 	external?: string[];
 	define?: Record<string, string>;
@@ -670,6 +679,22 @@ export interface ElectrobunConfig {
 		 * @default true
 		 */
 		generatePatch?: boolean;
+		/**
+		 * Emit an additional native command-line installer for unattended installs.
+		 * It downloads the existing full update archive, verifies its checksum,
+		 * and installs without opening installer UI or launching the application.
+		 * Requires direct updates and a public HTTPS release host.
+		 */
+		headlessInstaller?: {
+			enabled: boolean;
+			/**
+			 * Public application settings embedded in the distributed installer.
+			 * Never put credentials here. Per-install settings can be passed using
+			 * --settings-file or --settings-stdin and override these defaults.
+			 * The application owns the meaning of every setting.
+			 */
+			defaults?: Record<string, InstallerJSONValue>;
+		};
 	};
 
 	/** Electrobun Insights works independently of release hosting and updates. */

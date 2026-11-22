@@ -64,6 +64,15 @@ pub fn build(b: *std.Build) void {
     });
     const run_automation_tests = b.addRunArtifact(automation_tests);
 
+    const arguments_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("arguments.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const run_arguments_tests = b.addRunArtifact(arguments_tests);
+
     const windows_spawn_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("windows_spawn.zig"),
@@ -104,6 +113,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(runtime_tests).step);
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_automation_tests.step);
+    test_step.dependOn(&run_arguments_tests.step);
     test_step.dependOn(&run_windows_spawn_tests.step);
     test_step.dependOn(&run_process_identity_tests.step);
     test_step.dependOn(&run_uninstall_tests.step);

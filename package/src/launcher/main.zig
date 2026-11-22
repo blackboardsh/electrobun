@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const arguments = @import("arguments.zig");
 const automation = @import("automation.zig");
 const linux_dependencies = @import("linux_dependencies.zig");
 const uninstall = @import("uninstall.zig");
@@ -431,14 +432,15 @@ pub fn main(init: std.process.Init) !void {
 
     const main_process = detectMainProcess(arena_alloc, exe_dir);
 
-    // Platform-specific paths
-    var argv: []const []const u8 = undefined;
+    // Platform-specific command prefix. Application arguments follow the native
+    // binary or the runtime's script, without reinterpreting their contents.
+    var command: []const []const u8 = undefined;
 
     switch (main_process) {
         .zig, .rust, .go, .odin => {
             const main_binary_name = if (builtin.os.tag == .windows) "main.exe" else "main";
             const main_binary_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, main_binary_name });
-            argv = &[_][]const u8{main_binary_path};
+            command = &[_][]const u8{main_binary_path};
         },
         .bun, .cottontail => {
             const main_script = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
@@ -451,9 +453,10 @@ pub fn main(init: std.process.Init) !void {
                 .macos, .linux, .windows => try std.fs.path.join(arena_alloc, &.{ exe_dir, runtime_name }),
                 else => @panic("Unsupported platform"),
             };
-            argv = &[_][]const u8{ runtime_path, main_script };
+            command = &[_][]const u8{ runtime_path, main_script };
         },
     }
+    const argv = try arguments.childArgv(arena_alloc, command, launcher_args);
 
     // Child processes inherit the launcher's environment plus our overrides.
     const env_map = init.environ_map;
@@ -541,7 +544,8 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    std.debug.print("Spawning: {s} {s}\n", .{ argv[0], if (argv.len > 1) argv[1] else "" });
+    // App arguments may contain private configuration; do not log them.
+    std.debug.print("Spawning: {s}\n", .{argv[0]});
 
     // Check if console mode is forced via environment variable
     const force_console = if (env_map.get("ELECTROBUN_CONSOLE")) |val|

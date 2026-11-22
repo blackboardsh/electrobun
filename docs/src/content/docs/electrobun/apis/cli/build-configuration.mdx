@@ -649,6 +649,8 @@ for a cross-platform hook.
 | `managed.apiUrl` | `https://api.electrobun.dev` | Advanced management API override for staging/local testing. |
 | `updateAuthority` | `"direct"` | `"external"` or `"none"` disables the direct updater; neither implements a store update integration. |
 | `generatePatch` | `true` | Generate a delta from the previously published full archive. Set `false` to skip downloading and diffing it during a local packaged build. |
+| `headlessInstaller.enabled` | `false` | Emit an additional native unattended installer that downloads the full archive from the configured release host. |
+| `headlessInstaller.defaults` | `{}` | Public app-owned JSON settings embedded in the unattended installer. Per-install values come from a file or stdin. |
 
 For a static host, `release.baseUrl` is the shared folder containing every
 target's original artifact filenames:
@@ -668,6 +670,9 @@ export default {
   },
 } satisfies ElectrobunConfig;
 ```
+
+See [Unattended installation](/electrobun/guides/bundling-and-distribution/#unattended-installation)
+for the installer CLI, settings file format, and application startup contract.
 
 For [Managed Deploys](/electrobun/guides/managed-deploys/), set
 `release.managed.appId` instead. The public update URL is derived automatically;

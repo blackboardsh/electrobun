@@ -45,6 +45,7 @@
 			"preloadSandboxed": "preload-sandboxed.js",
 			"launcher": "launcher",
 			"extractor": "extractor",
+			"headlessInstaller": "headless-installer",
 			"coreLibrary": "libElectrobunCore.dylib",
 			"nativeWrapper": "libNativeWrapper.dylib",
 			"nativeWrapperCef": "libNativeWrapper.dylib",

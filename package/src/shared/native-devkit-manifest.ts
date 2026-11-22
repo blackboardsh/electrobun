@@ -113,6 +113,8 @@ export interface NativeDevkitManifest {
 			preloadSandboxed: string;
 			launcher: string;
 			extractor: string;
+			/** Optional for older schema-v1 devkits without unattended installers. */
+			headlessInstaller?: string;
 			coreLibrary: string;
 			nativeWrapper: string;
 			nativeWrapperCef: string;
@@ -171,6 +173,7 @@ function targetRuntimeLayout(
 		preloadSandboxed: "preload-sandboxed.js",
 		launcher: `launcher${extension}`,
 		extractor: `extractor${extension}`,
+		headlessInstaller: `headless-installer${extension}`,
 		coreLibrary:
 			target.os === "macos"
 				? "libElectrobunCore.dylib"

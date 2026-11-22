@@ -87,7 +87,7 @@ if (platform === "darwin") {
 	);
 
 	const verifier = path.join(__dirname, "verify-macho-code-signing.js");
-	const signedRuntimeArtifacts = ["launcher", "extractor", "libasar.dylib", "libElectrobunCore.dylib"].map(
+	const signedRuntimeArtifacts = ["launcher", "extractor", "headless-installer", "libasar.dylib", "libElectrobunCore.dylib"].map(
 		(filename) => path.join(distPath, filename),
 	);
 	execFileSync(process.execPath, [verifier, ...signedRuntimeArtifacts], {

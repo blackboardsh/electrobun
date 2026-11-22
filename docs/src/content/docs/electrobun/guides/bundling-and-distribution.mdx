@@ -147,6 +147,102 @@ clients. Installer artifacts do not use that prefix. Keep the app name,
 identifier, and existing update base URL unchanged for the first 2.0 release;
 see [Updates](/electrobun/guides/updates/).
 
+## Unattended installation
+
+Opt into an additional command-line installer in `electrobun.config.ts`:
+
+```typescript docs=syntax
+release: {
+  baseUrl: "https://releases.example.com/my-cool-app/",
+  headlessInstaller: {
+    enabled: true,
+    defaults: {
+      startup: { openWindow: false, showTray: false },
+    },
+  },
+},
+```
+
+This produces a small native executable alongside the normal installer and
+update artifacts. For example, a Linux ARM64 canary build adds
+`canary-linux-arm64-MyCoolApp-canary-Headless-Setup`; Windows adds `.exe`.
+Stable names use the normal installer prefix, such as
+`macos-arm64-MyCoolApp-Headless-Setup`. Dev builds do not emit installers.
+
+Upload this executable with the other release artifacts. It contains the app
+identity, channel, release URL, and public defaults. At install time it fetches
+the latest matching `update.json` and `checksum.json`, downloads the existing
+full `.tar.zst` update archive, verifies its SHA-256 and size, and retains the
+bookkeeping used by future updates and uninstall. No preinstalled zstd, tar,
+JavaScript runtime, or Hutch is needed. The release host must use HTTPS; literal
+loopback HTTP addresses are accepted for local testing. Managed Deploys use the
+same derived public update endpoint as the app.
+
+Run it as the user who will own the application. Installation is per-user and
+does not request elevation, open installer UI, or launch the application:
+
+```bash
+chmod +x ./canary-linux-arm64-MyCoolApp-canary-Headless-Setup
+./canary-linux-arm64-MyCoolApp-canary-Headless-Setup --settings-file ./machine-settings.json --json
+```
+
+The installer does not stop a running app or service. Stop it before
+reinstalling or replacing an existing installation, especially when upgrading
+an older Electrobun release that predates shared installer/update locking.
+After installation succeeds, start the app using the returned launcher path
+or your service manager.
+
+On Windows, invoke the corresponding `.exe` from PowerShell or your provisioning
+tool. `--settings-stdin` accepts the same JSON object from stdin instead of a
+file. The two settings options are mutually exclusive; each accepts at most
+1 MiB. `--help` needs neither network access nor application configuration.
+`--json` emits a result containing installation, launcher, and settings paths,
+without echoing settings. Exit codes are `0` for success, `1` for an installation
+failure, and `2` for invalid arguments or settings.
+
+The settings input is an application-owned object, for example:
+
+```json
+{
+  "startup": { "openWindow": false, "showTray": true },
+  "machineLabel": "build-worker-1"
+}
+```
+
+The installer writes `install.json` under the application's `Paths.userData`
+directory, outside its bundle:
+
+```json
+{
+  "schemaVersion": 1,
+  "settings": {
+    "startup": { "openWindow": false, "showTray": true },
+    "machineLabel": "build-worker-1"
+  }
+}
+```
+
+The app reads this file and decides what the settings mean. Electrobun does not
+interpret `startup`, create a service, enroll an account, or imply acceptance of
+application terms. Installer silence and application window/tray behavior are
+separate concerns; a GUI application still needs its normal platform runtime
+and, when applicable, an interactive desktop session.
+
+Defaults, existing settings, and supplied settings merge recursively in that
+order. Arrays, scalars, and `null` replace the previous value. A repeat install
+without supplied settings leaves an existing `install.json` unchanged, and a
+first install writes the file even when defaults are empty. Writes are atomic;
+Unix permissions are `0600`, and Windows uses the user's app-data permissions.
+Ordinary application updates preserve this file. Pass private values through a
+protected file or stdin; defaults are embedded in the public installer and
+must not contain credentials.
+
+On a fresh macOS installation, the `.app` lives beneath `Paths.userData`; an
+existing registered installation retains its current `.app` location. The
+installer executable follows the configured macOS signing and notarization
+policy. Standalone executables are notarized through a temporary zip; macOS
+does not support stapling a ticket directly to a command-line executable.
+
 ## Delta Patches
 
 When `release.generatePatch` is true and `release.baseUrl` is present, Hutch:

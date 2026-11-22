@@ -4,6 +4,22 @@ title: "Unreleased"
 
 Changes since [v2.0.7](/electrobun/guides/changelog/v2-0-7/).
 
+## Unattended installers
+
+`release.headlessInstaller` adds a native command-line installer on macOS,
+Windows, and Linux. It downloads and verifies the existing full update archive
+without requiring zstd, tar, or a JavaScript runtime, and leaves application
+startup to your provisioning tool or service manager.
+
+Pass application-owned settings through a JSON file or stdin. The installer
+writes a private `install.json` under `Paths.userData`; ordinary updates preserve
+it, and reinstalling without new settings preserves its existing bytes.
+Launchers now forward application arguments to every supported main-process
+runtime, including native programs.
+
+See [Unattended installation](/electrobun/guides/bundling-and-distribution/#unattended-installation)
+for configuration and automation examples.
+
 ## Cross-architecture app builds
 
 The paired Hutch CLI now supports `--arch=arm64` and `--arch=x64` for builds on

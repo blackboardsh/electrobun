@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const zstd = std.compress.zstd;
 const archive_recipe = @import("archive_recipe.zig");
 const prepare_update = @import("prepare_update.zig");
+const headless_backend = @import("headless_backend.zig");
 const linux_uninstall_prompt = @import("linux_uninstall_prompt.zig");
 const windows_command = @import("windows_command.zig");
 
@@ -11,6 +12,174 @@ test {
     _ = prepare_update;
     _ = @import("stream_patch.zig");
     _ = windows_command;
+    _ = headless_backend;
+}
+
+pub const HeadlessInstallRequest = headless_backend.Request;
+pub const HeadlessInstallResult = headless_backend.Result;
+
+/// Unattended entrypoint deliberately bypasses every graphical installer and
+/// app-launch path. Archive safety, retained recipes, and OS registration are
+/// the same mechanisms used by the graphical installer and updater.
+pub fn headlessInstall(init: std.process.Init, request: HeadlessInstallRequest) !HeadlessInstallResult {
+    g_io = init.io;
+    g_environ_map = init.environ_map;
+    if (builtin.os.tag == .windows) {
+        const root = try headless_backend.userData(init.gpa, init.environ_map, request.identifier, request.channel);
+        defer init.gpa.free(root);
+        var install_lock = try acquireWindowsInstallLock(init.gpa, root);
+        defer install_lock.release();
+        return headless_backend.install(init, request, headlessIntegrate, headlessPublishExtractionState, headlessAppPath);
+    }
+    return headless_backend.install(init, request, headlessIntegrate, headlessPublishExtractionState, headlessAppPath);
+}
+
+fn headlessAppPath(a: std.mem.Allocator, root: []const u8, default_path: []const u8, request: HeadlessInstallRequest) ![]const u8 {
+    if (builtin.os.tag != .macos) return default_path;
+    const manifest_path = try macosManifestPath(a, root);
+    defer a.free(manifest_path);
+    var document = loadAndValidateMacosManifest(a, manifest_path, root) catch |err| switch (err) {
+        error.FileNotFound => return default_path,
+        else => return err,
+    };
+    defer a.free(document.contents);
+    defer document.parsed.deinit();
+    const old = document.parsed.value;
+    if (!std.mem.eql(u8, old.identifier, request.identifier) or !std.mem.eql(u8, old.channel, request.channel)) return error.InvalidInstallIdentity;
+    return a.dupe(u8, old.app_bundle_path);
+}
+
+fn headlessPublishExtractionState(a: std.mem.Allocator, stage: []const u8, final: []const u8) !void {
+    return publishExtractionStatePolicy(a, stage, final, true);
+}
+
+const HeadlessIntegrationFileSnapshot = struct {
+    name: []const u8,
+    contents: ?[]u8 = null,
+    permissions: std.Io.File.Permissions = .default_file,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        if (self.contents) |contents| allocator.free(contents);
+        self.* = undefined;
+    }
+};
+
+fn snapshotHeadlessIntegrationFile(allocator: std.mem.Allocator, root: std.Io.Dir, name: []const u8) !HeadlessIntegrationFileSnapshot {
+    const stat = root.statFile(g_io, name, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => return .{ .name = name },
+        else => return err,
+    };
+    if (stat.kind != .file) return error.InvalidInstallIntegrationPath;
+    const file = try root.openFile(g_io, name, .{ .follow_symlinks = false, .allow_directory = false });
+    defer file.close(g_io);
+    const opened_stat = try file.stat(g_io);
+    if (opened_stat.kind != .file) return error.InvalidInstallIntegrationPath;
+    if (opened_stat.size > 64 * 1024 * 1024) return error.InstallIntegrationFileTooLarge;
+    var buffer: [4096]u8 = undefined;
+    var reader = file.reader(g_io, &buffer);
+    return .{
+        .name = name,
+        .contents = try reader.interface.allocRemaining(allocator, .limited(64 * 1024 * 1024)),
+        .permissions = opened_stat.permissions,
+    };
+}
+
+fn restoreHeadlessIntegrationFile(root: std.Io.Dir, snapshot: HeadlessIntegrationFileSnapshot) !void {
+    const current = root.statFile(g_io, snapshot.name, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    // Never replace a collision introduced after preflight, or remove a
+    // directory/link just because this installation created a file here.
+    if (current) |stat| if (stat.kind != .file) return error.InvalidInstallIntegrationPath;
+    if (snapshot.contents) |contents| {
+        var atomic = try root.createFileAtomic(g_io, snapshot.name, .{ .replace = true, .permissions = snapshot.permissions });
+        defer atomic.deinit(g_io);
+        var buffer: [4096]u8 = undefined;
+        var writer = atomic.file.writer(g_io, &buffer);
+        try writer.interface.writeAll(contents);
+        try writer.flush();
+        if (builtin.os.tag != .windows) try atomic.file.setPermissions(g_io, snapshot.permissions);
+        try atomic.file.sync(g_io);
+        try atomic.replace(g_io);
+    } else if (current != null) {
+        try root.deleteFile(g_io, snapshot.name);
+    }
+}
+
+fn headlessIntegrate(a: std.mem.Allocator, root: []const u8, app: []const u8, request: HeadlessInstallRequest) !void {
+    var directory = try std.Io.Dir.openDirAbsolute(g_io, root, .{ .follow_symlinks = false });
+    defer directory.close(g_io);
+    var manager = try snapshotHeadlessIntegrationFile(a, directory, if (builtin.os.tag == .windows) "uninstall.exe" else "uninstall");
+    defer manager.deinit(a);
+    var manifest = try snapshotHeadlessIntegrationFile(a, directory, ".electrobun-uninstall.json");
+    defer manifest.deinit(a);
+    const metadata: AppMetadata = .{ .identifier = request.identifier, .name = request.name, .channel = request.channel, .hash = request.hash };
+    const integrated = switch (builtin.os.tag) {
+        .macos => installMacosUninstallManagerAtRoot(a, root, app, app, metadata),
+        .linux => installLinuxIntegration(a, app, metadata, .preserve),
+        .windows => installWindowsIntegration(a, app, metadata),
+        else => unreachable,
+    };
+    integrated catch |err| {
+        // Each platform already knows which external integration it created;
+        // keep the two shared channel files equally transactional, including
+        // fresh installs with no previous application to reintegrate.
+        var restore_failed = false;
+        restoreHeadlessIntegrationFile(directory, manager) catch {
+            restore_failed = true;
+        };
+        restoreHeadlessIntegrationFile(directory, manifest) catch {
+            restore_failed = true;
+        };
+        if (restore_failed) return error.HeadlessIntegrationRollbackFailed;
+        return err;
+    };
+}
+
+test "headless integration rollback restores files and permissions and removes only new files" {
+    g_io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(g_io, .{ .sub_path = "uninstall", .data = "previous manager" });
+    if (builtin.os.tag != .windows) {
+        const file = try tmp.dir.openFile(g_io, "uninstall", .{});
+        defer file.close(g_io);
+        try file.setPermissions(g_io, .fromMode(0o751));
+    }
+    var manager = try snapshotHeadlessIntegrationFile(std.testing.allocator, tmp.dir, "uninstall");
+    defer manager.deinit(std.testing.allocator);
+    var manifest = try snapshotHeadlessIntegrationFile(std.testing.allocator, tmp.dir, ".electrobun-uninstall.json");
+    defer manifest.deinit(std.testing.allocator);
+    try tmp.dir.writeFile(g_io, .{ .sub_path = "uninstall", .data = "replacement" });
+    try tmp.dir.writeFile(g_io, .{ .sub_path = ".electrobun-uninstall.json", .data = "new registration" });
+    try restoreHeadlessIntegrationFile(tmp.dir, manager);
+    try restoreHeadlessIntegrationFile(tmp.dir, manifest);
+    const restored = try tmp.dir.readFileAlloc(g_io, "uninstall", std.testing.allocator, .limited(1024));
+    defer std.testing.allocator.free(restored);
+    try std.testing.expectEqualStrings("previous manager", restored);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(g_io, ".electrobun-uninstall.json", .{}));
+    if (builtin.os.tag != .windows) {
+        const stat = try tmp.dir.statFile(g_io, "uninstall", .{});
+        try std.testing.expectEqual(@as(u32, 0o751), stat.permissions.toMode() & 0o777);
+    }
+}
+
+test "headless integration refuses symlink and directory collisions before replacing files" {
+    g_io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(g_io, "uninstall", .default_dir);
+    try std.testing.expectError(error.InvalidInstallIntegrationPath, snapshotHeadlessIntegrationFile(std.testing.allocator, tmp.dir, "uninstall"));
+    try std.testing.expectError(error.InvalidInstallIntegrationPath, restoreHeadlessIntegrationFile(tmp.dir, .{ .name = "uninstall" }));
+    if (builtin.os.tag == .windows) return;
+    try tmp.dir.writeFile(g_io, .{ .sub_path = "unrelated", .data = "preserved" });
+    try tmp.dir.symLink(g_io, "unrelated", ".electrobun-uninstall.json", .{});
+    try std.testing.expectError(error.InvalidInstallIntegrationPath, snapshotHeadlessIntegrationFile(std.testing.allocator, tmp.dir, ".electrobun-uninstall.json"));
+    try std.testing.expectError(error.InvalidInstallIntegrationPath, restoreHeadlessIntegrationFile(tmp.dir, .{ .name = ".electrobun-uninstall.json" }));
+    const unchanged = try tmp.dir.readFileAlloc(g_io, "unrelated", std.testing.allocator, .limited(1024));
+    defer std.testing.allocator.free(unchanged);
+    try std.testing.expectEqualStrings("preserved", unchanged);
 }
 
 // Initialized at the top of main(). Test-only helpers do not touch these.
@@ -1479,6 +1648,11 @@ fn extractAndInstall(
 ) !bool {
     errdefer progress.update(.failed, null, null);
 
+    var channel_dir = try std.Io.Dir.openDirAbsolute(g_io, std.fs.path.dirname(app_dir) orelse return error.InvalidInstallLocation, .{ .follow_symlinks = false });
+    defer channel_dir.close(g_io);
+    const lifecycle_lock = try headless_backend.acquireLifecycleLock(g_io, channel_dir);
+    defer lifecycle_lock.close(g_io);
+
     // Get exe path for shortcuts
     const exe_path = try std.process.executablePathAlloc(g_io, allocator);
     defer allocator.free(exe_path);
@@ -1865,6 +2039,15 @@ fn publishExtractionState(
     staged_dir: []const u8,
     final_dir: []const u8,
 ) !void {
+    return publishExtractionStatePolicy(allocator, staged_dir, final_dir, false);
+}
+
+fn publishExtractionStatePolicy(
+    allocator: std.mem.Allocator,
+    staged_dir: []const u8,
+    final_dir: []const u8,
+    retain_previous: bool,
+) !void {
     const previous_dir = try std.fmt.allocPrint(allocator, "{s}.previous", .{final_dir});
     defer allocator.free(previous_dir);
 
@@ -1879,7 +2062,7 @@ fn publishExtractionState(
         std.Io.Dir.cwd().rename(previous_dir, std.Io.Dir.cwd(), final_dir, g_io) catch {};
     };
     try std.Io.Dir.cwd().rename(staged_dir, std.Io.Dir.cwd(), final_dir, g_io);
-    if (had_previous) std.Io.Dir.cwd().deleteTree(g_io, previous_dir) catch {};
+    if (had_previous and !retain_previous) std.Io.Dir.cwd().deleteTree(g_io, previous_dir) catch {};
 }
 
 fn extractTarWithProgress(tar_data: []const u8, extract_dir: []const u8, progress: *ProgressIndicator) !void {
@@ -4225,6 +4408,22 @@ fn preflightLinuxManagerResource(
     if (source_stat.kind != .file) return error.InvalidUninstallManager;
 }
 
+fn cleanupNewLinuxIntegrationEntry(
+    allocator: std.mem.Allocator,
+    path: ?[]const u8,
+    hash: ?[]const u8,
+    parent: []const u8,
+    launcher_path: []const u8,
+    preserved_path: ?[]const u8,
+) !void {
+    const entry_path = path orelse return;
+    const entry_hash = hash orelse return;
+    if (preserved_path) |preserved| if (std.mem.eql(u8, preserved, entry_path)) return;
+    var prepared = try prepareLinuxDesktopEntry(allocator, entry_path, parent, entry_hash, launcher_path);
+    defer prepared.deinit();
+    _ = try prepared.remove();
+}
+
 fn installLinuxIntegration(
     allocator: std.mem.Allocator,
     app_dir: []const u8,
@@ -4256,6 +4455,10 @@ fn installLinuxIntegration(
     defer allocator.free(state_root);
     const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher" });
     defer allocator.free(launcher_path);
+    const new_applications_dir = try std.fs.path.join(allocator, &.{ scope.data_home_path, "applications" });
+    defer allocator.free(new_applications_dir);
+    const new_desktop_dir = try std.fs.path.join(allocator, &.{ home, "Desktop" });
+    defer allocator.free(new_desktop_dir);
 
     // Refuse an incomplete bundle before touching any existing desktop
     // integration. Hutch self-extracting packages must carry this thin manager.
@@ -4326,6 +4529,28 @@ fn installLinuxIntegration(
         collision_policy,
     );
     defer integration.deinit(allocator);
+    // In preserve mode returned entries were created by this invocation. A
+    // failed manager/manifest write must not leave launchers pointing at a
+    // bundle the installation transaction is about to roll back. Migration
+    // mode may return preexisting adopted entries and deliberately skips this.
+    errdefer if (collision_policy == .preserve) {
+        cleanupNewLinuxIntegrationEntry(
+            allocator,
+            integration.application_entry,
+            integration.application_entry_sha256,
+            new_applications_dir,
+            launcher_path,
+            preserved_application_entry,
+        ) catch |err| std.debug.print("Warning: Could not clean up new application entry: {}\n", .{err});
+        cleanupNewLinuxIntegrationEntry(
+            allocator,
+            integration.desktop_entry,
+            integration.desktop_entry_sha256,
+            new_desktop_dir,
+            launcher_path,
+            preserved_desktop_entry,
+        ) catch |err| std.debug.print("Warning: Could not clean up new Desktop entry: {}\n", .{err});
+    };
     const version = try readInstalledVersion(allocator, app_dir);
     defer allocator.free(version);
 
@@ -4449,6 +4674,16 @@ fn uninstallLinux(
             .cancel => return,
         };
     };
+
+    // Do not hold the lifecycle lock while waiting for user input. Revalidate
+    // the registration once locked so a completed install/update during the
+    // prompt cannot redirect this uninstall through stale integration paths.
+    const lifecycle_lock = try headless_backend.acquireLifecycleLock(g_io, scope.channel_dir);
+    defer lifecycle_lock.close(g_io);
+    var current_document = try loadAndValidateLinuxManifest(allocator, scope);
+    defer allocator.free(current_document.contents);
+    defer current_document.parsed.deinit();
+    if (!std.mem.eql(u8, document.contents, current_document.contents)) return error.InstallationChanged;
 
     const launcher_path = try std.fs.path.join(allocator, &.{ base_dir, "app", "bin", "launcher" });
     defer allocator.free(launcher_path);
@@ -6121,6 +6356,19 @@ fn uninstallMacos(allocator: std.mem.Allocator, requested_mode: ?MacosUninstallM
         manifest.identifier,
     )) orelse return error.InvalidUninstallLocation;
     defer install_identifier_dir.close(g_io);
+    var locked_channel_dir = try install_identifier_dir.openDir(g_io, managed_root_name, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    });
+    defer locked_channel_dir.close(g_io);
+    const lifecycle_lock = try headless_backend.acquireLifecycleLock(g_io, locked_channel_dir);
+    defer lifecycle_lock.close(g_io);
+    // The prompt may have been open while an installer committed a new app.
+    // Never delete paths taken from the superseded registration in that case.
+    var current_document = try loadAndValidateMacosManifest(allocator, manifest_path, base_dir);
+    defer allocator.free(current_document.contents);
+    defer current_document.parsed.deinit();
+    if (!std.mem.eql(u8, document.contents, current_document.contents)) return error.InstallationChanged;
     var app_parent = try openMacosAppParent(manifest.app_bundle_path);
     defer if (app_parent) |*dir| dir.close(g_io);
     var cache_identifier_dir: ?std.Io.Dir = null;
@@ -7471,14 +7719,6 @@ fn performApplyUpdateTransaction(
     try waitForApplyUpdateParent(plan.parent_pid);
     parent_exited.* = true;
 
-    var windows_lock: ?WindowsUninstallLock = null;
-    defer if (builtin.os.tag == .windows) {
-        if (windows_lock) |*lock| lock.release();
-    };
-    if (builtin.os.tag == .windows) {
-        windows_lock = try acquireWindowsUninstallLock(allocator, plan.channel_root);
-    }
-
     phase.* = .swapping;
     const target_exists = try extractionPathExists(plan.app_bundle_path);
     const previous_exists = try extractionPathExists(previous_path);
@@ -7854,6 +8094,18 @@ fn runApplyUpdateManager(
         return err;
     };
     defer context.deinit(allocator);
+    // Hold the lifecycle lock through result publication and obsolete-state
+    // cleanup as well as the swap. Releasing at the end of the swap would let
+    // cleanup delete a concurrently installed app's new recipe/rollback copy.
+    var windows_lock: ?WindowsUninstallLock = null;
+    defer if (builtin.os.tag == .windows) {
+        if (windows_lock) |*held_lock| held_lock.release();
+    };
+    if (builtin.os.tag == .windows) windows_lock = try acquireWindowsUninstallLock(allocator, plan.channel_root);
+    var channel_dir = try std.Io.Dir.openDirAbsolute(g_io, plan.channel_root, .{ .follow_symlinks = false });
+    defer channel_dir.close(g_io);
+    const lifecycle_lock = try headless_backend.acquireLifecycleLock(g_io, channel_dir);
+    defer lifecycle_lock.close(g_io);
     defer {
         removeApplyUpdateWindowsTask(allocator, plan.transaction_id);
         std.Io.Dir.cwd().deleteFile(g_io, plan_path) catch {};
@@ -8318,6 +8570,8 @@ pub fn main(init: std.process.Init) !void {
     // before any recursive installer cleanup can begin.
     var install_channel_dir = try ensureMacosInstallRoot(home_dir, identifierName, channelName);
     defer install_channel_dir.close(g_io);
+    const lifecycle_lock = try headless_backend.acquireLifecycleLock(g_io, install_channel_dir);
+    defer lifecycle_lock.close(g_io);
 
     const appBundleResourcesPath = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, BUNLE_RESOURCES_REL_PATH });
     defer allocator.free(appBundleResourcesPath);
