@@ -300,3 +300,66 @@ test("disposing pending faulty work prevents stale continuation updates and pres
 	assert.deepEqual(after.diagnostics, [], "Disposal cancels the fault before its cycle threshold");
 	await page.evaluate(() => window.cooperative.dispose());
 });
+
+for (const mode of ["microtask", "promise"]) {
+	for (const workPlacement of ["effect", "callback"]) {
+		test(`${mode === "microtask" ? "queueMicrotask" : "Promise.then"} feedback${workPlacement === "callback" ? " with costly callbacks" : ""} yields across separate flushes without being classified as a cycle`, { timeout: 15_000 }, async t => {
+			const page = await openFixture(t);
+			const started = await page.evaluate(({ mode, workPlacement }) => {
+				window.cooperative = window.warrenFixture.mountCooperativeRunaway(mode, workPlacement);
+				window.cooperative.start();
+				window.cooperative.mountExternal();
+				return { pending: window.cooperative.pending(), runs: window.cooperative.lifecycle.runs[0] };
+			}, { mode, workPlacement });
+			assert.equal(started.pending, true);
+			assert.ok(started.runs < 300);
+			await page.locator("#cooperative-healthy-button").click({ force: true });
+			await page.waitForFunction(() => !window.cooperative.pending());
+			const settled = await page.evaluate(() => ({ ...window.cooperative.lifecycle }));
+			assert.ok(settled.timersDuring > 0, "A timer must run before the microtask feedback sequence finishes");
+			assert.ok(settled.framesDuring > 0, "Drawing must get a turn while feedback is still pending");
+			assert.ok(settled.clicksDuring > 0, "Real input must be processed before the finite feedback sequence ends");
+			assert.ok(settled.derivedDuring.includes(2), "Independent derived state must update while feedback is pending");
+			assert.ok(settled.externalDuring.includes(14), "A root mounted during feedback must process later updates while it continues");
+			assert.deepEqual(settled.runs, [300]);
+			assert.deepEqual(settled.cleanups, [299]);
+			assert.equal(settled.callbacksQueued, 299);
+			assert.equal(settled.callbacksRun, 299);
+			assert.equal(settled.cancelledCallbacks, 0);
+			assert.deepEqual(settled.diagnostics, [], "Finite async feedback must not be mislabeled as a synchronous cycle");
+			await page.evaluate(() => { window.cooperative.stopFaults(); window.cooperative.setExternal(9); });
+			await page.waitForFunction(() => document.querySelector("#cooperative-external")?.textContent === "18");
+			await page.locator("#cooperative-healthy-button").click();
+			assert.equal(await page.locator("#cooperative-derived").innerText(), "4");
+			assert.deepEqual(await page.evaluate(() => window.cooperative.lifecycle.cleanups), [300]);
+			await page.evaluate(() => window.cooperative.dispose());
+		});
+	}
+
+	test(`disposing ${mode} feedback invalidates its queued callback and keeps other roots alive`, { timeout: 15_000 }, async t => {
+		const page = await openFixture(t);
+		const stopped = await page.evaluate(mode => {
+			window.cooperative = window.warrenFixture.mountCooperativeRunaway(mode);
+			window.cooperative.start();
+			const wasPending = window.cooperative.pending();
+			window.cooperative.mountExternal();
+			window.cooperative.stopFaults();
+			return { wasPending, runs: [...window.cooperative.lifecycle.runs], callbacksQueued: window.cooperative.lifecycle.callbacksQueued };
+		}, mode);
+		assert.equal(stopped.wasPending, true);
+		assert.ok(stopped.callbacksQueued > 0, "This case must dispose an actually queued callback");
+		await page.evaluate(() => new Promise(resolve => setTimeout(() => requestAnimationFrame(resolve), 40)));
+		await page.evaluate(() => window.cooperative.setExternal(9));
+		await page.waitForFunction(() => document.querySelector("#cooperative-external")?.textContent === "18");
+		await page.locator("#cooperative-healthy-button").click();
+		assert.equal(await page.locator("#cooperative-derived").innerText(), "2");
+		const after = await page.evaluate(() => ({ ...window.cooperative.lifecycle }));
+		assert.deepEqual(after.runs, stopped.runs, "A queued callback must not restart the disposed effect");
+		assert.deepEqual(after.cleanups, stopped.runs);
+		assert.equal(after.callbacksQueued, stopped.callbacksQueued);
+		assert.equal(after.callbacksRun, stopped.callbacksQueued);
+		assert.equal(after.cancelledCallbacks, stopped.callbacksQueued);
+		assert.deepEqual(after.diagnostics, []);
+		await page.evaluate(() => window.cooperative.dispose());
+	});
+}

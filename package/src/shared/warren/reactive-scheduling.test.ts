@@ -11,6 +11,146 @@ async function waitFor(predicate: () => boolean, message: string): Promise<void>
 	}
 }
 
+for (const { continuation, workLocation } of [
+	{ continuation: "queueMicrotask", workLocation: "effect" },
+	{ continuation: "Promise.then", workLocation: "effect" },
+	{ continuation: "Promise.then", workLocation: "microtask" },
+] as const) {
+	test(`${continuation} feedback with work in the ${workLocation} yields even when every flush empties`, async () => {
+		await tick();
+		const errors: unknown[] = [];
+		const report = spyOn(console, "error").mockImplementation(error => { errors.push(error); });
+		setDevMode(false);
+		const [value, setValue] = signal(0);
+		const [healthy, setHealthy] = signal(0);
+		let runs = 0, runsAtTimer = -1, runsAtHealthyUpdate = -1, observed = 0;
+		let dispose = () => {};
+		const heartbeats: number[] = [];
+		let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+		const timer = new Promise<void>(resolve => {
+			const beat = () => {
+				heartbeats.push(runs);
+				if (runsAtTimer < 0) {
+					runsAtTimer = runs;
+					setHealthy(7);
+					resolve();
+				}
+				if (runs < 301) heartbeatTimer = setTimeout(beat, 0);
+			};
+			heartbeatTimer = setTimeout(beat, 0);
+		});
+		try {
+			dispose = createRoot(stop => {
+				liveScope(() => {
+					const current = value();
+					runs++;
+					// Always bounded, including against a runtime without the fix.
+					if (current >= 300) return;
+					const spendOneMillisecond = () => {
+						const end = performance.now() + 1;
+						while (performance.now() < end) {}
+					};
+					if (workLocation === "effect") spendOneMillisecond();
+					const update = () => {
+						if (workLocation === "microtask") spendOneMillisecond();
+						setValue(current + 1);
+					};
+					if (continuation === "queueMicrotask") queueMicrotask(update);
+					else void Promise.resolve().then(update);
+				});
+				const derived = memo(() => healthy() * 2);
+				liveScope(() => {
+					observed = derived();
+					if (observed === 14) runsAtHealthyUpdate = runs;
+				});
+				return stop;
+			});
+			await timer;
+			expect(runsAtTimer).toBeGreaterThanOrEqual(0);
+			// Each iteration deliberately costs at least 1ms. A generous count
+			// bound catches a greatly delayed yield without wall-clock flakiness.
+			expect(runsAtTimer).toBeLessThanOrEqual(32);
+			await waitFor(() => observed === 14, "Microtask feedback stranded an independent input update");
+			expect(runsAtHealthyUpdate).toBeLessThanOrEqual(64);
+			await waitFor(() => runs === 301 && value() === 300, "Bounded microtask updates failed to finish");
+			expect(heartbeats.filter(count => count > 0 && count < 301).length).toBeGreaterThanOrEqual(3);
+			const checkpoints = [0, ...heartbeats, runs];
+			expect(Math.max(...checkpoints.slice(1).map((count, index) => count - checkpoints[index]!))).toBeLessThanOrEqual(64);
+			expect(errors).toEqual([]);
+		} finally {
+			dispose();
+			await timer;
+			clearTimeout(heartbeatTimer);
+			await tick();
+			setDevMode(true);
+			report.mockRestore();
+		}
+	}, 10_000);
+}
+
+test("the host-turn work limit yields fast microtask feedback without depending on the clock", async () => {
+	await tick();
+	const clock = spyOn(performance, "now").mockReturnValue(0);
+	const errors: unknown[] = [];
+	const report = spyOn(console, "error").mockImplementation(error => { errors.push(error); });
+	const [value, setValue] = signal(0);
+	let runs = 0, runsAtTimer = -1;
+	let dispose = () => {};
+	const timer = new Promise<void>(resolve => setTimeout(() => { runsAtTimer = runs; resolve(); }, 0));
+	try {
+		dispose = createRoot(stop => {
+			liveScope(() => {
+				const current = value();
+				runs++;
+				if (current < 5_000) queueMicrotask(() => setValue(current + 1));
+			});
+			return stop;
+		});
+		await timer;
+		expect(runsAtTimer).toBeGreaterThan(0);
+		expect(runsAtTimer).toBeLessThanOrEqual(2_048);
+		await waitFor(() => runs === 5_001 && value() === 5_000, "Fast finite microtask updates failed to finish");
+		expect(errors).toEqual([]);
+	} finally {
+		dispose();
+		await timer;
+		await tick();
+		report.mockRestore();
+		clock.mockRestore();
+	}
+}, 10_000);
+
+test("a spent host-turn budget defers further work but fresh host tasks retain small synchronous updates", async () => {
+	await tick();
+	const clock = spyOn(performance, "now").mockReturnValue(0);
+	const [value, setValue] = signal(0);
+	let observed = -1;
+	let dispose = () => {};
+	try {
+		dispose = createRoot(stop => {
+			for (let i = 0; i < 2_047; i++) liveScope(() => {});
+			liveScope(() => { observed = value(); });
+			return stop;
+		});
+		expect(observed).toBe(0);
+		// The previous queue is empty, but its work already spent this turn's
+		// allowance. A separate flush must not get a fresh allowance immediately.
+		setValue(1);
+		expect(observed).toBe(0);
+		await waitFor(() => observed === 1, "Deferred work failed to resume in a host task");
+		await tick();
+		setValue(2);
+		expect(observed).toBe(2);
+		await tick();
+		setValue(3);
+		expect(observed).toBe(3);
+	} finally {
+		dispose();
+		await tick();
+		clock.mockRestore();
+	}
+}, 10_000);
+
 test("independent external writes through a memo do not exhaust a suspended settlement's cycle budget", async () => {
 	// Use the scheduler's work-count slice rather than machine speed. Separate
 	// real timer turns are independent input events, not a synchronous loop.

@@ -20,7 +20,10 @@ describe("Warren causal failure containment", () => {
 	// Freeze elapsed time so a loaded CI runner cannot switch their failure
 	// delivery from the calling write to a later task. Browser tests exercise
 	// the real clock, heartbeat and input responsiveness separately.
-	beforeEach(() => { clock = spyOn(performance, "now").mockReturnValue(0); });
+	beforeEach(async () => {
+		await new Promise(resolve => setTimeout(resolve, 0));
+		clock = spyOn(performance, "now").mockReturnValue(0);
+	});
 	afterEach(() => { clock.mockRestore(); });
 
 	test("a readonly dynamic region survives a producer cycle even when it creates bindings", () => {
