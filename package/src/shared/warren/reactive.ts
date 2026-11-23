@@ -244,6 +244,23 @@ let activeSettlement: Settlement | null = null;
 let activeExecution: Execution | null = null;
 let pendingSettlement: Settlement | null = null;
 let continuation: ReturnType<typeof setTimeout> | undefined;
+type HostTurnWork = { computations: number; startedAt: number };
+let hostTurnWork: HostTurnWork | null = null;
+
+function currentHostTurnWork(): HostTurnWork {
+	if (hostTurnWork) return hostTurnWork;
+	const work = { computations: 0, startedAt: performance.now() };
+	hostTurnWork = work;
+	// A Promise/queueMicrotask feedback loop can completely settle each flush
+	// and immediately start another. Only a real host task replenishes this
+	// shared deadline, so those short flushes cannot starve input and painting.
+	// Count elapsed host-turn time too: feedback may do its costly work in the
+	// microtask before writing a signal, outside Warren's own callback timing.
+	setTimeout(() => {
+		if (hostTurnWork === work) hostTurnWork = null;
+	}, 0);
+	return work;
+}
 
 function ownedBy(scope: Scope, owner: Scope): boolean {
 	for (let current: Scope | null = scope; current; current = current.parent) {
@@ -381,13 +398,13 @@ function flushLive(): void {
 		cycleReported: false, deferred: false,
 	};
 	activeSettlement = settlement;
-	const sliceStarted = performance.now();
+	const hostWork = currentHostTurnWork();
 	let work = 0;
 	try {
 		while (liveQueue.size) {
 			// A macrotask (not another microtask) gives input, timers and drawing
 			// a turn even when many independent producers keep scheduling work.
-			if (work > 0 && (work >= 2048 || performance.now() - sliceStarted >= 8)) {
+			if (hostWork.computations + work > 0 && (hostWork.computations + work >= 2048 || performance.now() - hostWork.startedAt >= 8)) {
 				continueSettlement(settlement);
 				break;
 			}
@@ -446,6 +463,7 @@ function flushLive(): void {
 			}
 		}
 	} finally {
+		hostWork.computations += work;
 		flushing = false;
 		activeExecution = null;
 		activeSettlement = null;

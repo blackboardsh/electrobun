@@ -31,7 +31,10 @@ async function caughtAsync(action: () => void): Promise<any> {
 
 describe("Warren reactive failure containment", () => {
 	let restoreClock = () => {};
-	beforeEach(() => {
+	beforeEach(async () => {
+		// Each logical interaction starts in a fresh host task. A test runner's
+		// sequence of microtasks must not consume the preceding test's budget.
+		await new Promise(resolve => setTimeout(resolve, 0));
 		// Logical graph tests use deterministic execution counts. Separate real
 		// browser tests assert timers and painting during yielded work.
 		const clock = spyOn(performance, "now").mockReturnValue(0);

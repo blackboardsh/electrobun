@@ -1,7 +1,7 @@
 // Warren DOM renderer against the stub DOM: structure, explicit reactivity,
 // control flow with keyed reconciliation, events, Portal, and teardown.
 
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, inert, live, memo, setDevMode, signal, store } from "../../../shared/warren/reactive";
 import {
 	For,
@@ -26,6 +26,10 @@ function mount(app: () => unknown): {
 }
 
 describe("DOM renderer", () => {
+	// Independent tests represent separate application events. Let the host
+	// begin a new task rather than sharing one cumulative scheduling budget.
+	beforeEach(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+
 	test("mounts an intrinsic tree with attributes, class, and style", () => {
 		const { container } = mount(() =>
 			jsx("div", {

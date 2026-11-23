@@ -166,11 +166,16 @@ batch(() => {
 });   // one propagation
 ```
 
-Small updates settle synchronously. If processing the queued work takes
-8 ms or 2,048 computations, Warren yields to a timer task and continues the
-same update later. Large updates can therefore finish across several tasks;
-input, timers, and drawing get opportunities to run between slices. Values
-still change immediately, and memo reads still derive the current value.
+Small updates settle synchronously while the current host task has budget.
+After 8 ms of elapsed host-turn time or 2,048 queued computations, Warren yields to a timer task and
+continues later. That budget is shared across otherwise separate flushes and
+is replenished only by a real timer task: a `queueMicrotask` or `Promise.then`
+feedback loop cannot reset the budget simply by emptying the reactive queue.
+The deadline includes time between flushes, such as work in a Promise callback
+before it writes the signal that triggers the next reactive callback.
+Large updates can therefore finish across several tasks; input, timers, and
+drawing get opportunities to run between slices. Values still change
+immediately, and memo reads still derive the current value.
 
 Exceptions from synchronous callbacks propagate to their caller. Errors from
 deferred work use the browser's `error` event (`window.reportError`), or
@@ -255,6 +260,12 @@ already queued by the cycle.
 Checks run between computations. They cannot interrupt arbitrary JavaScript
 inside a callback, such as a non-returning `while` loop, or prevent slow work
 inside a single callback or cleanup function.
+
+Asynchronous feedback may be intentional, so Warren does not automatically
+classify every sequence of microtask-driven writes as a cycle. It yields
+between groups of reactive callbacks so those writes cannot sustain host
+starvation through Warren. A microtask storm that does not depend on Warren
+callbacks remains the application's responsibility to stop.
 
 ## Hard errors
 

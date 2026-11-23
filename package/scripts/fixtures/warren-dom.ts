@@ -200,23 +200,27 @@ function observeCycleErrors(report: (error: Error) => void) {
 	return () => window.removeEventListener("error", listener);
 }
 
-function mountCooperativeRunaway(mode: "parallel" | "fresh") {
+function mountCooperativeRunaway(mode: "parallel" | "fresh" | "microtask" | "promise", workPlacement: "effect" | "callback" = "effect") {
 	const target = document.createElement("div");
 	target.id = "cooperative-fixture";
 	document.body.appendChild(target);
 	const count = mode === "parallel" ? 12 : 1;
+	const asyncFeedback = mode === "microtask" || mode === "promise";
 	const [armed, setArmed] = signal(false);
 	const [clicks, setClicks] = signal(0);
 	const lifecycle = {
 		runs: Array(count).fill(0) as number[], cleanups: Array(count).fill(0) as number[],
 		diagnostics: [] as string[], timersDuring: 0, framesDuring: 0,
 		clicksDuring: 0, derivedDuring: [] as number[], externalDuring: [] as number[],
+		callbacksQueued: 0, callbacksRun: 0, cancelledCallbacks: 0,
 	};
 	let started = false;
 	let stopped = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let frame: number | undefined;
-	const pending = () => started && !stopped && lifecycle.runs.some((runs, index) => runs > lifecycle.cleanups[index]!);
+	const pending = () => started && !stopped && (asyncFeedback
+		? lifecycle.runs[0]! < 300
+		: lifecycle.runs.some((runs, index) => runs > lifecycle.cleanups[index]!));
 	const spin = (milliseconds: number) => {
 		const until = performance.now() + milliseconds;
 		while (performance.now() < until) { /* Deliberately costly application work. */ }
@@ -237,6 +241,28 @@ function mountCooperativeRunaway(mode: "parallel" | "fresh") {
 					setValue(current => current + 1);
 				});
 			}
+		} else if (asyncFeedback) {
+			const [value, setValue] = signal(0);
+			live(function finiteAsyncFeedback() {
+				if (!armed()) return;
+				const current = value();
+				lifecycle.runs[0]++;
+				let cancelled = false;
+				cleanup(() => { lifecycle.cleanups[0]++; cancelled = true; });
+				if (workPlacement === "effect") spin(1);
+				if (lifecycle.runs[0]! >= 300) return;
+				lifecycle.callbacksQueued++;
+				const advance = () => {
+					lifecycle.callbacksRun++;
+					// Microtasks cannot be removed; ownership cleanup invalidates
+					// their work when this effect or its root has been disposed.
+					if (cancelled || stopped) { lifecycle.cancelledCallbacks++; return; }
+					if (workPlacement === "callback") spin(1);
+					setValue(current + 1);
+				};
+				if (mode === "microtask") queueMicrotask(advance);
+				else void Promise.resolve().then(advance);
+			});
 		} else {
 			function spawnCostlyScope() {
 				lifecycle.runs[0]++;
