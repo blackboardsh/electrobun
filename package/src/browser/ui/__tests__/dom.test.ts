@@ -303,6 +303,166 @@ describe("DOM renderer", () => {
 		expect(div!.textContent).toBe("b0a1");
 	});
 
+	test("static For rows under Switch own live bindings without rebuilding the branch", () => {
+		const [tab, setTab] = signal("desktop");
+		let mounted = 0;
+		let cleaned = 0;
+		let rowCleanups = 0;
+		let setHeld = (_next: string[]) => {};
+		let setReady = (_next: boolean) => {};
+		function Desktop() {
+			// Bound the broken implementation's remount loop so the regression
+			// fails quickly rather than reaching the scheduler's cycle limit.
+			if (++mounted > 4) throw new Error("static For repeatedly remounted its Switch branch");
+			const [held, updateHeld] = signal<string[]>([]);
+			const [ready, updateReady] = signal(false);
+			setHeld = updateHeld;
+			setReady = updateReady;
+			cleanup(() => { cleaned++; updateHeld([]); });
+			// Match a controller publishing its first state after the branch mounts.
+			live(() => inert(() => updateReady(true)));
+			return jsx("section", {
+				children: For({
+					each: ["Shift", "Control"],
+					children: (key: string, index) => {
+						cleanup(() => { rowCleanups++; });
+						return jsx("button", {
+							title: live(() => `${index()}:${ready()}`),
+							"aria-pressed": live(() => String(held().includes(key))),
+							children: key,
+						});
+					},
+				}),
+			});
+		}
+		const { container, dispose } = mount(() => Switch({
+			children: Match({
+				when: live(() => tab() === "desktop"),
+				children: () => jsx(Desktop, {}),
+			}),
+			fallback: jsx("aside", { children: "other tab" }),
+		}));
+		try {
+			const section = container.children[0]!;
+			const [shift, control] = section.children;
+			expect(mounted).toBe(1);
+			expect(shift!.getAttribute("title")).toBe("0:true");
+			expect(control!.getAttribute("title")).toBe("1:true");
+			setHeld(["Shift"]);
+			setReady(false);
+			expect(container.children[0]).toBe(section);
+			expect(section.children[0]).toBe(shift!);
+			expect(shift!.getAttribute("aria-pressed")).toBe("true");
+			expect(control!.getAttribute("aria-pressed")).toBe("false");
+			expect(shift!.getAttribute("title")).toBe("0:false");
+			expect(mounted).toBe(1);
+			expect(cleaned).toBe(0);
+			expect(rowCleanups).toBe(0);
+
+			setTab("other");
+			expect(container.children[0]!.tagName).toBe("aside");
+			expect(cleaned).toBe(1);
+			expect(rowCleanups).toBe(2);
+			// Cleanup writes and updates to the retired controller cannot revive it.
+			setHeld(["Control"]);
+			setReady(true);
+			expect(mounted).toBe(1);
+			setTab("desktop");
+			expect(mounted).toBe(2);
+			expect(container.children[0]).not.toBe(section);
+			expect(container.children[0]!.children[0]!.getAttribute("aria-pressed")).toBe("false");
+		} finally { dispose(); }
+		expect(cleaned).toBe(2);
+		expect(rowCleanups).toBe(4);
+		setHeld(["Shift"]);
+		expect(container.childNodes.length).toBe(0);
+	});
+
+	test("static For rows stay isolated inside a direct live element child", () => {
+		const [visible, setVisible] = signal(true);
+		const [label, setLabel] = signal("first");
+		let rows = 0;
+		const { container, dispose } = mount(() => jsx("main", {
+			children: live(() => visible() ? For({
+				each: ["row"],
+				children: () => { rows++; return jsx("button", { title: live(label), children: "row" }); },
+			}) : null),
+		}));
+		try {
+			const button = container.children[0]!.children[0]!;
+			setLabel("second");
+			expect(container.children[0]!.children[0]).toBe(button);
+			expect(button.getAttribute("title")).toBe("second");
+			expect(rows).toBe(1);
+			setVisible(false);
+			expect(container.children[0]!.children.length).toBe(0);
+		} finally { dispose(); }
+	});
+
+	for (const scenario of [
+		{ name: "static Show", reactive: false, branch: (selected: () => boolean, child: () => unknown) => Show({ when: selected(), children: child, fallback: jsx("aside", { children: "inner off" }) }) },
+		{ name: "live Show", reactive: true, branch: (selected: () => boolean, child: () => unknown) => Show({ when: live(selected), children: child, fallback: jsx("aside", { children: "inner off" }) }) },
+		{ name: "static Show fallback", reactive: false, branch: (selected: () => boolean, child: () => unknown) => Show({ when: !selected(), children: jsx("aside", { children: "inner off" }), fallback: child }) },
+		{ name: "live Show fallback", reactive: true, branch: (selected: () => boolean, child: () => unknown) => Show({ when: live(() => !selected()), children: jsx("aside", { children: "inner off" }), fallback: child }) },
+		{ name: "static Switch", reactive: false, branch: (selected: () => boolean, child: () => unknown) => Switch({ children: Match({ when: selected(), children: child }), fallback: jsx("aside", { children: "inner off" }) }) },
+		{ name: "live Switch", reactive: true, branch: (selected: () => boolean, child: () => unknown) => Switch({ children: Match({ when: live(selected), children: child }), fallback: jsx("aside", { children: "inner off" }) }) },
+		{ name: "static Switch fallback", reactive: false, branch: (selected: () => boolean, child: () => unknown) => Switch({ children: Match({ when: !selected(), children: jsx("aside", { children: "inner off" }) }), fallback: child }) },
+		{ name: "live Switch fallback", reactive: true, branch: (selected: () => boolean, child: () => unknown) => Switch({ children: Match({ when: live(() => !selected()), children: jsx("aside", { children: "inner off" }) }), fallback: child }) },
+		{ name: "static For fallback", reactive: false, branch: (selected: () => boolean, child: () => unknown) => For({ each: selected() ? [] : ["item"], children: () => jsx("aside", { children: "inner off" }), fallback: child }) },
+		{ name: "live For fallback", reactive: true, branch: (selected: () => boolean, child: () => unknown) => For({ each: live(() => selected() ? [] : ["item"]), children: () => jsx("aside", { children: "inner off" }), fallback: child }) },
+	]) {
+		test(`${scenario.name} isolates branch bindings from selectors and enclosing regions`, () => {
+			const [tab, setTab] = signal(true);
+			const [selected, setSelected] = signal(true);
+			const [label, setLabel] = signal("initial");
+			let panels = 0;
+			let branches = 0;
+			let cleanups = 0;
+			function Panel() {
+				if (++panels > 4) throw new Error("Control flow remounted its enclosing region");
+				return scenario.branch(selected, () => {
+					if (++branches > 4) throw new Error("Control flow rebuilt its selected branch");
+					cleanup(() => { cleanups++; setLabel("released"); });
+					return jsx("button", { title: live(label), children: live(label) });
+				});
+			}
+			const { container, dispose } = mount(() => Switch({
+				children: Match({ when: live(tab), children: () => jsx(Panel, {}) }),
+				fallback: jsx("p", { children: "outer off" }),
+			}));
+			try {
+				const button = container.children[0]!;
+				setLabel("updated");
+				expect(container.children[0]).toBe(button);
+				expect(button.getAttribute("title")).toBe("updated");
+				expect(button.textContent).toBe("updated");
+				expect(panels).toBe(1);
+				expect(branches).toBe(1);
+				expect(cleanups).toBe(0);
+
+				setSelected(false);
+				if (scenario.reactive) {
+					expect(container.children[0]!.textContent).toBe("inner off");
+					expect(cleanups).toBe(1);
+					setSelected(true);
+					expect(container.children[0]!.tagName).toBe("button");
+					expect(container.children[0]).not.toBe(button);
+					expect(branches).toBe(2);
+				} else {
+					expect(container.children[0]).toBe(button);
+					expect(cleanups).toBe(0);
+				}
+				expect(panels).toBe(1);
+				setTab(false);
+				expect(container.children[0]!.textContent).toBe("outer off");
+				expect(cleanups).toBe(scenario.reactive ? 2 : 1);
+				setLabel("retired");
+				expect(panels).toBe(1);
+			} finally { dispose(); }
+			expect(container.childNodes.length).toBe(0);
+		});
+	}
+
 	test("JSX key attribute reaches For via the transform's third argument", () => {
 		// <For key={fn}> transpiles to jsx(For, props, fn) — key must land
 		// back in props or reconciliation silently degrades to item identity.
@@ -455,6 +615,25 @@ describe("DOM renderer", () => {
 			}),
 		);
 		expect(container.children[0]!.textContent).toBe("escaped");
+	});
+
+	test("direct imperative escapes inside an explicit live region still track reads", () => {
+		const [label, setLabel] = signal("first");
+		let builds = 0;
+		const { container, dispose } = mount(() => jsx("div", {
+			children: live(() => {
+				builds++;
+				return jsx("section", { children: () => jsx("span", { children: label() }) });
+			}),
+		}));
+		try {
+			const first = container.children[0]!.children[0]!;
+			expect(first.textContent).toBe("first");
+			setLabel("second");
+			expect(container.children[0]!.children[0]!.textContent).toBe("second");
+			expect(container.children[0]!.children[0]).not.toBe(first);
+			expect(builds).toBe(2);
+		} finally { dispose(); }
 	});
 
 	test("Portal renders into document.body and cleans up with its scope", () => {

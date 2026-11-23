@@ -166,10 +166,16 @@ batch(() => {
 });   // one propagation
 ```
 
-Warren never catches or logs exceptions from your functions — they propagate
-untouched — but its own ambient state (batch depth, tracking stack, inert
-flag) is always restored, so a throw can't silently freeze propagation or
-leak phantom subscriptions.
+Small updates settle synchronously. If processing the queued work takes
+8 ms or 2,048 computations, Warren yields to a timer task and continues the
+same update later. Large updates can therefore finish across several tasks;
+input, timers, and drawing get opportunities to run between slices. Values
+still change immediately, and memo reads still derive the current value.
+
+Exceptions from synchronous callbacks propagate to their caller. Errors from
+deferred work use the browser's `error` event (`window.reportError`), or
+`console.error` in native runtimes such as Bun. Warren restores its ambient
+tracking state and keeps remaining queued work scheduled in either case.
 
 ## Control flow
 
@@ -197,6 +203,58 @@ reconciles on change; a plain value is a frozen snapshot.
 scroll position, and running transitions survive. `Portal` renders its
 children into another parent (`<body>` by default) while keeping reactive
 ownership — useful for dialogs and toasts.
+
+Row callbacks, selected branch callbacks, and fallback callbacks run without
+subscribing their enclosing region. Their explicit `live()` bindings still
+update normally. Only the `each` or `when` expression selects or reconciles
+the region; reading a signal while constructing its children does not turn
+that signal into a second selector.
+
+## Runaway updates
+
+Warren stops a computation that repeatedly produces more reactive work
+without letting the current update settle. It reports an error named
+`WarrenReactiveCycleError`, with code `WARREN_REACTIVE_CYCLE`, a short source
+excerpt, and the reason it stopped. This protection also runs with dev-mode
+warnings disabled.
+
+The faulty computation and work it created are disposed, including their
+cleanup callbacks and detached roots created by that computation. Other queued
+computations remain scheduled, and unrelated state can continue updating.
+Dependency tracking is disabled during cleanup, and old dependencies are
+detached before cleanup starts. If teardown itself throws while stopping a
+cycle, that error is retained as `cleanupError` on the cycle diagnostic.
+
+The current limits apply within one update, retaining their counters across
+timer continuations:
+
+- A computation that writes observed state, directly or through work it creates, stops
+  after 100 executions, or after at least 8 executions consuming 50 ms.
+- A serial chain that continually creates fresh computations stops at depth
+  256, or at depth 32 after its ancestor computations consume 100 ms. This
+  also covers chains that create detached roots. The unbranched causal chain
+  is stopped while preserving siblings created by a common parent.
+- Recursive evaluation of the same memo stops immediately.
+
+These limits count repeated work or serial creation depth, not the number of
+independent bindings. Large acyclic updates continue over timer tasks rather
+than hitting a total queue-length limit. A read-only observer is not stopped
+just because a faulty producer updates it repeatedly. An intentionally very
+deep cascade can also reach a limit and should be restructured.
+
+In a browser, a queued cycle detected and contained within the initial slice
+throws synchronously. Once an update has yielded, Warren reports its first
+cycle diagnostic through the deferred error channel without waiting
+indefinitely for the whole queue to empty. Native runtimes report queued
+cycle diagnostics through `console.error`, including immediate ones, so
+the guard does not terminate the application. A recursive memo read made
+directly outside queued work still throws to its caller because it cannot
+produce a valid result. Unrelated input does not reset the counters of work
+already queued by the cycle.
+
+Checks run between computations. They cannot interrupt arbitrary JavaScript
+inside a callback, such as a non-returning `while` loop, or prevent slow work
+inside a single callback or cleanup function.
 
 ## Hard errors
 

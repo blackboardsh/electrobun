@@ -89,41 +89,62 @@ class Scope {
 	cleanups: Array<() => void> = [];
 	sources: SubscriberSet[] = [];
 	disposed = false;
+	running = false;
 	hasRun = false;
 	enteredInert = false;
 	readStaticMaybe = false;
+	debugSource: (() => unknown) | null;
 
 	constructor(kind: ScopeKind, fn: (() => void) | null, parent: Scope | null) {
 		this.kind = kind;
 		this.fn = fn;
+		this.debugSource = fn;
 		this.parent = parent;
-		parent?.children.push(this);
+		if (activeSettlement && activeExecution) {
+			activeSettlement.creators.set(this, activeExecution);
+			this.disposed = executionStopped(activeSettlement, activeExecution);
+			if (kind === "root" && !this.disposed) activeExecution.createdRoots.add(this);
+		}
+		this.disposed ||= parent?.disposed ?? false;
+		if (!this.disposed) parent?.children.push(this);
 	}
 
 	run(): void {
 		if (this.disposed || !this.fn) return;
-		// A re-run replaces the previous run's scope state.
-		const children = this.children.splice(0).reverse();
-		const cleanups = this.cleanups.splice(0).reverse();
-		runTeardownSteps([
-			...children.map((child) => () => child.dispose()),
-			...cleanups,
-			() => this.clearSources(),
-		]);
-
-		const prevScope = currentScope;
-		const prevTracking = trackingScope;
-		const prevInert = inertDepth;
-		currentScope = this;
-		trackingScope = this.kind === "root" ? null : this;
-		inertDepth = 0;
+		if (this.running) {
+			const error = new ReactiveCycleError(this, "recursively entered the same computation");
+			quarantine(this, error);
+			throw error;
+		}
+		this.running = true;
 		try {
-			this.fn();
+			// A re-run replaces the previous run's scope state.
+			// Detach first: cleanup may write to an old dependency, and must not
+			// schedule another run of the scope that is already being replaced.
+			this.clearSources();
+			const children = this.children.splice(0).reverse();
+			const cleanups = this.cleanups.splice(0).reverse();
+			inert(() => runTeardownSteps([
+				...children.map((child) => () => child.dispose()),
+				...cleanups,
+			]));
+
+			const prevScope = currentScope;
+			const prevTracking = trackingScope;
+			const prevInert = inertDepth;
+			currentScope = this;
+			trackingScope = this.kind === "root" ? null : this;
+			inertDepth = 0;
+			try {
+				this.fn();
+			} finally {
+				currentScope = prevScope;
+				trackingScope = prevTracking;
+				inertDepth = prevInert;
+				this.hasRun = true;
+			}
 		} finally {
-			currentScope = prevScope;
-			trackingScope = prevTracking;
-			inertDepth = prevInert;
-			this.hasRun = true;
+			this.running = false;
 		}
 	}
 
@@ -138,7 +159,7 @@ class Scope {
 		liveQueue.delete(this);
 		const children = this.children.splice(0).reverse();
 		const cleanups = this.cleanups.splice(0).reverse();
-		runTeardownSteps([
+		inert(() => runTeardownSteps([
 			() => this.clearSources(),
 			...children.map((child) => () => child.dispose()),
 			...cleanups,
@@ -148,7 +169,33 @@ class Scope {
 					if (idx >= 0) this.parent.children.splice(idx, 1);
 				}
 			},
-		]);
+		]));
+	}
+}
+
+/** A stopped reactive computation, not an error in unrelated queued work. */
+class ReactiveCycleError extends Error {
+	readonly code = "WARREN_REACTIVE_CYCLE";
+	cleanupError?: unknown;
+
+	constructor(scope: Scope, reason: string) {
+		const source = scope.debugSource;
+		const description = source
+			? ` in: ${String(source).replace(/\s+/g, " ").slice(0, 160)}`
+			: "";
+		super(`Warren: reactive cycle — ${scope.kind} ${reason}; this computation was stopped. Check writes to its own dependencies, including cleanup callbacks.${description}`);
+		this.name = "WarrenReactiveCycleError";
+	}
+}
+
+function quarantine(scope: Scope, error: ReactiveCycleError): void {
+	try {
+		// Keep the owning root and its other computations alive. dispose()
+		// detaches dependencies before running every cleanup, even if one fails.
+		scope.dispose();
+	} catch (cleanupError) {
+		// Preserve the actionable cycle diagnostic and retain teardown evidence.
+		error.cleanupError ??= cleanupError;
 	}
 }
 
@@ -170,26 +217,150 @@ const liveQueue = new Set<Scope>();
 let batchDepth = 0;
 let commitDepth = 0;
 let notifyDepth = 0;
+let externalNotification = false;
 let flushing = false;
+
+type Execution = {
+	scope: Scope;
+	creator?: Execution;
+	children: Set<Execution>;
+	createdRoots: Set<Scope>;
+	count: number;
+	milliseconds: number;
+	producedWork: boolean;
+	depth: number;
+	lineageMilliseconds: number;
+	origin: Scope;
+};
+type Settlement = {
+	executions: Map<Scope, Execution>;
+	creators: Map<Scope, Execution>;
+	stoppedComputations: Set<Scope>;
+	cycle?: ReactiveCycleError;
+	cycleReported: boolean;
+	deferred: boolean;
+};
+let activeSettlement: Settlement | null = null;
+let activeExecution: Execution | null = null;
+let pendingSettlement: Settlement | null = null;
+let continuation: ReturnType<typeof setTimeout> | undefined;
+
+function ownedBy(scope: Scope, owner: Scope): boolean {
+	for (let current: Scope | null = scope; current; current = current.parent) {
+		if (current === owner) return true;
+	}
+	return false;
+}
+
+function exclusivelyOwns(owner: Scope, scope: Scope): boolean {
+	for (let branch = scope; branch !== owner;) {
+		const parent = branch.parent;
+		if (!parent || parent.children.some(child => child !== branch && !child.disposed)) return false;
+		branch = parent;
+	}
+	return true;
+}
+
+function creationChainOrigin(execution: Execution): { scope: Scope; owners: Scope[] } {
+	let origin = execution;
+	while (origin.creator) {
+		const parent = origin.creator;
+		const roots = [...parent.createdRoots].filter(root => !root.disposed);
+		if ([...parent.children].some(child => child !== origin && !child.scope.disposed) || roots.some(root => !ownedBy(origin.scope, root))) {
+			return { scope: origin.scope, owners: roots.filter(root => ownedBy(origin.scope, root) && exclusivelyOwns(root, origin.scope)) };
+		}
+		origin = parent;
+	}
+	return { scope: origin.scope, owners: [] };
+}
+
+function isBrowserErrorHost(): boolean {
+	return typeof window !== "undefined" && window === globalThis && typeof window.reportError === "function";
+}
+
+function reportDeferredError(error: unknown): void {
+	// Bun exposes reportError too, but treats it as an uncaught exception and
+	// terminates the native app. Only an actual browser gets a window error.
+	if (isBrowserErrorHost()) {
+		window.reportError(error);
+	} else {
+		console.error(error);
+	}
+}
+
+function continueSettlement(settlement: Settlement): void {
+	if (continuation !== undefined) return;
+	settlement.deferred = true;
+	continuation = setTimeout(() => {
+		continuation = undefined;
+		try { flushLive(); } catch (error) { reportDeferredError(error); }
+	}, 0);
+}
+
+function createdBy(execution: Execution, scope: Scope): boolean {
+	for (let current: Execution | undefined = execution; current; current = current.creator) {
+		if (current.scope === scope) return true;
+	}
+	return false;
+}
+
+function executionStopped(settlement: Settlement, execution: Execution): boolean {
+	for (let current: Execution | undefined = execution; current; current = current.creator) {
+		if (settlement.stoppedComputations.has(current.scope)) return true;
+	}
+	return false;
+}
+
+function stopComputation(settlement: Settlement, scope: Scope, error: ReactiveCycleError): void {
+	settlement.stoppedComputations.add(scope);
+	quarantine(scope, error);
+	// createRoot() can deliberately detach ownership, but work created by the
+	// same runaway synchronous chain must still be stopped. Other preexisting
+	// roots and siblings are not part of this causal lineage.
+	for (const [created, creator] of [...settlement.creators]) {
+		if (createdBy(creator, scope)) quarantine(created, error);
+	}
+}
 
 function notify(subs: SubscriberSet): void {
 	if (subs.size === 0) return;
+	const externalWrite = !flushing && (notifyDepth === 0 || externalNotification);
+	const previousExternalNotification = externalNotification;
+	externalNotification = externalWrite;
+	for (let execution = activeExecution; execution; execution = execution.creator ?? null) {
+		execution.producedWork = true;
+	}
 	// Flushing waits until propagation fully settles (notifyDepth back to 0):
 	// a memo invalidating mid-loop must not run lives before every subscriber
 	// of the original write has been queued, or a live can run twice.
 	notifyDepth++;
+	let cycle: ReactiveCycleError | undefined;
 	try {
 		for (const scope of [...subs]) {
+			if (scope.disposed) continue;
+			if (externalWrite && pendingSettlement && !liveQueue.has(scope)) {
+				// A later input/timer event starts fresh work for an idle scope.
+				// Never reset work already queued by the loop itself.
+				pendingSettlement.executions.delete(scope);
+				pendingSettlement.creators.delete(scope);
+			}
 			if (scope.kind === "memo") {
-				(scope as MemoScope).invalidate();
+				try {
+					(scope as MemoScope).invalidate();
+				} catch (error) {
+					if (!(error instanceof ReactiveCycleError)) throw error;
+					cycle ??= error;
+				}
 			} else {
 				liveQueue.add(scope);
 			}
 		}
 	} finally {
 		notifyDepth--;
+		externalNotification = previousExternalNotification;
 	}
 	scheduleFlush();
+	if (cycle) throw cycle;
 }
 
 function scheduleFlush(): void {
@@ -198,23 +369,96 @@ function scheduleFlush(): void {
 }
 
 function flushLive(): void {
-	if (flushing) return;
+	// commit()/batch() call us directly too. An input event must not reclaim
+	// another synchronous slice while a continuation is already scheduled.
+	if (flushing || continuation !== undefined) return;
+	if (!liveQueue.size && !pendingSettlement) return;
 	flushing = true;
+	// Count a computation, not total queue size: a large acyclic tree may
+	// legitimately contain many thousands of independent live bindings.
+	const settlement: Settlement = pendingSettlement ??= {
+		executions: new Map(), creators: new Map(), stoppedComputations: new Set(),
+		cycleReported: false, deferred: false,
+	};
+	activeSettlement = settlement;
+	const sliceStarted = performance.now();
+	let work = 0;
 	try {
-		let iterations = 0;
 		while (liveQueue.size) {
-			if (++iterations > 100_000) {
-				liveQueue.clear();
-				throw new Error("Warren: reactive cycle — lives never settled");
+			// A macrotask (not another microtask) gives input, timers and drawing
+			// a turn even when many independent producers keep scheduling work.
+			if (work > 0 && (work >= 2048 || performance.now() - sliceStarted >= 8)) {
+				continueSettlement(settlement);
+				break;
 			}
+			work++;
 			const next = liveQueue.values().next().value!;
 			liveQueue.delete(next);
-			next.run();
+			if (next.disposed) continue;
+			const creator = settlement.creators.get(next);
+			let execution = settlement.executions.get(next);
+			if (!execution) {
+				execution = {
+				scope: next, creator, children: new Set(), createdRoots: new Set(),
+				count: 0, milliseconds: 0, producedWork: false,
+				depth: creator ? creator.depth + 1 : 0,
+				lineageMilliseconds: creator ? creator.lineageMilliseconds + creator.milliseconds : 0,
+				origin: creator?.origin ?? next,
+				};
+				settlement.executions.set(next, execution);
+				creator?.children.add(execution);
+			}
+			activeExecution = execution;
+			// A queue can also fail to settle by continually allocating a fresh
+			// scope, so no individual identity ever repeats. Bound serial creation
+			// depth, not breadth: 100,000 independent sibling bindings still work.
+			// The conservative depth also keeps recursive teardown stack-safe.
+			if (execution.depth >= 256 || (execution.depth >= 32 && execution.lineageMilliseconds >= 100)) {
+				const origin = creationChainOrigin(execution);
+				const error = new ReactiveCycleError(origin.scope, `created a chain of ${execution.depth} new computations in one update (${Math.round(execution.lineageMilliseconds)} ms)`);
+				stopComputation(settlement, origin.scope, error);
+				for (const owner of origin.owners) quarantine(owner, error);
+				settlement.cycle ??= error;
+				activeExecution = null;
+				continue;
+			}
+			// The time budget applies only to repeated executions. One slow
+			// callback or many independent callbacks are not evidence of a cycle.
+			// A read-only observer may run repeatedly because another scope is
+			// broken. Stop the producer, not a healthy status label watching it.
+			if (execution.producedWork && (execution.count >= 100 || (execution.count >= 8 && execution.milliseconds >= 50))) {
+				const error = new ReactiveCycleError(next, `ran ${execution.count} times in one update (${Math.round(execution.milliseconds)} ms)`);
+				stopComputation(settlement, next, error);
+				settlement.cycle ??= error;
+				activeExecution = null;
+				continue;
+			}
+			execution.count++;
+			const started = performance.now();
+			try {
+				next.run();
+			} catch (error) {
+				if (!(error instanceof ReactiveCycleError)) throw error;
+				settlement.cycle ??= error;
+			} finally {
+				execution.milliseconds += Math.max(0, performance.now() - started);
+				activeExecution = null;
+			}
 		}
 	} finally {
 		flushing = false;
+		activeExecution = null;
+		activeSettlement = null;
+		// Ordinary callback errors still propagate. Preserve a continuation for
+		// remaining healthy work even when the current callback threw.
+		if (liveQueue.size) continueSettlement(settlement);
+		else pendingSettlement = null;
 	}
-	if (liveQueue.size && batchDepth === 0 && commitDepth === 0) flushLive();
+	if (settlement.cycle && !settlement.cycleReported) {
+		settlement.cycleReported = true;
+		if (settlement.deferred || !isBrowserErrorHost()) reportDeferredError(settlement.cycle);
+		else throw settlement.cycle;
+	}
 }
 
 /**
@@ -300,6 +544,7 @@ class MemoScope extends Scope {
 	) {
 		super("memo", null, currentScope);
 		this.compute = compute;
+		this.debugSource = compute;
 		this.fn = () => {
 			this.value = this.compute();
 		};
@@ -412,6 +657,7 @@ export function live<T>(fn: () => T): Reactive<T> {
 	// Statement-position lives become effects; value-position lives get
 	// claimed by their consumer first. Defer the decision to the flush.
 	const decide = new Scope("live", null, currentScope);
+	decide.debugSource = binding.fn;
 	decide.fn = () => {
 		if (binding.claimed) {
 			decide.dispose();
@@ -420,7 +666,8 @@ export function live<T>(fn: () => T): Reactive<T> {
 		decide.fn = () => {
 			binding.fn();
 		};
-		decide.run();
+		binding.fn();
+		decide.hasRun = true;
 		warnZeroDeps(decide, binding.fn);
 	};
 	liveQueue.add(decide);
@@ -442,6 +689,7 @@ export function claimLive<T>(
 		throw new Error("Warren: internal — claimLive outside a scope");
 	}
 	const scope = new Scope("live", null, currentScope);
+	scope.debugSource = binding.fn;
 	scope.fn = () => {
 		apply(binding.fn());
 		warnZeroDeps(scope, binding.fn);
@@ -509,6 +757,10 @@ export function cleanup(fn: () => void): void {
 	if (!currentScope) {
 		throw new Error("Warren: cleanup() called outside a scope");
 	}
+	if (currentScope.disposed) {
+		inert(fn);
+		return;
+	}
 	if (currentScope.kind === "memo") {
 		throw new Error(
 			"Warren: cleanup() inside a memo — memos are pure computations; use live() for work that owns resources.",
@@ -520,6 +772,9 @@ export function cleanup(fn: () => void): void {
 /** Root scope for a mount. Lives created inside flush when fn returns. */
 export function createRoot<T>(fn: (dispose: () => void) => T): T {
 	const scope = new Scope("root", null, null);
+	if (scope.disposed) {
+		throw new Error("Warren: cannot start a root while its reactive creation chain is being stopped");
+	}
 	const prevScope = currentScope;
 	const prevTracking = trackingScope;
 	currentScope = scope;

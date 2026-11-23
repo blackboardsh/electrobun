@@ -192,7 +192,9 @@ export function createJsxRuntime(renderer: WarrenRenderer): WarrenJsxRuntime {
 	}
 
 	// --- Control flow: a live() prop reconciles on change; a plain value is
-	// a snapshot that renders once and never updates. ------------------------
+	// a snapshot that renders once and never updates. Track the selector, not
+	// the mounted branch: branch callbacks follow the inert component rule,
+	// and explicit live() bindings inside them own their own subscriptions.
 
 	function Show(props: ShowProps): UIElement {
 		const { when } = props;
@@ -203,11 +205,12 @@ export function createJsxRuntime(renderer: WarrenRenderer): WarrenJsxRuntime {
 				// branch. Retain that branch's nodes, focus and local state.
 				const visible = memo(() => Boolean(when.fn()));
 				renderer.dynamic(() => {
-					mountChild(visible() ? props.children : props.fallback);
+					const branch = visible() ? props.children : props.fallback;
+					inert(() => mountChild(branch));
 				});
 			});
 		}
-		return element(() => mountChild(when ? props.children : props.fallback));
+		return element(() => inert(() => mountChild(when ? props.children : props.fallback)));
 	}
 
 	function For<T>(props: ForProps<T>): UIElement {
@@ -230,7 +233,7 @@ export function createJsxRuntime(renderer: WarrenRenderer): WarrenJsxRuntime {
 				const empty = memo(() => items().length === 0);
 				renderer.dynamic(() => {
 					if (empty()) {
-						mountChild(props.fallback);
+						inert(() => mountChild(props.fallback));
 						return;
 					}
 					renderer.each(items, keyOf, (item, index) => {
@@ -243,10 +246,13 @@ export function createJsxRuntime(renderer: WarrenRenderer): WarrenJsxRuntime {
 		const list = (each ?? []) as readonly T[];
 		return element(() => {
 			if (list.length === 0) {
-				mountChild(props.fallback);
+				inert(() => mountChild(props.fallback));
 				return;
 			}
-			list.forEach((item, i) => mountChild(render(item, () => i)));
+			// A snapshot row is a component body, not part of the enclosing
+			// region's tracked build. Keep explicit row live() bindings scoped
+			// to their consumers, just like reconciled rows in renderer.each.
+			list.forEach((item, i) => inert(() => mountChild(render(item, () => i))));
 		});
 	}
 
@@ -271,11 +277,12 @@ export function createJsxRuntime(renderer: WarrenRenderer): WarrenJsxRuntime {
 		if (anyLive) {
 			return element(() => {
 				renderer.dynamic(() => {
-					mountChild(pick());
+					const branch = pick();
+					inert(() => mountChild(branch));
 				});
 			});
 		}
-		return element(() => mountChild(pick()));
+		return element(() => inert(() => mountChild(pick())));
 	}
 
 	return { jsx, jsxs: jsx, Fragment, mountChild, Show, For, Switch, Match };
