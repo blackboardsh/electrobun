@@ -707,6 +707,31 @@ static DWORD g_mainThreadId = 0;
 static std::atomic<HWND> g_cefPumpWindow{nullptr};
 static constexpr UINT_PTR CEF_SHUTDOWN_TIMER_ID = 3;
 static constexpr UINT CEF_SHUTDOWN_TIMEOUT_MS = 3000;
+
+// Closes a CEF browser outside application shutdown, on the CEF UI thread.
+//
+// ElectrobunLifeSpanHandler::DoClose returns true while the app runs, so CEF
+// never posts WM_CLOSE to the browser's top-level owner (the app's window).
+// That leaves completing the close to the client: CEF's CloseContents resets
+// the browser to "not closing" when DoClose returns true, and every later
+// CloseBrowser or WM_CLOSE asks DoClose again and is cancelled again. Without
+// the teardown below, a removed webview's browser, its hidden host window and
+// its renderer process live until the app quits.
+//
+// Destroying the browser's own host window is CEF's documented way to finish
+// it (cef_life_span_handler.h, DoClose): WM_NCDESTROY -> WindowDestroyed() ->
+// OnBeforeClose(). A windowless browser has no host window; its DoClose
+// returns false instead, which destroys it at once.
+static void closeCEFBrowserHost(CefRefPtr<CefBrowserHost> host) {
+    if (!host) {
+        return;
+    }
+    HWND hostWindow = host->GetWindowHandle();
+    host->CloseBrowser(true);
+    if (!g_eventLoopStopping.load() && hostWindow && IsWindow(hostWindow)) {
+        DestroyWindow(hostWindow);
+    }
+}
 static constexpr int CEF_GRACEFUL_SHUTDOWN_WAIT_MS = 15000;
 
 static std::mutex g_remoteDevToolsThreadsMutex;
@@ -910,10 +935,7 @@ public:
         }
 
         if (g_eventLoopStopping.load() || owner_detached_.load()) {
-            CefRefPtr<CefBrowserHost> host = browser->GetHost();
-            if (host) {
-                host->CloseBrowser(true);
-            }
+            closeCEFBrowserHost(browser->GetHost());
             quitCEFMessageLoopWhenDrained();
             return;
         }
@@ -930,7 +952,17 @@ public:
         std::cout << "[CEF] DoClose: Browser ID " << browser->GetIdentifier()
                   << ", browser_count=" << g_browser_count << std::endl;
 
+        // A windowless (OSR) browser has no host window, so returning false
+        // posts no WM_CLOSE anywhere: CEF destroys the browser at once.
+        // Returning true would leave it half closed, as below.
+        if (browser->GetHost()->IsWindowRenderingDisabled()) {
+            return false;
+        }
+
         if (!g_eventLoopStopping.load()) {
+            // Returning true keeps CEF from posting WM_CLOSE to the app's
+            // window, and leaves finishing the close to the caller:
+            // closeCEFBrowserHost destroys the browser's host window.
             std::cout << "[CEF] DoClose: Returning true to preserve parent window" << std::endl;
             return true;
         }
@@ -4499,12 +4531,13 @@ public:
             browser = nullptr;
             client = nullptr;
 
-            // Defer the actual browser close to avoid synchronous window message issues
-            // Use CloseBrowser(true) to force close since we return true from DoClose
-            // to prevent CEF from sending WM_CLOSE to parent window
+            // Defer the actual browser close to avoid synchronous window message issues.
+            // DoClose returns true to keep CEF from sending WM_CLOSE to the parent
+            // window, so closeCEFBrowserHost finishes the close by destroying the
+            // browser's own host window; CloseBrowser alone leaves it running.
             MainThreadDispatcher::dispatch_async([host]() {
-                std::cout << "[CEF] Calling CloseBrowser(true) from dispatch_async" << std::endl;
-                host->CloseBrowser(true);  // force=true since DoClose returns true
+                std::cout << "[CEF] Closing the removed browser from dispatch_async" << std::endl;
+                closeCEFBrowserHost(host);
             });
         } else if (client) {
             // Async CreateBrowser may still be pending. Detaching the owner
@@ -8730,10 +8763,7 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
                 if (!readyView ||
                     readyView->getClient().get() != clientPtr ||
                     g_eventLoopStopping.load()) {
-                    CefRefPtr<CefBrowserHost> host = browser->GetHost();
-                    if (host) {
-                        host->CloseBrowser(true);
-                    }
+                    closeCEFBrowserHost(browser->GetHost());
                     return;
                 }
 
