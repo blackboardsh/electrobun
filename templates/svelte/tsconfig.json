@@ -16,6 +16,6 @@
 		"noFallthroughCasesInSwitch": true,
 		"moduleResolution": "bundler"
 	},
-	"include": ["src"],
+	"include": ["src", "./electrobun.config.ts"],
 	"exclude": ["node_modules", "dist", "build", "../../package/dist"]
 }
