@@ -3457,7 +3457,7 @@ const webviewEventHandler = (id: number, eventName: string, detail: string) => {
 		// 	mappedName,
 		// 	")",
 		// );
-		return { success: false };
+		return;
 	}
 
 	// Parse JSON data for events that send JSON
