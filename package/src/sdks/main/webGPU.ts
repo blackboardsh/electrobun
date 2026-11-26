@@ -2,10 +2,15 @@ import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { dlopen, suffix, FFIType } from "bun:ffi";
 
-// NOTE: WGPUStringView is passed by value in the C API. Bun FFI does not support
-// by-value structs, so WGPUStringView parameters are exposed as pointers for now.
-// If you need these calls, add a small C shim that accepts a pointer and
-// forwards by value. WGPUFuture is a single u64 and is mapped to FFIType.u64.
+// WGPUFuture is a single u64. Bundle labels and debug strings use the
+// architecture-specific WGPUStringView ABI below. Other by-value string
+// operations still need a wrapper before use; their pointer signatures alone
+// do not implement WGPUStringView argument passing.
+const BUNDLE_STRING_VIEW_ARGS =
+	process.platform === "win32" && process.arch === "x64"
+		? [FFIType.ptr] as const
+		: [FFIType.ptr, FFIType.u64] as const;
+
 const WGPU_SYMBOLS = {
 	wgpuCreateInstance: { args: [FFIType.ptr], returns: FFIType.ptr },
 	wgpuGetInstanceFeatures: { args: [FFIType.ptr], returns: FFIType.void },
@@ -159,7 +164,7 @@ const WGPU_SYMBOLS = {
 	wgpuQueueWriteTexture: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.ptr], returns: FFIType.void },
 	wgpuQueueAddRef: { args: [FFIType.ptr], returns: FFIType.void },
 	wgpuQueueRelease: { args: [FFIType.ptr], returns: FFIType.void },
-	wgpuRenderBundleSetLabel: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.void },
+	wgpuRenderBundleSetLabel: { args: [FFIType.ptr, ...BUNDLE_STRING_VIEW_ARGS], returns: FFIType.void },
 	wgpuRenderBundleAddRef: { args: [FFIType.ptr], returns: FFIType.void },
 	wgpuRenderBundleRelease: { args: [FFIType.ptr], returns: FFIType.void },
 	wgpuRenderBundleEncoderDraw: { args: [FFIType.ptr, FFIType.u32, FFIType.u32, FFIType.u32, FFIType.u32], returns: FFIType.void },
@@ -167,13 +172,13 @@ const WGPU_SYMBOLS = {
 	wgpuRenderBundleEncoderDrawIndexedIndirect: { args: [FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.void },
 	wgpuRenderBundleEncoderDrawIndirect: { args: [FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.void },
 	wgpuRenderBundleEncoderFinish: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.ptr },
-	wgpuRenderBundleEncoderInsertDebugMarker: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.void },
+	wgpuRenderBundleEncoderInsertDebugMarker: { args: [FFIType.ptr, ...BUNDLE_STRING_VIEW_ARGS], returns: FFIType.void },
 	wgpuRenderBundleEncoderPopDebugGroup: { args: [FFIType.ptr], returns: FFIType.void },
-	wgpuRenderBundleEncoderPushDebugGroup: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.void },
+	wgpuRenderBundleEncoderPushDebugGroup: { args: [FFIType.ptr, ...BUNDLE_STRING_VIEW_ARGS], returns: FFIType.void },
 	wgpuRenderBundleEncoderSetBindGroup: { args: [FFIType.ptr, FFIType.u32, FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.void },
 	wgpuRenderBundleEncoderSetImmediates: { args: [FFIType.ptr, FFIType.u32, FFIType.ptr, FFIType.u64], returns: FFIType.void },
 	wgpuRenderBundleEncoderSetIndexBuffer: { args: [FFIType.ptr, FFIType.ptr, FFIType.u32, FFIType.u64, FFIType.u64], returns: FFIType.void },
-	wgpuRenderBundleEncoderSetLabel: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.void },
+	wgpuRenderBundleEncoderSetLabel: { args: [FFIType.ptr, ...BUNDLE_STRING_VIEW_ARGS], returns: FFIType.void },
 	wgpuRenderBundleEncoderSetPipeline: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.void },
 	wgpuRenderBundleEncoderSetResourceTable: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.void },
 	wgpuRenderBundleEncoderSetVertexBuffer: { args: [FFIType.ptr, FFIType.u32, FFIType.ptr, FFIType.u64, FFIType.u64], returns: FFIType.void },

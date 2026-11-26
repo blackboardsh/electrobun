@@ -240,6 +240,32 @@ integrations for their respective library versions. Copying their renderer
 setup avoids relying on browser DOM methods that do not exist in a native GPU
 window.
 
+## Render Bundles
+
+Use `device.createRenderBundleEncoder()` to record reusable draw commands.
+Its descriptor supplies `colorFormats`, optional `depthStencilFormat`,
+`sampleCount` (default `1`), and the depth/stencil read-only flags. Color
+format entries may be `null` for unused attachment slots.
+
+The encoder supports pipeline and buffer bindings, dynamic bind-group offsets,
+direct and indirect draws, and debug groups/markers. Call `finish()` to obtain a
+bundle, then pass bundles to `pass.executeBundles()` in recording order. A
+finished bundle can be reused across compatible render passes. Dawn validates
+attachment formats, sample counts, and device/resource compatibility.
+
+`executeBundles()` clears the pass's pipeline, bind groups, and vertex/index
+buffer bindings, including when the iterable is empty. Rebind them before
+issuing subsequent direct draws.
+
+Garbage collection releases native bundle and unfinished encoder handles. For
+deterministic cleanup, call `bundle.release()` when finished with a bundle, or
+`encoder.release()` to discard an unfinished recording. Finishing a recording
+releases its encoder handle automatically.
+
+TypeGPU's experimental immediate variables require feature/limit negotiation
+that this adapter does not yet expose. That existing restriction also applies
+to bundle recordings; uniform buffers remain available.
+
 ## Compute And Readback
 
 WebGPU compute uses the standard command encoder and buffer mapping APIs. A
