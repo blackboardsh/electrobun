@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   browser:
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-linux-x64
     timeout-minutes: 15
     env:
       HUTCH_NO_UPDATE_CHECK: '1'
