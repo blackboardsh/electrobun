@@ -32,10 +32,12 @@
 #include <algorithm>
 #include <stdint.h>
 #include <shellapi.h>
+#include <shlwapi.h>
 #include <commctrl.h>
 #include <mutex>
 #include <atomic>
 #include <cstdarg>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/base.h>
 #include <shobjidl.h>  // For IFileOpenDialog
@@ -3819,6 +3821,184 @@ bool checkNavigationRules(AbstractView* view, const std::string& url) {
 static bool g_webview2TestHoldNextController = false;
 static std::map<uint32_t, std::function<void()>> g_webview2TestHeldControllers;
 
+struct WebView2ContextMenuItemData {
+    std::wstring id;
+    std::wstring label;
+    std::vector<BYTE> iconPngLight;
+    std::vector<BYTE> iconPngDark;
+    bool enabled = true;
+};
+
+struct WebView2ContextMenuData {
+    std::vector<WebView2ContextMenuItemData> items;
+    std::wstring menuId;
+    winrt::Windows::Data::Json::IJsonValue payload{ nullptr };
+};
+
+static int webView2ContextMenuBase64Value(wchar_t value) {
+    if (value >= L'A' && value <= L'Z') return value - L'A';
+    if (value >= L'a' && value <= L'z') return value - L'a' + 26;
+    if (value >= L'0' && value <= L'9') return value - L'0' + 52;
+    if (value == L'+') return 62;
+    if (value == L'/') return 63;
+    if (value == L'=') return -2;
+    return -1;
+}
+
+static bool decodeWebView2ContextMenuPng(
+    const std::wstring& encoded,
+    std::vector<BYTE>& png) {
+    if (encoded.empty()) {
+        png.clear();
+        return true;
+    }
+    if (encoded.size() > 5500 || encoded.size() % 4 != 0) return false;
+
+    png.clear();
+    png.reserve((encoded.size() / 4) * 3);
+    for (size_t offset = 0; offset < encoded.size(); offset += 4) {
+        const bool isLastBlock = offset + 4 == encoded.size();
+        const int first = webView2ContextMenuBase64Value(encoded[offset]);
+        const int second = webView2ContextMenuBase64Value(encoded[offset + 1]);
+        const int third = webView2ContextMenuBase64Value(encoded[offset + 2]);
+        const int fourth = webView2ContextMenuBase64Value(encoded[offset + 3]);
+        if (first < 0 || second < 0 || third == -1 || fourth == -1) return false;
+        const bool oneByte = third == -2;
+        const bool twoBytes = fourth == -2;
+        if ((oneByte && (!twoBytes || !isLastBlock)) || (twoBytes && !isLastBlock)) return false;
+
+        png.push_back(static_cast<BYTE>((first << 2) | (second >> 4)));
+        if (!oneByte) {
+            png.push_back(static_cast<BYTE>(((second & 0x0f) << 4) | (third >> 2)));
+        }
+        if (!twoBytes) {
+            png.push_back(static_cast<BYTE>(((third & 0x03) << 6) | fourth));
+        }
+    }
+
+    static constexpr BYTE signature[] = { 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a };
+    if (png.size() < 24 || png.size() > 4096) return false;
+    for (size_t index = 0; index < sizeof(signature); index++) {
+        if (png[index] != signature[index]) return false;
+    }
+    if (png[12] != 'I' || png[13] != 'H' || png[14] != 'D' || png[15] != 'R') return false;
+    const uint32_t width =
+        (static_cast<uint32_t>(png[16]) << 24) |
+        (static_cast<uint32_t>(png[17]) << 16) |
+        (static_cast<uint32_t>(png[18]) << 8) |
+        static_cast<uint32_t>(png[19]);
+    const uint32_t height =
+        (static_cast<uint32_t>(png[20]) << 24) |
+        (static_cast<uint32_t>(png[21]) << 16) |
+        (static_cast<uint32_t>(png[22]) << 8) |
+        static_cast<uint32_t>(png[23]);
+    return width == 16 && height == 16;
+}
+
+static bool webView2MenuTextIsLight() {
+    const COLORREF color = GetSysColor(COLOR_MENUTEXT);
+    const unsigned luminance =
+        (GetRValue(color) * 299u + GetGValue(color) * 587u + GetBValue(color) * 114u) / 1000u;
+    return luminance >= 128;
+}
+
+static bool parseWebView2ContextMenuData(
+    LPCWSTR resultJson,
+    WebView2ContextMenuData& data) {
+    if (!resultJson || wcscmp(resultJson, L"null") == 0) return false;
+
+    try {
+        using namespace winrt::Windows::Data::Json;
+        JsonObject contribution = JsonObject::Parse(resultJson);
+        IJsonValue menuIdValue = contribution.GetNamedValue(L"menuId", nullptr);
+        IJsonValue itemsValue = contribution.GetNamedValue(L"items", nullptr);
+        if (!menuIdValue || menuIdValue.ValueType() != JsonValueType::String) return false;
+        data.menuId = menuIdValue.GetString().c_str();
+        if (data.menuId.empty() || data.menuId.size() > 128) return false;
+        if (!itemsValue || itemsValue.ValueType() != JsonValueType::Array) return false;
+
+        JsonArray items = itemsValue.GetArray();
+        if (items.Size() == 0 || items.Size() > 12) return false;
+
+        data.payload = contribution.GetNamedValue(L"payload", JsonValue::CreateNullValue());
+        for (uint32_t index = 0; index < items.Size(); index++) {
+            IJsonValue value = items.GetAt(index);
+            if (value.ValueType() != JsonValueType::Object) return false;
+
+            JsonObject item = value.GetObject();
+            IJsonValue idValue = item.GetNamedValue(L"id", nullptr);
+            IJsonValue labelValue = item.GetNamedValue(L"label", nullptr);
+            if (!idValue || !labelValue ||
+                idValue.ValueType() != JsonValueType::String ||
+                labelValue.ValueType() != JsonValueType::String) {
+                return false;
+            }
+
+            WebView2ContextMenuItemData parsed;
+            parsed.id = idValue.GetString().c_str();
+            parsed.label = labelValue.GetString().c_str();
+            if (parsed.id.empty() || parsed.id.size() > 128 ||
+                parsed.label.empty() || parsed.label.size() > 80) {
+                return false;
+            }
+
+            IJsonValue iconPngLight = item.GetNamedValue(L"iconPngLight", nullptr);
+            IJsonValue iconPngDark = item.GetNamedValue(L"iconPngDark", nullptr);
+            if (static_cast<bool>(iconPngLight) != static_cast<bool>(iconPngDark)) return false;
+            if (iconPngLight) {
+                if (iconPngLight.ValueType() != JsonValueType::String ||
+                    iconPngDark.ValueType() != JsonValueType::String ||
+                    !decodeWebView2ContextMenuPng(
+                        iconPngLight.GetString().c_str(), parsed.iconPngLight) ||
+                    !decodeWebView2ContextMenuPng(
+                        iconPngDark.GetString().c_str(), parsed.iconPngDark)) {
+                    return false;
+                }
+            }
+
+            for (const auto& existing : data.items) {
+                if (existing.id == parsed.id) return false;
+            }
+
+            IJsonValue enabledValue = item.GetNamedValue(L"enabled", nullptr);
+            if (enabledValue) {
+                if (enabledValue.ValueType() != JsonValueType::Boolean) return false;
+                parsed.enabled = enabledValue.GetBoolean();
+            }
+            data.items.push_back(std::move(parsed));
+        }
+        return true;
+    } catch (const winrt::hresult_error&) {
+        return false;
+    }
+}
+
+static constexpr wchar_t kWebView2ContextMenuCaptureScript[] = LR"JS(
+(() => {
+    window.__ELECTROBUN_WEBVIEW2_CONTEXT_MENU__ = true;
+    document.addEventListener("contextmenu", (event) => {
+        const target = event.target instanceof Element
+            ? event.target.closest("[data-electrobun-context-menu]")
+            : null;
+        window.__electrobunContextMenuData = null;
+        if (!target) return;
+        try {
+            const value = JSON.parse(target.getAttribute("data-electrobun-context-menu") || "null");
+            if (value && Array.isArray(value.items) && value.items.length > 0) {
+                window.__electrobunContextMenuSequence = (window.__electrobunContextMenuSequence || 0) + 1;
+                value.menuId = String(window.__electrobunContextMenuSequence);
+                window.__electrobunContextMenuData = value;
+                window.dispatchEvent(new CustomEvent("electrobun-context-menu-open", {
+                    detail: { menuId: value.menuId, payload: value.payload },
+                }));
+            }
+        } catch {
+            window.__electrobunContextMenuData = null;
+        }
+    }, true);
+})()
+)JS";
+
 class WebView2View : public AbstractView {
 private:
     ComPtr<ICoreWebView2Controller> controller;
@@ -3832,6 +4012,8 @@ private:
     electrobun::WebView2Window nativeWindow;
     double pageZoomFactor = 1.0;
     bool removed = false;
+    EventRegistrationToken contextMenuRequestedToken{};
+    bool contextMenuRequestedRegistered = false;
 
 public:
     std::string pendingUrl;
@@ -3860,6 +4042,178 @@ public:
     
     void setWebView(ComPtr<ICoreWebView2> wv) {
         webview = wv;
+    }
+
+    HRESULT setupContextMenu(ICoreWebView2Environment* environment) {
+        if (isSandboxed || !webview || !environment) return S_FALSE;
+
+        ComPtr<ICoreWebView2_11> webview11;
+        if (FAILED(webview.As(&webview11)) || !webview11) return S_FALSE;
+
+        ComPtr<ICoreWebView2Environment9> environment9;
+        if (FAILED(environment->QueryInterface(IID_PPV_ARGS(&environment9))) || !environment9) {
+            return S_FALSE;
+        }
+
+        HRESULT result = webview11->add_ContextMenuRequested(
+            Callback<ICoreWebView2ContextMenuRequestedEventHandler>(
+                [environment9](
+                    ICoreWebView2* sender,
+                    ICoreWebView2ContextMenuRequestedEventArgs* args) -> HRESULT {
+                    ComPtr<ICoreWebView2Deferral> deferral;
+                    HRESULT deferralResult = args->GetDeferral(&deferral);
+                    if (FAILED(deferralResult)) return deferralResult;
+
+                    ComPtr<ICoreWebView2> senderRef(sender);
+                    ComPtr<ICoreWebView2ContextMenuRequestedEventArgs> argsRef(args);
+                    return senderRef->ExecuteScript(
+                        L"window.__electrobunContextMenuData || null",
+                        Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+                            [environment9, senderRef, argsRef, deferral](
+                                HRESULT scriptResult,
+                                LPCWSTR resultJson) -> HRESULT {
+                                auto complete = [&]() {
+                                    argsRef->put_Handled(FALSE);
+                                    deferral->Complete();
+                                };
+
+                                if (FAILED(scriptResult)) {
+                                    complete();
+                                    return S_OK;
+                                }
+
+                                WebView2ContextMenuData data;
+                                if (!parseWebView2ContextMenuData(resultJson, data)) {
+                                    complete();
+                                    return S_OK;
+                                }
+
+                                try {
+                                    ComPtr<ICoreWebView2ContextMenuItemCollection> menuItems;
+                                    HRESULT result = argsRef->get_MenuItems(&menuItems);
+                                    if (FAILED(result) || !menuItems) {
+                                        complete();
+                                        return S_OK;
+                                    }
+
+                                    UINT32 originalCount = 0;
+                                    result = menuItems->get_Count(&originalCount);
+                                    if (FAILED(result)) {
+                                        complete();
+                                        return S_OK;
+                                    }
+
+                                    std::vector<ComPtr<ICoreWebView2ContextMenuItem>> additions;
+                                    if (originalCount > 0) {
+                                        ComPtr<ICoreWebView2ContextMenuItem> separator;
+                                        result = environment9->CreateContextMenuItem(
+                                            nullptr,
+                                            nullptr,
+                                            COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR,
+                                            &separator);
+                                        if (FAILED(result)) {
+                                            complete();
+                                            return S_OK;
+                                        }
+                                        additions.push_back(separator);
+                                    }
+
+                                    for (const auto& itemData : data.items) {
+                                        ComPtr<ICoreWebView2ContextMenuItem> item;
+                                        ComPtr<IStream> iconStream;
+                                        const auto& iconPng = webView2MenuTextIsLight()
+                                            ? itemData.iconPngDark
+                                            : itemData.iconPngLight;
+                                        if (!iconPng.empty()) {
+                                            iconStream.Attach(SHCreateMemStream(
+                                                iconPng.data(),
+                                                static_cast<UINT>(iconPng.size())));
+                                            if (!iconStream) {
+                                                result = E_OUTOFMEMORY;
+                                                break;
+                                            }
+                                        }
+                                        result = environment9->CreateContextMenuItem(
+                                            itemData.label.c_str(),
+                                            iconStream.Get(),
+                                            COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND,
+                                            &item);
+                                        if (FAILED(result) || !item) break;
+
+                                        result = item->put_IsEnabled(itemData.enabled ? TRUE : FALSE);
+                                        if (FAILED(result)) break;
+
+                                        winrt::Windows::Data::Json::JsonObject detail;
+                                        detail.Insert(
+                                            L"id",
+                                            winrt::Windows::Data::Json::JsonValue::CreateStringValue(
+                                                winrt::hstring(itemData.id)));
+                                        detail.Insert(
+                                            L"menuId",
+                                            winrt::Windows::Data::Json::JsonValue::CreateStringValue(
+                                                winrt::hstring(data.menuId)));
+                                        detail.Insert(L"payload", data.payload);
+                                        std::wstring detailJson = detail.Stringify().c_str();
+                                        std::wstring detailLiteral =
+                                            winrt::Windows::Data::Json::JsonValue::CreateStringValue(
+                                                winrt::hstring(detailJson)).Stringify().c_str();
+                                        std::wstring dispatchScript =
+                                            L"window.dispatchEvent(new CustomEvent('electrobun-context-menu-action',{detail:JSON.parse(" +
+                                            detailLiteral +
+                                            L")}))";
+
+                                        EventRegistrationToken selectedToken{};
+                                        result = item->add_CustomItemSelected(
+                                            Callback<ICoreWebView2CustomItemSelectedEventHandler>(
+                                                [senderRef, dispatchScript](
+                                                    ICoreWebView2ContextMenuItem*,
+                                                    IUnknown*) -> HRESULT {
+                                                    return senderRef->ExecuteScript(dispatchScript.c_str(), nullptr);
+                                                }).Get(),
+                                            &selectedToken);
+                                        if (FAILED(result)) break;
+                                        additions.push_back(item);
+                                    }
+
+                                    if (FAILED(result) || additions.size() != data.items.size() + (originalCount > 0 ? 1u : 0u)) {
+                                        complete();
+                                        return S_OK;
+                                    }
+
+                                    UINT32 insertIndex = originalCount;
+                                    for (const auto& addition : additions) {
+                                        result = menuItems->InsertValueAtIndex(insertIndex++, addition.Get());
+                                        if (FAILED(result)) break;
+                                    }
+                                    if (FAILED(result)) {
+                                        UINT32 currentCount = 0;
+                                        if (SUCCEEDED(menuItems->get_Count(&currentCount))) {
+                                            while (currentCount > originalCount) {
+                                                menuItems->RemoveValueAtIndex(--currentCount);
+                                            }
+                                        }
+                                    }
+                                } catch (const winrt::hresult_error&) {
+                                    ::log("[WebView2] Failed to append context-menu contribution");
+                                }
+
+                                complete();
+                                return S_OK;
+                            }).Get());
+            }).Get(),
+            &contextMenuRequestedToken);
+        contextMenuRequestedRegistered = SUCCEEDED(result);
+        if (FAILED(result)) return result;
+
+        HRESULT scriptResult = webview->AddScriptToExecuteOnDocumentCreated(
+            kWebView2ContextMenuCaptureScript,
+            nullptr);
+        if (FAILED(scriptResult)) {
+            webview11->remove_ContextMenuRequested(contextMenuRequestedToken);
+            contextMenuRequestedRegistered = false;
+            return scriptResult;
+        }
+        return S_OK;
     }
 
     void setContainerHwnd(HWND hwnd) {
@@ -4068,6 +4422,13 @@ public:
             }
         }
 
+        if (webview && contextMenuRequestedRegistered) {
+            ComPtr<ICoreWebView2_11> webview11;
+            if (SUCCEEDED(webview.As(&webview11)) && webview11) {
+                webview11->remove_ContextMenuRequested(contextMenuRequestedToken);
+            }
+            contextMenuRequestedRegistered = false;
+        }
         if (controller) {
             controller->Close();
             controller = nullptr;
@@ -7592,6 +7953,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // simply fail QueryInterface and retain the JS fallback.
                             ComPtr<ICoreWebView2Settings> settings;
                             if (webview && SUCCEEDED(webview->get_Settings(&settings)) && settings) {
+                                // Keep WebView2's native Inspect command available with its default menu.
+                                settings->put_AreDevToolsEnabled(TRUE);
                                 ComPtr<ICoreWebView2Settings9> settings9;
                                 if (SUCCEEDED(settings.As(&settings9)) && settings9) {
                                     settings9->put_IsNonClientRegionSupportEnabled(TRUE);
@@ -7626,6 +7989,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 
                             // Set up JavaScript bridge objects
                             view->setupJavaScriptBridges();
+                            view->setupContextMenu(env);
                             
                             // Set initial bounds from the latest requested state.
                             // Full-size views retain the live client-area path.
