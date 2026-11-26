@@ -73,6 +73,9 @@ export const uiSymbols = {
 	ebui_capture_ready: { args: [u32], returns: bool },
 	ebui_capture_pixel: { args: [u32, f32, f32, ptr], returns: bool },
 	ebui_a11y_dump: { args: [u32, ptr], returns: ptr },
+	ebui_set_frames_held: { args: [u32, bool], returns: v },
+	ebui_set_text_renderer: { args: [u32, ptr, ptr, ptr, ptr, ptr], returns: v },
+	ebui_wgpu_device: { args: [u32], returns: usize },
 } as const;
 
 type UiLib = ReturnType<typeof dlopen<typeof uiSymbols>>;

@@ -8,6 +8,7 @@ const wgpu = @import("wgpu.zig");
 const geom = @import("../geom.zig");
 const paint = @import("../paint.zig");
 const font = @import("../text/font.zig");
+const external_text = @import("../text/external.zig");
 const style_mod = @import("../style.zig");
 const sdf = @import("sdf.zig");
 const images_mod = @import("../images.zig");
@@ -98,6 +99,8 @@ const Op = union(enum) {
     /// blur `src` into `dst` along one axis
     blur: struct { src: u32, dst: u32, sigma: f32, horizontal: bool, clear: bool },
     copy: struct { src: u32, dst: u32 },
+    /// Draw one external text run into `target` after the quads flushed so far.
+    external: struct { target: u32, index: u32 },
 };
 
 pub const Renderer = struct {
@@ -143,6 +146,9 @@ pub const Renderer = struct {
     height: u32 = 0,
     scale: f32 = 1,
     frame_count: u64 = 0,
+    text_hook: external_text.DrawHook = .{},
+    external_runs: std.ArrayList(external_text.CRun) = .empty,
+    external_text: std.ArrayList([]u8) = .empty,
 
     pub fn init(gpa: Allocator, api: *const wgpu.Api, ctx: wgpu.Context, fonts: font.Backend, format: u32) !*Renderer {
         const r = try gpa.create(Renderer);
@@ -431,6 +437,31 @@ pub const Renderer = struct {
             b.pending_bind = bind;
         }
 
+        fn addExternal(b: *Builder, c: paint.ExternalText) !void {
+            try b.flush();
+            const r = b.r;
+            const copy = try r.gpa.dupe(u8, c.text);
+            r.external_text.append(r.gpa, copy) catch {
+                r.gpa.free(copy);
+                return error.OutOfMemory;
+            };
+            const idx: u32 = @intCast(r.external_runs.items.len);
+            try r.external_runs.append(r.gpa, .{
+                .id = c.node,
+                .text = copy.ptr,
+                .text_len = copy.len,
+                .size = c.size,
+                .color = external_text.packRgba(c.color),
+                .x = c.x,
+                .y = c.y,
+                .clip_x = c.clip.x,
+                .clip_y = c.clip.y,
+                .clip_w = c.clip.w,
+                .clip_h = c.clip.h,
+            });
+            try r.ops.append(r.gpa, .{ .external = .{ .target = b.target, .index = idx } });
+        }
+
         fn emit(b: *Builder, p0: Prim) !void {
             var p = p0;
             const t = b.xf();
@@ -576,6 +607,7 @@ pub const Renderer = struct {
                     .xf1 = .{ 0, 0, kindBits(.gradient), 0 },
                 });
             },
+            .external_text => |c| try b.addExternal(c),
             .glyphs => |c| {
                 try b.setBind(null);
                 const t = b.xf();
@@ -737,8 +769,15 @@ pub const Renderer = struct {
 
     /// Render a display list into the internal target. Call `present` (or
     /// `readPixels`) afterwards.
+    fn clearExternalRuns(r: *Renderer) void {
+        for (r.external_text.items) |t| r.gpa.free(t);
+        r.external_text.clearRetainingCapacity();
+        r.external_runs.clearRetainingCapacity();
+    }
+
     pub fn render(r: *Renderer, dl: *const paint.DisplayList, w: u32, h: u32, scale: f32) !void {
         r.scale = scale;
+        defer r.clearExternalRuns();
         try r.ensureTargets(w, h);
         // layer textures freed last frame are reusable again
         r.free_layers.clearRetainingCapacity();
@@ -746,6 +785,17 @@ pub const Renderer = struct {
         while (ti < r.targets.items.len) : (ti += 1) try r.free_layers.append(r.gpa, ti);
         std.mem.reverse(u32, r.free_layers.items);
         try r.buildFrame(dl);
+        if (r.text_hook.prepare) |prep| if (r.external_runs.items.len > 0) {
+            const logical_w = if (scale > 0) @as(f32, @floatFromInt(w)) / scale else 0;
+            const logical_h = if (scale > 0) @as(f32, @floatFromInt(h)) / scale else 0;
+            var viewport = external_text.Viewport{
+                .width = logical_w,
+                .height = logical_h,
+                .pixel_width = @floatFromInt(w),
+                .pixel_height = @floatFromInt(h),
+            };
+            if (prep(r.text_hook.ctx, r.external_runs.items.ptr, r.external_runs.items.len, &viewport) != 0) return error.ExternalText;
+        };
         const api = r.api;
         const q = r.ctx.queue;
         const u = Uniforms{ .viewport = .{ @floatFromInt(w), @floatFromInt(h), scale, 0 } };
@@ -807,6 +857,26 @@ pub const Renderer = struct {
                 }
                 api.renderPassEnd(pass);
                 api.renderPassRelease(pass);
+            },
+            .external => |e| {
+                if (e.index >= r.external_runs.items.len) continue;
+                const run = &r.external_runs.items[e.index];
+                const t = r.targets.items[e.target];
+                const att = [_]wgpu.RenderPassColorAttachment{.{ .view = t.view, .load_op = wgpu.load_op_load, .clear_value = .{} }};
+                const pass = api.commandEncoderBeginRenderPass(enc, &.{ .color_attachment_count = 1, .color_attachments = &att }) orelse return error.Pass;
+                defer {
+                    api.renderPassEnd(pass);
+                    api.renderPassRelease(pass);
+                }
+                const logical_w = if (r.scale > 0) @as(f32, @floatFromInt(r.width)) / r.scale else 0;
+                const logical_h = if (r.scale > 0) @as(f32, @floatFromInt(r.height)) / r.scale else 0;
+                api.renderPassSetViewport(pass, 0, 0, @floatFromInt(r.width), @floatFromInt(r.height), 0, 1);
+                const sc = external_text.textScissor(run.clip_x, run.clip_y, run.clip_w, run.clip_h, logical_w, logical_h, r.width, r.height);
+                if (sc.width == 0 or sc.height == 0) continue;
+                api.renderPassSetScissorRect(pass, sc.x, sc.y, sc.width, sc.height);
+                if (r.text_hook.draw) |draw| {
+                    if (draw(r.text_hook.ctx, pass, run) != 0) return error.ExternalText;
+                }
             },
             .blur => |bl| {
                 if (blur_index >= 64) continue;

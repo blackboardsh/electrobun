@@ -100,6 +100,35 @@ Like `createUIWindow`, but into an existing `WGPUView`. Without a
 `background` the page is transparent. This is what
 [`registerUIRoot`](/electrobun/apis/ui/ui-tag/) uses for `<electrobun-ui>` tags.
 
+## Custom text rendering
+
+`createUIWindow`, `createUI` and `createUIView` accept `createTextRenderer`.
+The factory receives the UI's borrowed GPU `device` and the target format
+(`"bgra8unorm"`). It may return a renderer asynchronously; frames wait until
+it resolves so the first layout uses those metrics. Omitting it keeps the
+built-in shaper and glyph atlas. `ui.ready` resolves when the backend is
+installed.
+
+| Method | Contract |
+| --- | --- |
+| `measure(text, size)` | Return `{ w, h }` in CSS pixels. The whole string is one unbreakable run: the engine does not wrap inside it. Must not call back into the UI. |
+| `prepare(runs, viewport)` | Called before the render pass. Upload resources and retire node ids missing from `runs`. The viewport has logical `width`/`height` and device `pixelWidth`/`pixelHeight`. |
+| `draw(pass, run)` | Draw one run into the borrowed pass. Runs carry node `id`, `text`, `size`, packed `0xRRGGBBAA` `color`, and logical `x`/`y`. The engine sets the viewport and ancestor scissor first and ends the pass afterwards. |
+| `dispose()` | Release resources the backend owns. The engine calls this before destroying the UI, including when a later mount replaces the backend. |
+
+Import `UiTextRenderer`, `UiTextRendererFactory`, `UiTextRun` and `UiTextViewport`
+as types from `electrobun/main/ui`. Set your own pipeline and bindings. Do not
+end the pass, submit it, or destroy the borrowed device. A failed `prepare` or
+`draw` discards that frame instead of presenting it. Runs can start outside
+the viewport; the scissor limits what is visible, and absence from `runs` is
+what lets a backend retire a node.
+
+The `device` and `pass` are Electrobun's native adapter classes. They implement
+part of WebGPU and are not the complete `@webgpu/types` interfaces. A library
+such as TypeGPU needs an application-owned compatibility adapter, including
+native `release()` lifetimes. This hook does not add WebGPU features or a
+text-library dependency.
+
 ## isUIAvailable
 
 `isUIAvailable()` returns whether the UI engine library could be loaded — for

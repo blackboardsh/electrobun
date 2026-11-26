@@ -9,6 +9,7 @@ const style_mod = @import("style.zig");
 const layout = @import("layout.zig");
 const inline_mod = @import("inline.zig");
 const font = @import("text/font.zig");
+const external_text = @import("text/external.zig");
 const props = @import("css/properties.zig");
 const range_mod = @import("range.zig");
 
@@ -30,6 +31,18 @@ pub const BorderSide = struct {
     style: props.BorderStyle,
 };
 
+pub const ExternalText = struct {
+    node: NodeId,
+    text: []const u8,
+    size: f32,
+    color: Color,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    clip: Rect,
+};
+
 pub const GlyphInstance = struct {
     id: u32,
     font: font.FontId,
@@ -46,6 +59,8 @@ pub const Cmd = union(enum) {
     shadow: struct { box: Rect, radii: Corners, offset_x: f32, offset_y: f32, blur: f32, spread: f32, color: Color, inset: bool },
     gradient: struct { rect: Rect, radii: Corners, clip: Rect, gradient: style_mod.Gradient },
     glyphs: struct { glyphs: []const GlyphInstance, color: Color, size: f32, shadow: ?style_mod.Shadow = null },
+    /// A whole run drawn by a per-mount text backend instead of the atlas.
+    external_text: ExternalText,
     image: struct { rect: Rect, radii: Corners, image: u32, src: Rect, opacity: f32 = 1 },
     /// a native surface (webview, wgpu view) occupies this rect
     surface: struct { rect: Rect, node: NodeId },
@@ -133,6 +148,8 @@ pub const Hooks = struct {
     text_state: ?*const fn (ctx: ?*anyopaque, node: NodeId) ?TextState = null,
     /// rasterize an inline <svg> at a size (CSS px) with currentColor
     svg_image: ?*const fn (ctx: ?*anyopaque, node: NodeId, w: f32, h: f32, color: Color) ?ImageRef = null,
+    /// Record text runs for a per-mount backend instead of atlas glyphs.
+    external_text: bool = false,
     /// time in seconds for caret blinking
     caret_visible: bool = true,
 };
@@ -302,6 +319,7 @@ pub const Painter = struct {
                 .gradient => |x| x.rect,
                 .image => |x| x.rect,
                 .surface => |x| x.rect,
+                .external_text => |x| Rect{ .x = x.x, .y = x.y, .w = x.w, .h = x.h },
                 .glyphs => |x| blk: {
                     if (x.glyphs.len == 0) break :blk null;
                     var g: ?Rect = null;
@@ -756,6 +774,30 @@ pub const Painter = struct {
                     }
                     const n_glyphs = f.glyph_end - f.glyph_start;
                     if (n_glyphs == 0) continue;
+                    if (p.hooks.external_text) {
+                        const g0 = il.glyphs[f.glyph_start];
+                        if (external_text.textForGlyph(p.L.fonts, g0.font, g0.id)) |text| {
+                            if (text.len > 0 and st.color.a != 0) {
+                                const clip = p.currentClip();
+                                if (clip.w > 0 and clip.h > 0) {
+                                    const copy = try p.a().dupe(u8, text);
+                                    try p.dl.push(.{ .external_text = .{
+                                        .node = f.item.node,
+                                        .text = copy,
+                                        .size = st.font_size,
+                                        .color = st.color,
+                                        .x = ox + f.x,
+                                        .y = oy + f.y,
+                                        .w = f.w,
+                                        .h = f.h,
+                                        .clip = clip,
+                                    } });
+                                }
+                            }
+                            try p.paintDecorations(f, st, ox, oy);
+                            continue;
+                        }
+                    }
                     const out = try p.a().alloc(GlyphInstance, n_glyphs);
                     for (il.glyphs[f.glyph_start..f.glyph_end], out) |g, *o| {
                         o.* = .{ .id = g.id, .font = g.font, .x = ox + f.x + g.x, .y = oy + f.baseline + g.y };

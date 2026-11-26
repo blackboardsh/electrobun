@@ -22,6 +22,7 @@ const reactive = @import("reactive.zig");
 const template = @import("template.zig");
 const layout = @import("layout.zig");
 const font = @import("text/font.zig");
+const external_text = @import("text/external.zig");
 const lock_timing = @import("lock_timing.zig");
 const ReentrantLock = @import("reentrant_lock.zig").ReentrantLock;
 
@@ -207,6 +208,37 @@ export fn ebui_create_headless() u32 {
     _ = html.ensureBody(ui.doc) catch {};
     inst.id = @intCast(instances.items.len - 1);
     return inst.id;
+}
+
+export fn ebui_set_frames_held(id: u32, held: bool) void {
+    lock();
+    defer unlock();
+    const inst = get(id) orelse return;
+    inst.ui.frames_held = held;
+}
+
+export fn ebui_set_text_renderer(
+    id: u32,
+    ctx: ?*anyopaque,
+    measure: ?external_text.MeasureFn,
+    prepare: ?external_text.PrepareFn,
+    draw: ?external_text.DrawFn,
+    dispose: ?external_text.DisposeFn,
+) void {
+    lock();
+    defer unlock();
+    const inst = get(id) orelse return;
+    if (measure == null or prepare == null or draw == null or dispose == null) {
+        inst.ui.clearTextRenderer();
+        return;
+    }
+    inst.ui.setTextRenderer(.{
+        .ctx = ctx,
+        .measure = measure.?,
+        .prepare = prepare.?,
+        .draw = draw.?,
+        .dispose = dispose.?,
+    }) catch {};
 }
 
 pub export fn ebui_destroy(id: u32) void {
