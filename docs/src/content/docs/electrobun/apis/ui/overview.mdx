@@ -100,6 +100,20 @@ Like `createUIWindow`, but into an existing `WGPUView`. Without a
 `background` the page is transparent. This is what
 [`registerUIRoot`](/electrobun/apis/ui/ui-tag/) uses for `<electrobun-ui>` tags.
 
+## Drawable scale
+
+Layout, pointer coordinates, text, and anchored native views stay in CSS
+pixels. Each frame the view reports its display scale (the window's backing
+scale on macOS, and the view's DPI scale on Windows and Linux). The GPU
+attachment is that logical size rounded to device pixels, so a 900×540 window
+on a 2x display is an 1800×1080 surface and a move onto a 1x display resizes
+the attachment without changing layout. Clipping is applied in device pixels,
+and edge antialiasing stays about one device pixel wide.
+
+There is no mount-level scale override: the engine uses the scale of the view
+it is attached to, including while the window is stationary and the display
+scale changes.
+
 ## isUIAvailable
 
 `isUIAvailable()` returns whether the UI engine library could be loaded — for
